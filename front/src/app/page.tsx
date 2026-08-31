@@ -4,11 +4,7 @@ import { Button, ButtonGroup, TextArea } from "@heroui/react";
 import { useRef, useState } from "react";
 
 import type { MaskResponse } from "@/shared/api/mask";
-
-interface SelectedFile {
-    name: string;
-    size: number;
-}
+import { DocxViewer } from "@/shared/ui/docx-viewer";
 
 interface MaskedFileResult {
     blob: Blob;
@@ -28,12 +24,6 @@ function parseDispositionFilename(disposition: string | null): string {
         }
     }
     return disposition.match(/filename="([^"]+)"/)?.[1] ?? "";
-}
-
-function formatBytes(size: number): string {
-    if (size < 1024) return `${size} Б`;
-    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} КБ`;
-    return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
 function DocIcon() {
@@ -83,7 +73,7 @@ export default function Home() {
     const [input, setInput] = useState("");
     const [result, setResult] = useState("");
     const [entityCount, setEntityCount] = useState<number | null>(null);
-    const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [maskedFile, setMaskedFile] = useState<MaskedFileResult | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -112,7 +102,7 @@ export default function Home() {
         setResult("");
         setEntityCount(null);
         setMaskedFile(null);
-        setSelectedFile({ name: file.name, size: file.size });
+        setSelectedFile(file);
         setError(null);
     }
 
@@ -229,10 +219,10 @@ export default function Home() {
                 <div className="editor-grid">
                     <div className="editor-pane">
                         {inFileMode && selectedFile ? (
-                            <DocPreviewShell
-                                title={selectedFile.name}
-                                subtitle={formatBytes(selectedFile.size)}
-                            />
+                            <>
+                                <div className="docx-preview__label">{selectedFile.name}</div>
+                                <DocxViewer blob={selectedFile} />
+                            </>
                         ) : (
                             <TextArea
                                 aria-label="Входной текст"
@@ -246,7 +236,7 @@ export default function Home() {
                         <div className="editor-pane__actions">
                             <ButtonGroup fullWidth>
                                 <Button
-                                    variant="primary"
+                                    variant="tertiary"
                                     isDisabled={busy}
                                     onPress={chooseFile}
                                     fullWidth
@@ -277,10 +267,13 @@ export default function Home() {
                         {inFileMode ? (
                             maskedFile ? (
                                 <>
-                                    <DocPreviewShell
-                                        title={maskedFile.downloadName}
-                                        subtitle={`Замаскировано фрагментов: ${maskedFile.maskedCount}`}
-                                    />
+                                    <div className="docx-preview__label">
+                                        {maskedFile.downloadName}
+                                        <span className="docx-preview__count">
+                                            Замаскировано фрагментов: {maskedFile.maskedCount}
+                                        </span>
+                                    </div>
+                                    <DocxViewer blob={maskedFile.blob} />
                                     <Button variant="primary" onPress={downloadMaskedFile}>
                                         Скачать файл
                                     </Button>

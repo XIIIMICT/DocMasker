@@ -185,6 +185,51 @@ html {
     gap: 0.5rem;
 }
 
+/* DocxViewer: a scrollable document surface filling the pane. */
+.docx-viewer {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--field-radius);
+    background: var(--surface-secondary);
+    overflow: hidden;
+}
+
+.docx-viewer__surface {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0.75rem;
+    background: var(--surface-secondary);
+}
+
+.docx-viewer__error {
+    color: var(--danger);
+    font-size: 0.85rem;
+    padding: 0.75rem;
+}
+
+/* Small file-name label above a DOCX preview. */
+.docx-preview__label {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
+.docx-preview__count {
+    color: var(--muted);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
 /* Pane-sized document preview card (same area as the TextArea it replaces). */
 .docx-preview {
     display: flex;

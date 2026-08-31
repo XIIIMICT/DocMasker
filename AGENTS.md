@@ -6,7 +6,7 @@ Cheat sheet for agents. Entry point: read only the section you need; details —
 
 DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). MVP: a single page with two HeroUI text areas («Входной текст» / «Результат») and a «Маскировать» button; the text is sent to the FastAPI backend, masked, and returned. DOCX files are also supported: upload a `.docx`, get the masked `.docx` back for download with formatting preserved.
 
-- `front/` — Next.js 16 (App Router, React 19, HeroUI v3 `@heroui/react`, Tailwind 4), package manager **bun**.
+- `front/` — Next.js 16 (App Router, React 19, HeroUI v3 `@heroui/react`, Tailwind 4, `docx-preview` for in-browser docx rendering), package manager **bun**.
 - `back/` — FastAPI 3 (Python 3.14, **uv**) + GLiNER 0.2.28 (`urchade/gliner_multi_pii-v1`, multi-lingual PII model downloaded from HuggingFace) + `python-docx` + `python-multipart`.
 - Ports: front **5001**, back **8001** — from the root `.env` (`FRONT_PORT`/`BACKEND_PORT`). (5000/8000 are used by ReportCollector — do not reuse them.)
 - Docker: `compose.yaml` (profiles `prod`/`dev`). The front proxies `/api/mask` and `/api/mask-file` server-side to the back via `BACKEND_INTERNAL_URL` (no CORS for the browser).
@@ -40,6 +40,8 @@ DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). 
 6. **Windows/PowerShell mangles UTF-8 when sending bodies.** When testing the API from the host, put the JSON in a UTF-8 file and POST it with `curl.exe --data-binary @file`, or run Python inside a container. A Cyrillic body sent literally through PowerShell arrives corrupted and comes back as `?` — that's a test-harness artifact, not a server bug. The server and the Next proxy are verified UTF-8-correct.
 7. **DOCX masking works at the run level (`paragraph.runs`).** Formatting lives on runs; masking replaces only the covered slice of each run so styles/sizes are preserved, and a name split across several runs collapses into one `[LABEL]`. `docx_service.iter_paragraphs` covers body + table cells (recursive) + the *default* header/footer of each section — python-docx does not surface first-page/even header/footer variants as separate properties; if those must be masked, the OOXML `w:headerReference` parts need explicit handling.
 8. **Don't compare python-docx `Run` objects by identity.** `paragraph.add_run(...)` returns a fresh proxy each call; assert on `.text`/formatting, not `run is run`.
+9. **The GLiNER model is cached in the `dm-hf-cache` named volume** (mounted at `/app/.cache/huggingface` via `HF_HOME`) — the equivalent of the uv/bun layer cache. `docker compose restart` / `down`+`up` reuse it; only `docker compose down --volumes` (or `just clean`) removes it and forces a re-download. On startup the log shows `Fetching 4 files: 0→100%` in ~0s — that's HF *validating* the local cache (metadata checks), NOT a real download; readiness (~25s) is torch loading the cached weights, not network.
+10. **`docx-preview` is a client-only renderer.** `DocxViewer` (`front/src/shared/ui/docx-viewer.tsx`) renders a Blob into a scrollable pane inside a `"use client"` component via `useEffect` — never call `renderAsync` in an RSC/server context. The rendered DOM is thrown away on unmount (`container.innerHTML = ""`).
 
 ## Working rules
 

@@ -59,7 +59,8 @@ Errors carry a Russian `detail`; the front shows it via the `masker-actions__err
 
 ## Front (`front/src/`)
 
-- `app/page.tsx` — client component: two panes. Left pane holds either the input `TextArea` or (when a file is selected) a pane-sized DOCX preview card, with a full-width `ButtonGroup` («Выбрать файл» / «Замаскировать») underneath. Right pane shows the masked result: a `TextArea` for text mode, or a preview of the masked document plus a «Скачать файл» button in file mode (the browser prompts the save only on that click). The «Замаскировать» button is disabled until exactly one input (text or file) is present, and all controls are disabled while masking runs. The masked-entity count is surfaced in the status line (text mode) / preview subtitle (file mode); the bottom stats panel is not built yet.
+- `app/page.tsx` — client component: two panes. Left pane holds either the input `TextArea` or (when a file is selected) a live `DocxViewer` render of the file, with a full-width `ButtonGroup` («Выбрать файл» — tertiary — / «Замаскировать») underneath. Right pane shows the masked result: a `TextArea` for text mode, or a `DocxViewer` of the masked document plus a «Скачать файл» button in file mode (the browser prompts the save only on that click). The «Замаскировать» button is disabled until exactly one input (text or file) is present, and all controls are disabled while masking runs. The masked-entity count is surfaced next to the docs preview / the text status line; the bottom stats panel is not built yet.
+- `shared/ui/docx-viewer.tsx` — client component that renders a `.docx` Blob into a scrollable pane via `docx-preview`'s `renderAsync`. Used for both the selected source file and the masked result.
 - `app/api/mask/route.ts` — server route that validates JSON and calls `proxyMaskRequest`.
 - `app/api/mask-file/route.ts` — server route that replays the multipart upload to the back and returns the binary plus `X-Masked-Count` / `Content-Disposition`.
 - `shared/api/mask.ts` — `proxyMaskRequest`: forwards to `BACKEND_INTERNAL_URL/api/mask`, passes the body/status back verbatim.
@@ -71,4 +72,4 @@ The header brand mirrors ReportCollector: the `ruschem_icon.png` icon (also the 
 
 ## Deployment (prod)
 
-`just prod` builds the prod-profile images and starts `dm-back` + `dm-front`. The front publishes `FRONT_PORT`, the back `BACKEND_PORT`. On first boot the back downloads the GLiNER model (cached in the `dm-hf-cache` volume).
+`just prod` builds the prod-profile images and starts `dm-back` + `dm-front`. The front publishes `FRONT_PORT`, the back `BACKEND_PORT`. On first boot the back downloads the GLiNER model, cached in the `dm-hf-cache` volume — the equivalent of the uv/bun layer cache. Restarts and `down`+`up` reuse it; only `docker compose down --volumes` removes it and re-downloads.
