@@ -1,0 +1,23 @@
+# Deny-all by default: only what is explicitly listed below enters the index.
+# Temp files (*.mjs/*.cjs probes, logs, build artifacts, .env, local model
+# cache, Python/Node caches) stay out automatically — no manual ignores needed.
+*
+
+# Root files
+!/prek.toml
+!/.env.example
+!/.gitattributes
+!/.gitignore
+!/compose.yaml
+!/justfile
+!/AGENTS.md
+
+# Directories: restore the dirs so git can enter them.
+# back/ and front/ contents are whitelisted by their own .gitignore files.
+!/docs/
+!/docs/**
+!/back/
+!/front/
+
+# Local artifacts inside the whitelist (last rule wins)
+.env

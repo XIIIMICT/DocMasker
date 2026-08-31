@@ -1,0 +1,132 @@
+name: docmasker
+
+# Порты задаются один раз в корневом .env (BACKEND_PORT / FRONT_PORT)
+# и отсюда же расходятся: ARG в Dockerfile (порт в контейнере), проброс порта,
+# healthcheck. Все обязательные (:? — при отсутствии compose падает с понятной
+# ошибкой, а не молча подставляет дефолт).
+services:
+  back:
+    profiles: [prod]
+    container_name: dm-back
+    build:
+      context: ./back
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        BACKEND_PORT: ${BACKEND_PORT:?}
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: true
+    environment:
+      BACKEND_CORS_ORIGINS: '${BACKEND_CORS_ORIGINS:-["http://localhost:5001","http://127.0.0.1:5001","${AUTH_APP_ORIGIN:?}"]}'
+    volumes:
+      # Persist the HuggingFace model cache so restart doesn't re-download ~GBs.
+      - dm-hf-cache:/app/.cache/huggingface
+    ports:
+      - "${BACKEND_PORT:?}:${BACKEND_PORT:?}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${BACKEND_PORT:?}/health', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [net]
+
+  back-dev:
+    profiles: !override [dev]
+    extends: back
+    container_name: dm-back-dev
+    build:
+      context: ./back
+      dockerfile: Dockerfile
+      target: dev
+      args:
+        BACKEND_PORT: ${BACKEND_PORT:?}
+    networks: !override [net-dev]
+    develop:
+      watch:
+        - action: sync
+          path: ./back/src
+          target: /app/src
+        - action: rebuild
+          path: ./back/pyproject.toml
+        - action: rebuild
+          path: ./back/uv.lock
+
+  front:
+    profiles: [prod]
+    container_name: dm-front
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        PORT: ${FRONT_PORT:?}
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: true
+    environment:
+      # Адрес бэкенда для server-side прокси /api/mask (имя сервиса в compose-сети).
+      BACKEND_INTERNAL_URL: http://back:${BACKEND_PORT:?}
+    ports:
+      - "${FRONT_PORT:?}:${FRONT_PORT:?}"
+    depends_on:
+      back:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:' + (process.env.PORT || '${FRONT_PORT:?}') + '/api/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [net]
+
+  front-dev:
+    profiles: !override [dev]
+    extends: front
+    container_name: dm-front-dev
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+      target: dev
+      args:
+        PORT: ${FRONT_PORT:?}
+    depends_on: !override
+      back-dev:
+        condition: service_started
+    environment:
+      BACKEND_INTERNAL_URL: http://back-dev:${BACKEND_PORT:?}
+    networks: !override [net-dev]
+    develop:
+      watch:
+        - action: sync
+          path: ./front/src
+          target: /app/src
+        - action: sync
+          path: ./front/public
+          target: /app/public
+        - action: rebuild
+          path: ./front/package.json
+        - action: rebuild
+          path: ./front/bun.lock
+        - action: rebuild
+          path: ./front/next.config.ts
+        - action: rebuild
+          path: ./front/postcss.config.ts
+        - action: rebuild
+          path: ./front/tsconfig.json
+
+networks:
+  net:
+    name: dm-net
+  net-dev:
+    name: dm-net-dev
+
+volumes:
+  dm-hf-cache:

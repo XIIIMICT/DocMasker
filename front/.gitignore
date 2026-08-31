@@ -1,0 +1,25 @@
+# Deny-all by default (see root .gitignore): whitelist below.
+# .next/, node_modules/, build artifacts, local .env stay out.
+
+*
+!/.dockerignore
+!/.gitignore
+!Dockerfile
+!bun.lock
+!bunfig.toml
+!next.config.ts
+!oxfmt.config.ts
+!package.json
+!postcss.config.ts
+!prek.toml
+!tsconfig.json
+
+# Source and static
+!/public/
+!/public/**
+!/src/
+!/src/**
+
+# Junk inside the whitelist (last rule wins)
+*.tsbuildinfo
+.env.local

@@ -1,0 +1,23 @@
+# Deny-all by default (see root .gitignore): whitelist below.
+# .venv/, __pycache__, caches, logs, local HF model cache stay out.
+
+*
+!/.dockerignore
+!/.gitignore
+!Dockerfile
+!prek.toml
+!pyproject.toml
+!uv.lock
+
+# Source, migrations and tests
+!/src/
+!/src/**
+!/tests/
+!/tests/**
+
+# Junk inside the whitelist (last rule wins)
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.pytest_cache/
