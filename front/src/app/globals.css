@@ -120,6 +120,32 @@ html {
     align-self: center;
 }
 
+.brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.65rem;
+    letter-spacing: -0.04em;
+    user-select: none;
+}
+
+.brand__icon {
+    height: 1.25em;
+    width: auto;
+    flex: none;
+    object-fit: contain;
+}
+
+.brand__icon[hidden] {
+    display: none;
+}
+
+.brand__name {
+    font-size: 1.65rem;
+    font-weight: 760;
+    line-height: 1;
+}
+
 .masker-body {
     display: flex;
     min-height: 0;
@@ -152,11 +178,43 @@ html {
     resize: none;
 }
 
-.masker-actions {
+.editor-pane__actions {
     display: flex;
     flex: 0 0 auto;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* Pane-sized document preview card (same area as the TextArea it replaces). */
+.docx-preview {
+    display: flex;
+    min-height: 18rem;
+    flex: 1;
+    flex-direction: column;
     align-items: center;
+    justify-content: center;
     gap: 0.75rem;
+    border: 1px dashed var(--border);
+    border-radius: var(--field-radius);
+    background: var(--surface-secondary);
+    padding: 2rem;
+    text-align: center;
+    overflow: hidden;
+}
+
+.docx-preview__icon {
+    color: var(--muted);
+}
+
+.docx-preview__name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.docx-preview__subtitle {
+    color: var(--muted);
+    font-size: 0.85rem;
 }
 
 .masker-actions__status {
@@ -166,20 +224,6 @@ html {
 
 .masker-actions__error {
     color: var(--danger);
-    font-size: 0.85rem;
-}
-
-.mask-file-section {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: 0.75rem;
-    border-top: 1px solid var(--border);
-    padding-top: 1rem;
-}
-
-.mask-file-section__hint {
-    color: var(--muted);
     font-size: 0.85rem;
 }
 

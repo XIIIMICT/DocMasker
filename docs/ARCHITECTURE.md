@@ -59,11 +59,15 @@ Errors carry a Russian `detail`; the front shows it via the `masker-actions__err
 
 ## Front (`front/src/`)
 
-- `app/page.tsx` — client component: two HeroUI `TextArea` (input / result), a «Маскировать» `Button`, and a DOCX section («Выбрать файл и замаскировать»). Text calls `POST /api/mask`; the file upload reads the `X-Masked-Count` header and downloads the returned blob (`Content-Disposition` filename) via a temporary link.
+- `app/page.tsx` — client component: two panes. Left pane holds either the input `TextArea` or (when a file is selected) a pane-sized DOCX preview card, with a full-width `ButtonGroup` («Выбрать файл» / «Замаскировать») underneath. Right pane shows the masked result: a `TextArea` for text mode, or a preview of the masked document plus a «Скачать файл» button in file mode (the browser prompts the save only on that click). The «Замаскировать» button is disabled until exactly one input (text or file) is present, and all controls are disabled while masking runs. The masked-entity count is surfaced in the status line (text mode) / preview subtitle (file mode); the bottom stats panel is not built yet.
 - `app/api/mask/route.ts` — server route that validates JSON and calls `proxyMaskRequest`.
 - `app/api/mask-file/route.ts` — server route that replays the multipart upload to the back and returns the binary plus `X-Masked-Count` / `Content-Disposition`.
 - `shared/api/mask.ts` — `proxyMaskRequest`: forwards to `BACKEND_INTERNAL_URL/api/mask`, passes the body/status back verbatim.
 - `shared/config.ts` — `getBackendInternalUrl()` (throws if unset).
+
+The masked file is named `<original> (замаскированный).docx` — the back advertises it via an RFC 5987 `filename*=UTF-8''...` (percent-encoded) value in `Content-Disposition`, which the page decodes (`parseDispositionFilename`) so Cyrillic names survive.
+
+The header brand mirrors ReportCollector: the `ruschem_icon.png` icon (also the favicon/apple-touch icon) next to «ДокМаскер» in the shared brand styling.
 
 ## Deployment (prod)
 

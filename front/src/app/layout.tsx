@@ -5,9 +5,13 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-    title: "DocMasker",
-    description: "Маскирование чувствительной информации в тексте",
-    applicationName: "DocMasker",
+    title: "ДокМаскер",
+    description: "Маскирование чувствительной информации в тексте и DOCX-файлах",
+    applicationName: "ДокМаскер",
+    icons: {
+        icon: "/ruschem_icon.png",
+        apple: "/ruschem_icon.png",
+    },
 };
 
 export default function RootLayout({

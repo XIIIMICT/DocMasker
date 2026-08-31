@@ -58,7 +58,7 @@ async def mask_file_endpoint(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
 
     base = Path(file.filename).stem
-    download_name = f"{base}_masked.docx"
+    download_name = f"{base} (замаскированный).docx"
     # `filename=` must be ASCII/latin-1; use RFC 5987 filename* for the real
     # (possibly Cyrillic) name so browsers save the correct file.
     headers = {
