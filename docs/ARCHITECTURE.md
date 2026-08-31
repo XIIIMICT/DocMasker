@@ -8,9 +8,11 @@ Sensitive-information masking in text via GLiNER (zero-shot PII NER). Monorepo: 
 Browser ── http://<host>:5001 ──► front (Next.js, dev: bun dev / prod: standalone)
                                    ├── /            → the single masking page
                                    └── /api/health  → healthcheck
-                                   └── /api/mask    → server-side proxy
+                                   └── /api/mask    → server-side proxy (text)
+                                   └── /api/mask-file → server-side proxy (DOCX)
 front ── BACKEND_INTERNAL_URL ──► back (FastAPI/uvicorn, :8001)
-                                     └── POST /api/mask → GLiNER → masked text
+                                     ├── POST /api/mask      → GLiNER → masked text
+                                     └── POST /api/mask-file → GLiNER → masked .docx
 ```
 
 The browser talks only to the front origin; the front proxies `/api/mask` to the back server-side, so there is **no CORS for the browser** (CORS is configured on the back only for direct dev access, e.g. curl).
@@ -41,7 +43,8 @@ GLiNER:
 
 - `service.py` — loads the model (`GLiNER.from_pretrained`), splits long text into overlapping windows aligned to `config.max_len` (`prepare_batch` → token/char maps), runs `predict_entities`, deduplicates spans, and replaces each span with `[LABEL]` via the canonical back-to-front recipe.
 - `schemas.py` — `MaskRequest{text}`, `MaskResponse{text, masked_entities}`.
-- `router.py` — `POST /api/mask`.
+- `router.py` — `POST /api/mask` (text) and `POST /api/mask-file` (multipart DOCX → binary response).
+- `docx_service.py` — DOCX masking that **preserves formatting**: iterates every paragraph (body, all table cells recursively, default header/footer of each section) via `iter_paragraphs`, runs `detect_entities` on each paragraph's joined text, and rewrites only the overlapping slices of the XML runs (`paragraph.runs`) back-to-front. Entities spanning multiple runs collapse into a single `[LABEL]`; surrounding formatting (bold, size, styles) is untouched.
 - The model is loaded once in the FastAPI `lifespan` (single process). `get_gliner_model()` caches it; tests stub it via `dependency_overrides`.
 
 Default labels: `person, phone, email, address, organization, location, passport, inn, snils, date of birth`.
@@ -49,14 +52,16 @@ Default labels: `person, phone, email, address, organization, location, passport
 ## API (back, prefix `/api`)
 
 - `POST /mask` — body `{"text": "..."}` → `{"text": "<masked>", "masked_entities": [{label, text, start, end, score}]}`. 422 for empty/whitespace text; 500 for inference failure.
+- `POST /mask-file` — multipart field `file` (.docx) → the masked `.docx` as the response body (`Content-Disposition: attachment`, `application/vnd...docx`), with the masked-entity count in the `X-Masked-Count` header. 422 for non-`.docx` or empty files.
 - `GET /health` — readiness probe used by Docker healthcheck; `ok` only after the model is loaded.
 
 Errors carry a Russian `detail`; the front shows it via the `masker-actions__error` status line.
 
 ## Front (`front/src/`)
 
-- `app/page.tsx` — client component: two HeroUI `TextArea` (input / result), a «Маскировать» `Button`, and a status line. Calls `POST /api/mask` (own origin) with `{text}`.
+- `app/page.tsx` — client component: two HeroUI `TextArea` (input / result), a «Маскировать» `Button`, and a DOCX section («Выбрать файл и замаскировать»). Text calls `POST /api/mask`; the file upload reads the `X-Masked-Count` header and downloads the returned blob (`Content-Disposition` filename) via a temporary link.
 - `app/api/mask/route.ts` — server route that validates JSON and calls `proxyMaskRequest`.
+- `app/api/mask-file/route.ts` — server route that replays the multipart upload to the back and returns the binary plus `X-Masked-Count` / `Content-Disposition`.
 - `shared/api/mask.ts` — `proxyMaskRequest`: forwards to `BACKEND_INTERNAL_URL/api/mask`, passes the body/status back verbatim.
 - `shared/config.ts` — `getBackendInternalUrl()` (throws if unset).
 

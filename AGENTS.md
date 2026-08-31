@@ -4,12 +4,12 @@ Cheat sheet for agents. Entry point: read only the section you need; details —
 
 ## What it is
 
-DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). MVP: a single page with two HeroUI text areas («Входной текст» / «Результат») and a «Маскировать» button; the text is sent to the FastAPI backend, masked, and returned.
+DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). MVP: a single page with two HeroUI text areas («Входной текст» / «Результат») and a «Маскировать» button; the text is sent to the FastAPI backend, masked, and returned. DOCX files are also supported: upload a `.docx`, get the masked `.docx` back for download with formatting preserved.
 
 - `front/` — Next.js 16 (App Router, React 19, HeroUI v3 `@heroui/react`, Tailwind 4), package manager **bun**.
-- `back/` — FastAPI 3 (Python 3.14, **uv**) + GLiNER 0.2.28 (`urchade/gliner_multi_pii-v1`, multi-lingual PII model downloaded from HuggingFace).
+- `back/` — FastAPI 3 (Python 3.14, **uv**) + GLiNER 0.2.28 (`urchade/gliner_multi_pii-v1`, multi-lingual PII model downloaded from HuggingFace) + `python-docx` + `python-multipart`.
 - Ports: front **5001**, back **8001** — from the root `.env` (`FRONT_PORT`/`BACKEND_PORT`). (5000/8000 are used by ReportCollector — do not reuse them.)
-- Docker: `compose.yaml` (profiles `prod`/`dev`). The front proxies `/api/mask` server-side to the back via `BACKEND_INTERNAL_URL` (no CORS for the browser).
+- Docker: `compose.yaml` (profiles `prod`/`dev`). The front proxies `/api/mask` and `/api/mask-file` server-side to the back via `BACKEND_INTERNAL_URL` (no CORS for the browser).
 
 ## Commands (from the repo root)
 
@@ -27,7 +27,8 @@ DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). 
 
 - `GET /health` — readiness probe. The backend loads the GLiNER model in the FastAPI `lifespan`, so `/health` returns `ok` only after the model is loaded (first boot downloads it, cached in the `dm-hf-cache` volume).
 - `POST /api/mask` — body `{"text": "..."}` → `{"text": "<masked>", "masked_entities": [{label, text, start, end, score}]}`.
-- Front route `/api/mask` proxies to the back; the browser calls only its own origin.
+- `POST /api/mask-file` — multipart field `file` (.docx) → the masked `.docx` as the body (`Content-Disposition: attachment`), count in the `X-Masked-Count` header.
+- Front routes `/api/mask` and `/api/mask-file` proxy to the back; the browser calls only its own origin.
 
 ## Landmines (critical!)
 
@@ -37,6 +38,8 @@ DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). 
 4. **HeroUI v3 is Slot-based, not v2.** `Button` has no `color`/`isLoading` (use `variant="primary"`, `isDisabled`); `TextArea` is the bare react-aria primitive (`value`/`onChange`, `disabled`, `readOnly` — **no** `label`, `onValueChange`, `isDisabled`, `minRows`). The naming is `TextArea`, not `Textarea`. Wrong names surface as TS errors.
 5. **Russian PII detection quality is limited by the model.** At `GLINER_THRESHOLD=0.35` the model reliably catches person/phone/email/location/organization but may miss long composite Russian addresses embedded in busy text (uni-encoder label-lottery). Don't chase false negatives by dropping the threshold below ~0.3 for default use; it trades in false positives.
 6. **Windows/PowerShell mangles UTF-8 when sending bodies.** When testing the API from the host, put the JSON in a UTF-8 file and POST it with `curl.exe --data-binary @file`, or run Python inside a container. A Cyrillic body sent literally through PowerShell arrives corrupted and comes back as `?` — that's a test-harness artifact, not a server bug. The server and the Next proxy are verified UTF-8-correct.
+7. **DOCX masking works at the run level (`paragraph.runs`).** Formatting lives on runs; masking replaces only the covered slice of each run so styles/sizes are preserved, and a name split across several runs collapses into one `[LABEL]`. `docx_service.iter_paragraphs` covers body + table cells (recursive) + the *default* header/footer of each section — python-docx does not surface first-page/even header/footer variants as separate properties; if those must be masked, the OOXML `w:headerReference` parts need explicit handling.
+8. **Don't compare python-docx `Run` objects by identity.** `paragraph.add_run(...)` returns a fresh proxy each call; assert on `.text`/formatting, not `run is run`.
 
 ## Working rules
 

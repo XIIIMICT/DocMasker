@@ -169,6 +169,20 @@ html {
     font-size: 0.85rem;
 }
 
+.mask-file-section {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.75rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+}
+
+.mask-file-section__hint {
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+
 @media (width < 64rem) {
     .editor-grid {
         grid-template-columns: 1fr;

@@ -21,8 +21,8 @@ Aggregators: `just lint`, `just typecheck`, `just test`.
 
 - `ruff` with rule `ALL` and explicit exclusions (`back/pyproject.toml`); Cyrillic `RUF001-003` allowed, docstrings optional.
 - `ty check` — static type checker (not mypy!).
-- `pytest`: `asyncio_mode=auto`, `filterwarnings=error`. Back tests run **without** the real GLiNER model — they use a deterministic stub (`tests/test_mask.py::StubModel`) so no network/download is needed.
-- Test files: `back/tests/test_mask.py`.
+- `pytest`: `asyncio_mode=auto`, `filterwarnings=error`. Back tests run **without** the real GLiNER model — they use a deterministic stub (`tests/test_mask.py::StubModel`, `tests/test_docx.py::StubDocxModel`) so no network/download is needed.
+- Test files: `back/tests/test_mask.py` (text masking) and `back/tests/test_docx.py` (DOCX masking + formatting preservation).
 
 ### Front
 

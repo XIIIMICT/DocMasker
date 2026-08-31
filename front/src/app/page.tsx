@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, TextArea } from "@heroui/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { MaskResponse } from "@/shared/api/mask";
 
@@ -11,6 +11,9 @@ export default function Home() {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [entityCount, setEntityCount] = useState<number | null>(null);
+    const [fileLoading, setFileLoading] = useState(false);
+    const [fileResult, setFileResult] = useState<string | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     async function handleMask() {
         if (!input.trim()) {
@@ -44,6 +47,62 @@ export default function Home() {
             );
         } finally {
             setLoading(false);
+        }
+    }
+
+    async function handleMaskFile(file: File) {
+        setFileLoading(true);
+        setError(null);
+        setFileResult(null);
+        try {
+            const formData = new FormData();
+            formData.append("file", file, file.name);
+            const response = await fetch("/api/mask-file", {
+                method: "POST",
+                body: formData,
+            });
+            if (!response.ok) {
+                const payload = (await response.json().catch(() => null)) as {
+                    detail?: string;
+                } | null;
+                throw new Error(payload?.detail ?? `Ошибка сервера (${response.status}).`);
+            }
+
+            const maskedCount = response.headers.get("X-Masked-Count") ?? "0";
+            const disposition = response.headers.get("Content-Disposition");
+            const downloadName =
+                disposition?.match(/filename="([^"]+)"/)?.[1] ?? `${file.name}_masked.docx`;
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = downloadName;
+            anchor.click();
+            URL.revokeObjectURL(url);
+
+            setFileResult(
+                `Замаскировано фрагментов: ${maskedCount}. Файл сохранён: ${downloadName}.`,
+            );
+        } catch (requestError) {
+            setFileResult(null);
+            setError(
+                requestError instanceof Error
+                    ? requestError.message
+                    : "Не удалось обработать файл.",
+            );
+        } finally {
+            setFileLoading(false);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = "";
+            }
+        }
+    }
+
+    function onFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+        const file = event.target.files?.[0];
+        if (file) {
+            void handleMaskFile(file);
         }
     }
 
@@ -90,6 +149,27 @@ export default function Home() {
                         <span className="masker-actions__status">
                             Готово — замаскировано фрагментов: {entityCount}.
                         </span>
+                    ) : null}
+                </div>
+
+                <div className="mask-file-section">
+                    <span className="mask-file-section__hint">DOCX-файл</span>
+                    <Button
+                        variant="tertiary"
+                        isDisabled={fileLoading}
+                        onPress={() => fileInputRef.current?.click()}
+                    >
+                        {fileLoading ? "Маскируем файл…" : "Выбрать файл и замаскировать"}
+                    </Button>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".docx"
+                        hidden
+                        onChange={onFileSelected}
+                    />
+                    {fileResult ? (
+                        <span className="masker-actions__status">{fileResult}</span>
                     ) : null}
                 </div>
             </main>

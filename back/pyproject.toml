@@ -5,6 +5,8 @@ requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.141.1",
     "gliner>=0.2.28",
+    "python-docx>=1.2.0",
+    "python-multipart>=0.0.20",
     "pydantic-settings>=2.15.0",
     "uvicorn[standard]>=0.52.4",
 ]
@@ -60,6 +62,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/masking/*" = [
     "BLE001",  # Degraded windowing fallback may catch any prepare_batch error
+    "SLF001",  # python-docx lxml element access (paragraph._p) for stable identity
 ]
 "tests/*" = [
     "ANN001",  # Параметры тестов не аннотируются
