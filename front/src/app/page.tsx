@@ -199,6 +199,27 @@ export default function Home() {
         if (!busy) fileInputRef.current?.click();
     }
 
+    function removeFile() {
+        if (busy) return;
+        setSelectedFile(null);
+        setMaskedFile(null);
+        setResult("");
+        setEntityCount(null);
+        setError(null);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+        }
+    }
+
+    function onFileActionPress() {
+        if (busy) return;
+        if (inFileMode) {
+            removeFile();
+        } else {
+            chooseFile();
+        }
+    }
+
     return (
         <div className="app-shell">
             <header className="app-header">
@@ -218,14 +239,14 @@ export default function Home() {
             <main className="masker-body">
                 <div className="editor-grid">
                     <div className="editor-pane">
+                        <div className="editor-pane__label">
+                            {inFileMode && selectedFile ? selectedFile.name : "Вводимый текст"}
+                        </div>
                         {inFileMode && selectedFile ? (
-                            <>
-                                <div className="docx-preview__label">{selectedFile.name}</div>
-                                <DocxViewer blob={selectedFile} />
-                            </>
+                            <DocxViewer blob={selectedFile} />
                         ) : (
                             <TextArea
-                                aria-label="Входной текст"
+                                aria-label="Вводимый текст"
                                 placeholder="Введите или вставьте текст с чувствительной информацией..."
                                 value={input}
                                 onChange={(event) => onTextChange(event.target.value)}
@@ -236,12 +257,12 @@ export default function Home() {
                         <div className="editor-pane__actions">
                             <ButtonGroup fullWidth>
                                 <Button
-                                    variant="tertiary"
+                                    variant={inFileMode ? "danger" : "tertiary"}
                                     isDisabled={busy}
-                                    onPress={chooseFile}
+                                    onPress={onFileActionPress}
                                     fullWidth
                                 >
-                                    {inFileMode ? selectedFile?.name : "Выбрать файл"}
+                                    {inFileMode ? "Удалить файл" : "Выбрать файл"}
                                 </Button>
                                 <Button
                                     variant="primary"
@@ -275,7 +296,11 @@ export default function Home() {
                                         </span>
                                     </div>
                                     <DocxViewer blob={maskedFile.blob} />
-                                    <Button variant="primary" onPress={downloadMaskedFile}>
+                                    <Button
+                                        variant="primary"
+                                        onPress={downloadMaskedFile}
+                                        fullWidth
+                                    >
                                         Скачать файл
                                     </Button>
                                 </>
