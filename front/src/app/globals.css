@@ -185,6 +185,16 @@ html {
     gap: 0.5rem;
 }
 
+/* Visually-disabled primary button (we avoid the native `disabled` attribute
+   on the react-aria ButtonGroup child to dodge the SSR/client hydration
+   mismatch; the handler guards the disabled state). */
+.action-disabled {
+    color: var(--muted) !important;
+    background: var(--default) !important;
+    cursor: not-allowed !important;
+    pointer-events: none;
+}
+
 /* DocxViewer: a scrollable document surface filling the pane. */
 .docx-viewer {
     display: flex;

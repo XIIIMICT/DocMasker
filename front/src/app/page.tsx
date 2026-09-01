@@ -245,9 +245,10 @@ export default function Home() {
                                 </Button>
                                 <Button
                                     variant="primary"
-                                    isDisabled={!maskEnabled}
                                     onPress={handleMask}
                                     fullWidth
+                                    aria-disabled={!maskEnabled}
+                                    className={!maskEnabled ? "action-disabled" : undefined}
                                 >
                                     {busy ? "Маскируем…" : "Замаскировать"}
                                 </Button>
