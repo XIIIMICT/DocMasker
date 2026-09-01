@@ -185,46 +185,6 @@ html {
     gap: 0.5rem;
 }
 
-/* Two full-width, joined action buttons under the input pane (native <button>
-   for the mask action to avoid react-aria's SSR/client `disabled` mismatch). */
-.action-group {
-    display: flex;
-    width: 100%;
-}
-
-.action-group > * {
-    flex: 1 1 0;
-    min-width: 0;
-}
-
-.action-group__mask {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    min-height: 2.5rem;
-    margin-left: 1px;
-    border: none;
-    border-radius: 0 var(--radius) var(--radius) 0;
-    padding: 0.5rem 1rem;
-    color: var(--accent-foreground);
-    background: var(--accent);
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.action-group__mask:hover:not(:disabled) {
-    filter: brightness(0.96);
-}
-
-.action-group__mask:disabled {
-    color: var(--muted);
-    background: var(--default);
-    cursor: not-allowed;
-}
-
 /* DocxViewer: a scrollable document surface filling the pane. */
 .docx-viewer {
     display: flex;

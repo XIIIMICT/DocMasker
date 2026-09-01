@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, TextArea } from "@heroui/react";
+import { Button, ButtonGroup, TextArea } from "@heroui/react";
 import { useRef, useState } from "react";
 
 import type { MaskResponse } from "@/shared/api/mask";
@@ -234,7 +234,7 @@ export default function Home() {
                             />
                         )}
                         <div className="editor-pane__actions">
-                            <div className="action-group">
+                            <ButtonGroup fullWidth>
                                 <Button
                                     variant="tertiary"
                                     isDisabled={busy}
@@ -243,15 +243,15 @@ export default function Home() {
                                 >
                                     {inFileMode ? selectedFile?.name : "Выбрать файл"}
                                 </Button>
-                                <button
-                                    type="button"
-                                    className="action-group__mask"
-                                    onClick={handleMask}
-                                    disabled={!maskEnabled}
+                                <Button
+                                    variant="primary"
+                                    isDisabled={!maskEnabled}
+                                    onPress={handleMask}
+                                    fullWidth
                                 >
                                     {busy ? "Маскируем…" : "Замаскировать"}
-                                </button>
-                            </div>
+                                </Button>
+                            </ButtonGroup>
                             {error ? (
                                 <span className="masker-actions__error">Ошибка: {error}</span>
                             ) : null}
