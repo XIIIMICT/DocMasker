@@ -1,0 +1,34 @@
+// happy-dom DOM environment for bun test.
+import { Window } from "happy-dom";
+
+const domWindow = new Window();
+
+Object.defineProperties(globalThis, {
+    window: { configurable: true, value: domWindow, writable: true },
+    document: { configurable: true, value: domWindow.document, writable: true },
+    navigator: { configurable: true, value: domWindow.navigator, writable: true },
+    HTMLElement: { configurable: true, value: domWindow.HTMLElement, writable: true },
+    HTMLInputElement: { configurable: true, value: domWindow.HTMLInputElement, writable: true },
+    customElements: { configurable: true, value: domWindow.customElements, writable: true },
+    getComputedStyle: {
+        configurable: true,
+        value: domWindow.getComputedStyle.bind(domWindow),
+        writable: true,
+    },
+    matchMedia: { configurable: true, value: domWindow.matchMedia.bind(domWindow), writable: true },
+    MutationObserver: { configurable: true, value: domWindow.MutationObserver, writable: true },
+    Element: { configurable: true, value: domWindow.Element, writable: true },
+    Node: { configurable: true, value: domWindow.Node, writable: true },
+    SVGElement: { configurable: true, value: domWindow.SVGElement, writable: true },
+    ResizeObserver: { configurable: true, value: domWindow.ResizeObserver, writable: true },
+    requestAnimationFrame: {
+        configurable: true,
+        value: domWindow.requestAnimationFrame.bind(domWindow),
+        writable: true,
+    },
+    cancelAnimationFrame: {
+        configurable: true,
+        value: domWindow.cancelAnimationFrame.bind(domWindow),
+        writable: true,
+    },
+});

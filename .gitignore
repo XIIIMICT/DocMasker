@@ -14,8 +14,12 @@
 
 # Directories: restore the dirs so git can enter them.
 # back/ and front/ contents are whitelisted by their own .gitignore files.
+!/.github/
+!/.github/**
 !/docs/
 !/docs/**
+!/infra/
+!/infra/**
 !/back/
 !/front/
 

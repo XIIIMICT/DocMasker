@@ -10,6 +10,7 @@
 !next.config.ts
 !oxfmt.config.ts
 !package.json
+!playwright.config.ts
 !postcss.config.ts
 !prek.toml
 !tsconfig.json
@@ -19,7 +20,12 @@
 !/public/**
 !/src/
 !/src/**
+!/e2e/
+!/e2e/**
 
 # Junk inside the whitelist (last rule wins)
 *.tsbuildinfo
 .env.local
+coverage/
+playwright-report/
+test-results/

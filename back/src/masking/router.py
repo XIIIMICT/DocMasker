@@ -28,7 +28,7 @@ def _ascii_attachment_name(name: str) -> str:
 async def mask_text_endpoint(model: ModelDependency, request: MaskRequest) -> MaskResponse:
     """Mask sensitive information in the given text."""
     if not request.text.strip():
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Текст пуст.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Текст пуст.")
     try:
         masked, entities = mask_document(model, request)
     except RuntimeError as error:  # pragma: no cover - model inference failures
@@ -44,13 +44,13 @@ async def mask_file_endpoint(
     """Upload a .docx, mask PII in place (formatting preserved), return it for download."""
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Файл должен иметь расширение .docx.",
         )
 
     source = await file.read()
     if not source:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Файл пуст.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
 
     try:
         masked_bytes, entities = mask_docx_in_memory(source, model)
@@ -63,8 +63,7 @@ async def mask_file_endpoint(
     # (possibly Cyrillic) name so browsers save the correct file.
     headers = {
         "Content-Disposition": (
-            f'attachment; filename="{_ascii_attachment_name(download_name)}"; '
-            f"filename*=UTF-8''{quote(download_name)}"
+            f"attachment; filename=\"{_ascii_attachment_name(download_name)}\"; filename*=UTF-8''{quote(download_name)}"
         ),
         "X-Masked-Count": str(len(entities)),
     }

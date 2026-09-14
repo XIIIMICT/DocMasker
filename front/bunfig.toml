@@ -1,1 +1,5 @@
-# DocMasker frontend — minimal bun config (no tests yet).
+[test]
+# happy-dom registration for bun test.
+preload = ["./src/test-setup.ts"]
+# Collect tests from src only; Playwright owns the e2e/ directory.
+root = "./src"

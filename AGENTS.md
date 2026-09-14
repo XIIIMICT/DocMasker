@@ -10,6 +10,7 @@ DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). 
 - `back/` — FastAPI 3 (Python 3.14, **uv**) + GLiNER 0.2.28 (`urchade/gliner_multi_pii-v1`, multi-lingual PII model downloaded from HuggingFace) + `python-docx` + `python-multipart`.
 - Ports: front **5001**, back **8001** — from the root `.env` (`FRONT_PORT`/`BACKEND_PORT`). (5000/8000 are used by ReportCollector — do not reuse them.)
 - Docker: `compose.yaml` (profiles `prod`/`dev`). The front proxies `/api/mask` and `/api/mask-file` server-side to the back via `BACKEND_INTERNAL_URL` (no CORS for the browser).
+- CI: GitHub Actions (`main`/`dev` git-flow). `.github/workflows/ci.yaml` = lint/type/test + prod image build + Playwright smoke; `CI required` is the branch-protection gate. Details — `docs/WORKFLOW.md`.
 
 ## Commands (from the repo root)
 
@@ -18,8 +19,9 @@ DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). 
 | Stack dev (hot-reload) | `just dev` |
 | Stack prod | `just prod` |
 | Back lint/format/type/test | `uv run --directory back ruff check --fix` · `ruff format` · `ty check` · `pytest -q` |
-| Front lint/format/type | `bun run --cwd front lint` · `format` · `typecheck` |
+| Front lint/format/type/test | `bun run --cwd front lint` · `format` · `typecheck` · `test` |
 | Everything at once | `just lint` · `just typecheck` · `just test` |
+| e2e smoke (needs a running stack) | `just e2e` (or `bun run --cwd front test:e2e --project=smoke`, `E2E_BASE_URL`) |
 | Back on host | `just back` (or `uv run --directory back -m uvicorn src.main:app --reload`) |
 | Manual mask test | `just mask` (or curl against `/api/mask`, see docs/ARCHITECTURE.md) |
 
@@ -42,19 +44,22 @@ DocMasker masks sensitive information in text using GLiNER (zero-shot PII NER). 
 8. **Don't compare python-docx `Run` objects by identity.** `paragraph.add_run(...)` returns a fresh proxy each call; assert on `.text`/formatting, not `run is run`.
 9. **The GLiNER model is cached in the `dm-hf-cache` named volume** (mounted at `/app/.cache/huggingface` via `HF_HOME`) — the equivalent of the uv/bun layer cache. `docker compose restart` / `down`+`up` reuse it; only `docker compose down --volumes` (or `just clean`) removes it and forces a re-download. On startup the log shows `Fetching 4 files: 0→100%` in ~0s — that's HF *validating* the local cache (metadata checks), NOT a real download; readiness (~25s) is torch loading the cached weights, not network.
 10. **`docx-preview` is a client-only renderer.** `DocxViewer` (`front/src/shared/ui/docx-viewer.tsx`) renders a Blob into a scrollable pane inside a `"use client"` component via `useEffect` — never call `renderAsync` in an RSC/server context. The rendered DOM is thrown away on unmount (`container.innerHTML = ""`).
+11. **Backend tests run with `filterwarnings=error` — deprecated APIs fail the suite.** Use `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated `..._UNPROCESSABLE_ENTITY` (Starlette emits a `StarletteDeprecationWarning`, which pytest promotes to an error). Any new endpoint path that the tests may hit must use non-deprecated symbols.
+12. **The CI `production` job boots the real prod images with no HF cache volume.** The first backend boot downloads the GLiNER model, so the backend healthcheck has a 300s `start_period` and the compose `--wait-timeout` is 600s (`infra/compose.ci.yaml`). Shrinking these will flake the smoke job; the local `dm-hf-cache` volume does not exist in CI.
 
 ## Working rules
 
-- **Git:** root `.gitignore` — deny-all + explicit whitelist (`back/`, `front/`, `docs/`, etc.). A new root file must be explicitly whitelisted. Nested `back/.gitignore`, `front/.gitignore` are whitelist-style too.
-- **Files: UTF-8, no BOM, LF.** Enforced by `/.gitattributes`. PowerShell `Set-Content -Encoding UTF8` adds a BOM — use the file tools or Python to write files.
-- **Commits:** conventional commits `type(scope): …` + body Why/What/Verified. The user commits themselves; don't commit without an explicit request.
-- **Before delivery:** typecheck + lint + tests on both sides (see the table). Back tests run with a stub model (no network/model download).
+- **Git:** root `.gitignore` — deny-all + explicit whitelist (`back/`, `front/`, `docs/`, `infra/`, `.github/`, etc.). A new root file must be explicitly whitelisted. Nested `back/.gitignore`, `front/.gitignore` are whitelist-style too. Before any git operation check `git status` and the branch — never discard foreign or untracked work.
+- **Don't commit debug artifacts:** scratch scripts (`debug_*`, `*-probe*`, stray `.mjs`/`.cjs`, Playwright `probe/`) are not committed — delete them after use.
+- **Files: UTF-8, no BOM, LF.** Enforced by `/.gitattributes` + prek. PowerShell `Set-Content -Encoding UTF8` adds a BOM — use the file tools or Python to write files.
+- **Commits:** conventional commits `type(scope): …` + body Why/What/Verified; `main`/`dev`/`feature/*` git-flow (`master` is not used) — template, branching and merge checklist in `docs/WORKFLOW.md`. The user commits themselves; don't commit without an explicit request.
+- **Before delivery:** run the quality table (back: typecheck + lint + tests; front: typecheck + lint + tests) and make sure CI is green. Back tests run with a stub model (no network/model download) and enforce ≥80% branch coverage. The full "Definition of done" is in `docs/WORKFLOW.md`.
 - **Sync into the running dev stack by restarting with `just dev`** (compose `--watch`), not by `docker cp`.
-- **Languages:** code comments/docstrings, commits and this documentation — English; user-facing strings (UI labels, button text, API errors) — Russian.
+- **Languages:** code comments/docstrings, commits and agent docs — English; user-facing strings (UI labels, button text, API errors) — Russian. Full table — `docs/WORKFLOW.md`.
 
 ## Documentation
 
 - `docs/ARCHITECTURE.md` — system diagram, env vars, API, masking pipeline.
-- `docs/WORKFLOW.md` — environment, quality commands, commit/format conventions.
+- `docs/WORKFLOW.md` — environment, quality commands, languages, commits/branching, definition of done, working principles.
 
-**When behavior changes — update the corresponding file in `docs/`.** That's a requirement, not a wish: the docs are the only source of context for future agents.
+**When behavior changes — update the matching section here and in `docs/` in the same change.** That's a requirement, not a wish: the docs are the only source of context for future agents. Record a new landmine here immediately; keep each fact in exactly one home (hot path in `AGENTS.md`, detail in `docs/`) so the two cannot drift.

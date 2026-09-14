@@ -73,3 +73,13 @@ The header brand mirrors ReportCollector: the `ruschem_icon.png` icon (also the 
 ## Deployment (prod)
 
 `just prod` builds the prod-profile images and starts `dm-back` + `dm-front`. The front publishes `FRONT_PORT`, the back `BACKEND_PORT`. On first boot the back downloads the GLiNER model, cached in the `dm-hf-cache` volume — the equivalent of the uv/bun layer cache. Restarts and `down`+`up` reuse it; only `docker compose down --volumes` removes it and re-downloads.
+
+## CI stack (`infra/compose.ci.yaml`)
+
+`infra/compose.ci.yaml` is the isolated stack the `production` CI job boots to run the Playwright smoke tests against the real prod images (`dm-back:ci`, `dm-front:ci`). It never loads the developer's `.env`, volumes or log dirs and uses non-conflicting host ports: front **15001**, back **18001**. The backend has no HF cache volume here, so it downloads the model on first boot — the healthcheck carries a 300s `start_period` and the job waits up to 600s. Details and the job table — `docs/WORKFLOW.md`.
+
+## Testing
+
+- **Back** (`back/tests/`): pytest with `filterwarnings=error` and ≥80% branch coverage. All GLiNER access is stubbed (`StubModel`, `StubDocxModel`), so the suite is offline and deterministic. Files: `test_mask.py` (windowed detection + redaction), `test_docx.py` (run-level formatting preservation), `test_mask_file.py` (multipart endpoints + download headers).
+- **Front** (`front/src/**/__tests__/`): `bun test` with happy-dom (`front/src/test-setup.ts`). Covers the server-side proxy contract (`shared/api/mask.ts`) and config resolution (`shared/config.ts`).
+- **e2e** (`front/e2e/`): Playwright `smoke` project against a running stack (`/api/health`, page render, text-mask round-trip). Setup — `docs/WORKFLOW.md`.

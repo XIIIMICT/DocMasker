@@ -21,6 +21,14 @@ language = "system"
 files = '\.(cjs|cts|js|jsx|mjs|mts|ts|tsx)$'
 
 [[repos.hooks]]
+id = "bun-test"
+name = "bun test"
+entry = "bun test"
+language = "system"
+pass_filenames = false
+files = '^(package\.json|bunfig\.toml|tsconfig.*\.json|.*\.(cts|mts|ts|tsx))$'
+
+[[repos.hooks]]
 id = "tsc-typecheck"
 name = "tsc typecheck"
 entry = "bun typecheck"

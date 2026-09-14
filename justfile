@@ -46,6 +46,11 @@ typecheck:
 
 test:
     uv run --directory back pytest
+    bun run --cwd front test
+
+# e2e (Playwright) — требует запущенного стека (just dev/prod); см. docs/WORKFLOW.md
+e2e:
+    bun run --cwd front test:e2e --project=smoke
 
 # Пример запуска маскирования через curl (см. docs/ARCHITECTURE.md).
 mask:

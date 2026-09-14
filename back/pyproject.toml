@@ -16,6 +16,7 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.16.5",
     "ty>=0.0.75",
 ]
@@ -27,6 +28,13 @@ asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
 filterwarnings = ["error", "ignore::DeprecationWarning"]
 pythonpath = ["."]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ruff]
 extend-exclude = []
