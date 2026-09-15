@@ -48,7 +48,8 @@ Deterministic rules in `back/src/masking/rule_based.py` (`RuleBasedMasker`), in 
 8. **Don't compare python-docx `Run` objects by identity.** `paragraph.add_run(...)` returns a fresh proxy each call; assert on `.text`/formatting, not `run is run`.
 9. **`iter_paragraphs` must keep a strong reference to `paragraph._p`.** python-docx hands out fresh proxies, so deduplicating by `id(paragraph._p)` alone drops paragraphs once an earlier proxy is garbage-collected and its address is reused by a later element (header/footer paragraphs vanished after repeated calls). The generator holds every seen element in a `keep_alive` list — keep it.
 10. **`docx-preview` is a client-only renderer.** `DocxViewer` (`front/src/shared/ui/docx-viewer.tsx`) renders a Blob into a scrollable pane inside a `"use client"` component via `useEffect` — never call `renderAsync` in an RSC/server context. The rendered DOM is thrown away on unmount (`container.innerHTML = ""`).
-11. **Backend tests run with `filterwarnings=error` — deprecated APIs fail the suite.** Use `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated `..._UNPROCESSABLE_ENTITY`. Any new endpoint path that the tests may hit must use non-deprecated symbols.
+11. **The two panes scroll in lock-step.** `useSyncedScroll` (`front/src/shared/hooks/use-synced-scroll.ts`) pairs the input/result surfaces (both text areas, or both DOCX previews) mapping the **scroll ratio**, not pixels — masked text is shorter. `DocxViewer` takes a `surfaceRef` so the parent can observe its scrollable element.
+12. **Backend tests run with `filterwarnings=error` — deprecated APIs fail the suite.** Use `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated `..._UNPROCESSABLE_ENTITY`. Any new endpoint path that the tests may hit must use non-deprecated symbols.
 
 ## Working rules
 

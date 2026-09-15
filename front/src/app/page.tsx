@@ -4,6 +4,7 @@ import { Button, ButtonGroup, TextArea } from "@heroui/react";
 import { useRef, useState } from "react";
 
 import type { MaskResponse } from "@/shared/api/mask";
+import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import { DocxViewer } from "@/shared/ui/docx-viewer";
 
 interface MaskedFileResult {
@@ -78,12 +79,21 @@ export default function Home() {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    // Paired scroll panes: original on the left, masked on the right. Both text
+    // areas and both DOCX previews scroll in lock-step.
+    const inputTextRef = useRef<HTMLTextAreaElement>(null);
+    const resultTextRef = useRef<HTMLTextAreaElement>(null);
+    const sourceDocRef = useRef<HTMLDivElement>(null);
+    const maskedDocRef = useRef<HTMLDivElement>(null);
 
     const hasText = input.trim().length > 0;
     const hasFile = selectedFile !== null;
     // Exactly one input mode is active; a selected file takes precedence.
     const inFileMode = hasFile;
     const maskEnabled = !busy && (hasText || hasFile);
+
+    useSyncedScroll(inputTextRef, resultTextRef, !inFileMode);
+    useSyncedScroll(sourceDocRef, maskedDocRef, inFileMode && maskedFile !== null);
 
     function onTextChange(value: string) {
         if (hasFile) {
@@ -243,9 +253,10 @@ export default function Home() {
                             {inFileMode && selectedFile ? selectedFile.name : "Вводимый текст"}
                         </div>
                         {inFileMode && selectedFile ? (
-                            <DocxViewer blob={selectedFile} />
+                            <DocxViewer blob={selectedFile} surfaceRef={sourceDocRef} />
                         ) : (
                             <TextArea
+                                ref={inputTextRef}
                                 aria-label="Вводимый текст"
                                 placeholder="Введите или вставьте текст с чувствительной информацией..."
                                 value={input}
@@ -295,7 +306,7 @@ export default function Home() {
                                             Замаскировано фрагментов: {maskedFile.maskedCount}
                                         </span>
                                     </div>
-                                    <DocxViewer blob={maskedFile.blob} />
+                                    <DocxViewer blob={maskedFile.blob} surfaceRef={maskedDocRef} />
                                     <Button
                                         variant="primary"
                                         onPress={downloadMaskedFile}
@@ -312,6 +323,7 @@ export default function Home() {
                             )
                         ) : (
                             <TextArea
+                                ref={resultTextRef}
                                 aria-label="Результат"
                                 placeholder="Здесь появится замаскированный текст..."
                                 value={result}
