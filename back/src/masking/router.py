@@ -1,6 +1,8 @@
 """Masking API router."""
 
+import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
@@ -8,7 +10,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 
 from .docx_service import mask_docx_in_memory
-from .schemas import MaskRequest, MaskResponse
+from .schemas import MaskedEntity, MaskRequest, MaskResponse
 from .service import mask_document
 
 router = APIRouter(tags=["masking"])
@@ -20,6 +22,22 @@ def _ascii_attachment_name(name: str) -> str:
     """Fallback filename for `filename=` (must be ASCII/latin-1 safe)."""
     ascii_name = re.sub(r"[^A-Za-z0-9_.()-]", "_", name)
     return ascii_name or "masked.docx"
+
+
+def _label_breakdown(entities: list[MaskedEntity]) -> str:
+    """Per-label counts as a JSON object, e.g. ``{"person": 2, "phone": 1}``."""
+    return json.dumps(dict(Counter(entity.label for entity in entities)))
+
+
+def _attachment_headers(download_name: str, entities: list[MaskedEntity]) -> dict[str, str]:
+    """Download headers shared by every file response (RFC 5987 name + counts)."""
+    return {
+        "Content-Disposition": (
+            f"attachment; filename=\"{_ascii_attachment_name(download_name)}\"; filename*=UTF-8''{quote(download_name)}"
+        ),
+        "X-Masked-Count": str(len(entities)),
+        "X-Masked-Breakdown": _label_breakdown(entities),
+    }
 
 
 @router.post("/mask", response_model=MaskResponse)
@@ -49,13 +67,5 @@ async def mask_file_endpoint(
     masked_bytes, entities = mask_docx_in_memory(source)
 
     base = Path(file.filename).stem
-    download_name = f"{base} (замаскированный).docx"
-    # `filename=` must be ASCII/latin-1; use RFC 5987 filename* for the real
-    # (possibly Cyrillic) name so browsers save the correct file.
-    headers = {
-        "Content-Disposition": (
-            f"attachment; filename=\"{_ascii_attachment_name(download_name)}\"; filename*=UTF-8''{quote(download_name)}"
-        ),
-        "X-Masked-Count": str(len(entities)),
-    }
+    headers = _attachment_headers(f"{base} (замаскированный).docx", entities)
     return Response(content=masked_bytes, media_type=_DOCX_CONTENT_TYPE, headers=headers)

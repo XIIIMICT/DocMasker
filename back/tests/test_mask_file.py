@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 from urllib.parse import unquote
 
 import httpx
@@ -39,6 +40,12 @@ async def test_mask_file_returns_masked_docx_and_headers() -> None:
     disposition = response.headers["content-disposition"]
     assert "filename*=UTF-8''" in disposition
     assert unquote(disposition.split("filename*=UTF-8''")[1]) == "доклад (замаскированный).docx"
+
+    # Per-label breakdown lets the front render the summary in the result label.
+    breakdown = json.loads(response.headers["x-masked-breakdown"])
+    assert breakdown["person"] == 3
+    assert breakdown["phone"] == 2
+    assert sum(breakdown.values()) == int(response.headers["x-masked-count"])
 
     document = DocxDocument(io.BytesIO(response.content))
     text = "\n".join(p.text for p in document.paragraphs)

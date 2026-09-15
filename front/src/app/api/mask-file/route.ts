@@ -34,13 +34,9 @@ export async function POST(request: Request) {
     const forwarded = new Headers({
         "Content-Type": response.headers.get("Content-Type") ?? "application/octet-stream",
     });
-    const maskedCount = response.headers.get("X-Masked-Count");
-    if (maskedCount) {
-        forwarded.set("X-Masked-Count", maskedCount);
-    }
-    const disposition = response.headers.get("Content-Disposition");
-    if (disposition) {
-        forwarded.set("Content-Disposition", disposition);
+    for (const header of ["X-Masked-Count", "X-Masked-Breakdown", "Content-Disposition"]) {
+        const value = response.headers.get(header);
+        if (value) forwarded.set(header, value);
     }
 
     return new Response(await response.arrayBuffer(), {
