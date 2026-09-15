@@ -58,18 +58,20 @@ Default labels: `person, phone, email, address, organization`.
 ## API (back, prefix `/api`)
 
 - `POST /mask` — body `{"text": "..."}` → `{"text": "<masked>", "masked_entities": [{label, text, start, end, score}]}`. 422 for empty/whitespace text.
-- `POST /mask-file` — multipart field `file` (.docx) → the masked `.docx` as the response body (`Content-Disposition: attachment`, `application/vnd...docx`), with the masked-entity count in the `X-Masked-Count` header. 422 for non-`.docx` or empty files.
+- `POST /mask-file` — multipart field `file` (.docx) → the masked `.docx` as the response body (`Content-Disposition: attachment`, `application/vnd...docx`), with the masked-entity count in the `X-Masked-Count` header and a per-label JSON map in `X-Masked-Breakdown` (e.g. `{"person":2,"phone":1}`). 422 for non-`.docx` or empty files.
 - `GET /health` — readiness probe used by Docker healthcheck; always `ok` (no warm-up).
 
-Errors carry a Russian `detail`; the front shows it via the `masker-actions__error` status line.
+Errors carry a Russian `detail`; the front renders them in red inside the result TextArea.
 
 ## Front (`front/src/`)
 
-- `app/page.tsx` — client component: two panes. Left pane holds either the input `TextArea` or (when a file is selected) a live `DocxViewer` render of the file, with a full-width `ButtonGroup` («Выбрать файл» — tertiary — / «Замаскировать») underneath. Right pane shows the masked result: a `TextArea` for text mode, or a `DocxViewer` of the masked document plus a «Скачать файл» button in file mode (the browser prompts the save only on that click). The «Замаскировать» button is disabled until exactly one input (text or file) is present, and all controls are disabled while masking runs. The masked-entity count is surfaced next to the docs preview / the text status line; the bottom stats panel is not built yet.
+- `app/page.tsx` — client component: two panes. Left pane holds either the input `TextArea` or (when a `.docx` is selected) a live `DocxViewer` render, with a full-width `ButtonGroup` («Выбрать файл» — tertiary — / «Замаскировать») underneath. A `.txt` file is read client-side and its contents become the input text (it is *not* shown as a file); a `.docx` dropped or picked opens the document preview. Right pane shows the masked result: a `TextArea` for text mode (with a «Скачать файл» button that saves the masked text as a `.txt`), or a `DocxViewer` of the masked document plus «Скачать файл» in file mode. The masking summary is rendered inside the result pane **label**, as two lines — the per-label breakdown then the total, e.g. `2 физлица + 2 телефона + 1 организация` / `= 5 фрагментов всего`. Any error replaces the result with a red read-only TextArea (the document preview is hidden) and the synced scroll is disabled for that state.
+
+  - Labels/plurals: `statsText`/`plural` map the backend's entity labels (`person`, `phone`, `email`, `address`, `organization`) to the Russian forms shown in the breakdown.
 - `shared/hooks/use-synced-scroll.ts` — `useSyncedScroll` pairs the input/result surfaces (both text areas in text mode, both DOCX surfaces in file mode) and mirrors their **relative** scroll position (`relativeScrollTop` maps `scrollTop / scrollableRange`, since masked output is shorter). The two `DocxViewer`s are paired via their `surfaceRef`.
 - `shared/ui/docx-viewer.tsx` — client component that renders a `.docx` Blob into a scrollable pane via `docx-preview`'s `renderAsync`. Used for both the selected source file and the masked result; accepts an optional `surfaceRef` so the parent can sync its scroll.
 - `app/api/mask/route.ts` — server route that validates JSON and calls `proxyMaskRequest`.
-- `app/api/mask-file/route.ts` — server route that replays the multipart upload to the back and returns the binary plus `X-Masked-Count` / `Content-Disposition`.
+- `app/api/mask-file/route.ts` — server route that replays the multipart upload to the back and returns the binary plus `X-Masked-Count` / `X-Masked-Breakdown` / `Content-Disposition`.
 - `shared/api/mask.ts` — `proxyMaskRequest`: forwards to `BACKEND_INTERNAL_URL/api/mask`, passes the body/status back verbatim.
 - `shared/config.ts` — `getBackendInternalUrl()` (throws if unset).
 - `src/instrumentation.ts` — Node-runtime hook that installs a global undici dispatcher with `headersTimeout: 0` / `bodyTimeout: 0`, so the server-side backend proxy has **no fetch timeout**: a large DOCX round-trip can never be aborted by an arbitrary ceiling. `connectTimeout` keeps its default, so a dead backend still fails fast. Both proxy routes also set `maxDuration = 3600` for parity with hosted environments.

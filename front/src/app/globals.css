@@ -185,6 +185,34 @@ html {
     gap: 0.5rem;
 }
 
+/* Drag & drop: highlight the source pane and show a hint over its surface. */
+.editor-pane {
+    position: relative;
+}
+
+.editor-pane--dragging > :not(.editor-pane__dropzone) {
+    opacity: 0.45;
+}
+
+.editor-pane--dragging {
+    outline: 2px dashed var(--accent, var(--border));
+    outline-offset: 4px;
+    border-radius: var(--field-radius);
+}
+
+.editor-pane__dropzone {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    border-radius: var(--field-radius);
+    text-align: center;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
 /* Visually-disabled primary button (we avoid the native `disabled` attribute
    on the react-aria ButtonGroup child to dodge the SSR/client hydration
    mismatch; the handler guards the disabled state). */
@@ -225,31 +253,13 @@ html {
 .editor-pane__label {
     display: flex;
     min-width: 0;
-    align-items: baseline;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 0.75rem;
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--text-secondary);
     word-break: break-word;
-}
-
-.docx-preview__label {
-    display: flex;
-    min-width: 0;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.75rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-    word-break: break-word;
-}
-
-.docx-preview__count {
-    color: var(--muted);
-    font-weight: 500;
-    white-space: nowrap;
 }
 
 /* Pane-sized document preview card (same area as the TextArea it replaces). */
@@ -289,9 +299,20 @@ html {
     font-size: 0.85rem;
 }
 
-.masker-actions__error {
-    color: var(--danger);
-    font-size: 0.85rem;
+/* Masking summary shown inside the result pane label; two lines kept apart,
+   aligned to the top so the pane name stays on the first line. */
+.editor-pane__stats {
+    min-width: 0;
+    color: var(--muted);
+    font-weight: 500;
+    text-align: right;
+    white-space: pre-line;
+}
+
+/* Errors are shown inside the result pane's TextArea, in red. `className` on
+   the HeroUI TextArea lands directly on the underlying <textarea>. */
+textarea.result-area--error {
+    color: var(--danger) !important;
 }
 
 @media (width < 64rem) {

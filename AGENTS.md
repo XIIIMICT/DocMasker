@@ -4,7 +4,7 @@ Cheat sheet for agents. Entry point: read only the section you need; details —
 
 ## What it is
 
-DocMasker masks sensitive information in text using a **deterministic rule-based pipeline** (natasha + phonenumbers + regex; no ML). MVP: a single page with two HeroUI text areas («Входной текст» / «Результат») and a «Маскировать» button; the text is sent to the FastAPI backend, masked, and returned. DOCX files are also supported: upload a `.docx`, get the masked `.docx` back for download with formatting preserved.
+DocMasker masks sensitive information in text using a **deterministic rule-based pipeline** (natasha + phonenumbers + regex; no ML). MVP: a single page with two HeroUI text areas («Вводимый текст» / «Замаскированный текст») and a «Замаскировать» button; the text is sent to the FastAPI backend, masked, and returned, and can be downloaded as `.txt`. A `.docx` (picked or drag-and-dropped) is previewed in-page and returned masked with formatting preserved; a `.txt` upload is read client-side into the input text. Drag & drop accepts `.docx`/`.txt`.
 
 - `front/` — Next.js 16 (App Router, React 19, HeroUI v3 `@heroui/react`, Tailwind 4, `docx-preview` for in-browser docx rendering), package manager **bun**.
 - `back/` — FastAPI (Python 3.14, **uv**) + `natasha` (Russian morphology: names/addresses) + `phonenumbers` + `python-docx` + `python-multipart`. `setuptools<81` is pinned because `natasha`→`pymorphy2` imports the removed `pkg_resources` at runtime.
@@ -29,7 +29,7 @@ DocMasker masks sensitive information in text using a **deterministic rule-based
 
 - `GET /health` — readiness probe; always `ok` (the backend starts instantly — no model to load).
 - `POST /api/mask` — body `{"text": "..."}` → `{"text": "<masked>", "masked_entities": [{label, text, start, end, score}]}` (score is `1.0` for deterministic matches).
-- `POST /api/mask-file` — multipart field `file` (.docx) → the masked `.docx` as the body (`Content-Disposition: attachment`), count in the `X-Masked-Count` header.
+- `POST /api/mask-file` — multipart field `file` (.docx) → the masked `.docx` as the body (`Content-Disposition: attachment`), count in `X-Masked-Count`, per-label JSON in `X-Masked-Breakdown`. `.txt` is **not** sent to the backend — the front reads it and puts its contents in the input text.
 - Front routes `/api/mask` and `/api/mask-file` proxy to the back; the browser calls only its own origin.
 
 ## Masking pipeline
@@ -48,9 +48,10 @@ Deterministic rules in `back/src/masking/rule_based.py` (`RuleBasedMasker`), in 
 8. **Don't compare python-docx `Run` objects by identity.** `paragraph.add_run(...)` returns a fresh proxy each call; assert on `.text`/formatting, not `run is run`.
 9. **`iter_paragraphs` must keep a strong reference to `paragraph._p`.** python-docx hands out fresh proxies, so deduplicating by `id(paragraph._p)` alone drops paragraphs once an earlier proxy is garbage-collected and its address is reused by a later element (header/footer paragraphs vanished after repeated calls). The generator holds every seen element in a `keep_alive` list — keep it.
 10. **`docx-preview` is a client-only renderer.** `DocxViewer` (`front/src/shared/ui/docx-viewer.tsx`) renders a Blob into a scrollable pane inside a `"use client"` component via `useEffect` — never call `renderAsync` in an RSC/server context. The rendered DOM is thrown away on unmount (`container.innerHTML = ""`).
-11. **The two panes scroll in lock-step.** `useSyncedScroll` (`front/src/shared/hooks/use-synced-scroll.ts`) pairs the input/result surfaces (both text areas, or both DOCX previews) mapping the **scroll ratio**, not pixels — masked text is shorter. `DocxViewer` takes a `surfaceRef` so the parent can observe its scrollable element.
-12. **Backend tests run with `filterwarnings=error` — deprecated APIs fail the suite.** Use `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated `..._UNPROCESSABLE_ENTITY`. Any new endpoint path that the tests may hit must use non-deprecated symbols.
-13. **The front's `fetch` timeout is disabled on purpose.** `front/src/instrumentation.ts` sets a global undici dispatcher with `headersTimeout: 0` / `bodyTimeout: 0` so a large DOCX proxy round-trip can't be aborted by Node's default 300s ceiling; the two proxy routes also declare `maxDuration = 3600`. Don't "restore" the defaults or trim `maxDuration` — the backend is fast, but the upload/transfer of a big document must never be capped.
+11. **The two panes scroll in lock-step.** `useSyncedScroll` (`front/src/shared/hooks/use-synced-scroll.ts`) pairs the input/result surfaces (both text areas, or both DOCX previews) mapping the **scroll ratio**, not pixels — masked text is shorter. `DocxViewer` takes a `surfaceRef` so the parent can observe its scrollable element. It is disabled while the result pane shows an error (there is no document to align with).
+12. **A `.txt` is input text, not a document.** The front reads an uploaded `.txt` client-side into the input `TextArea` (its name is never shown) and never posts it to `/api/mask-file`; only `.docx` goes to the backend. Masked text is always downloadable as `.txt` (typed or loaded from a file). The result pane shows the summary in its **label** as two lines (`2 физлица + 2 телефона + 1 организация` / `= 5 фрагментов всего`), not below the buttons.
+13. **Backend tests run with `filterwarnings=error` — deprecated APIs fail the suite.** Use `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated `..._UNPROCESSABLE_ENTITY`. Any new endpoint path that the tests may hit must use non-deprecated symbols.
+14. **The front's `fetch` timeout is disabled on purpose.** `front/src/instrumentation.ts` sets a global undici dispatcher with `headersTimeout: 0` / `bodyTimeout: 0` so a large DOCX proxy round-trip can't be aborted by Node's default 300s ceiling; the two proxy routes also declare `maxDuration = 3600`. Don't "restore" the defaults or trim `maxDuration` — the backend is fast, but the upload/transfer of a big document must never be capped.
 
 ## Working rules
 
