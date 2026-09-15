@@ -72,6 +72,7 @@ Errors carry a Russian `detail`; the front shows it via the `masker-actions__err
 - `app/api/mask-file/route.ts` — server route that replays the multipart upload to the back and returns the binary plus `X-Masked-Count` / `Content-Disposition`.
 - `shared/api/mask.ts` — `proxyMaskRequest`: forwards to `BACKEND_INTERNAL_URL/api/mask`, passes the body/status back verbatim.
 - `shared/config.ts` — `getBackendInternalUrl()` (throws if unset).
+- `src/instrumentation.ts` — Node-runtime hook that installs a global undici dispatcher with `headersTimeout: 0` / `bodyTimeout: 0`, so the server-side backend proxy has **no fetch timeout**: a large DOCX round-trip can never be aborted by an arbitrary ceiling. `connectTimeout` keeps its default, so a dead backend still fails fast. Both proxy routes also set `maxDuration = 3600` for parity with hosted environments.
 
 The masked file is named `<original> (замаскированный).docx` — the back advertises it via an RFC 5987 `filename*=UTF-8''...` (percent-encoded) value in `Content-Disposition`, which the page decodes (`parseDispositionFilename`) so Cyrillic names survive.
 

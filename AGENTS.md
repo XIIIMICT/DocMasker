@@ -50,6 +50,7 @@ Deterministic rules in `back/src/masking/rule_based.py` (`RuleBasedMasker`), in 
 10. **`docx-preview` is a client-only renderer.** `DocxViewer` (`front/src/shared/ui/docx-viewer.tsx`) renders a Blob into a scrollable pane inside a `"use client"` component via `useEffect` — never call `renderAsync` in an RSC/server context. The rendered DOM is thrown away on unmount (`container.innerHTML = ""`).
 11. **The two panes scroll in lock-step.** `useSyncedScroll` (`front/src/shared/hooks/use-synced-scroll.ts`) pairs the input/result surfaces (both text areas, or both DOCX previews) mapping the **scroll ratio**, not pixels — masked text is shorter. `DocxViewer` takes a `surfaceRef` so the parent can observe its scrollable element.
 12. **Backend tests run with `filterwarnings=error` — deprecated APIs fail the suite.** Use `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated `..._UNPROCESSABLE_ENTITY`. Any new endpoint path that the tests may hit must use non-deprecated symbols.
+13. **The front's `fetch` timeout is disabled on purpose.** `front/src/instrumentation.ts` sets a global undici dispatcher with `headersTimeout: 0` / `bodyTimeout: 0` so a large DOCX proxy round-trip can't be aborted by Node's default 300s ceiling; the two proxy routes also declare `maxDuration = 3600`. Don't "restore" the defaults or trim `maxDuration` — the backend is fast, but the upload/transfer of a big document must never be capped.
 
 ## Working rules
 

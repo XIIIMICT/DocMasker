@@ -1,6 +1,8 @@
 import { getBackendInternalUrl } from "@/shared/config";
 
 export const dynamic = "force-dynamic";
+// No serverless-style execution ceiling: a large DOCX must be allowed to finish.
+export const maxDuration = 3600;
 
 /**
  * Forward a DOCX mask request to the backend. The browser sends a multipart
