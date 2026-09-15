@@ -18,9 +18,8 @@ class Settings(BaseSettings):
 
     app_name: str = "DocMasker API"
     backend_port: int = Field(default=8000, validation_alias="BACKEND_PORT")
-    gliner_model: str = Field(default="urchade/gliner_multi_pii-v1", validation_alias="GLINER_MODEL")
-    gliner_threshold: float = Field(default=0.35, validation_alias="GLINER_THRESHOLD")
-    gliner_labels: str | None = Field(default=None, validation_alias="GLINER_LABELS")
+    #: Pipe-separated override of the active PII label set (see `constants.py`).
+    mask_labels: str | None = Field(default=None, validation_alias="MASK_LABELS")
     # Defaults to local dev origins. Only relevant when the browser talks to
     # the backend directly (the Next frontend proxies /api/* server-side).
     backend_cors_origins: list[str] = Field(
@@ -38,7 +37,7 @@ class Settings(BaseSettings):
             return json.loads(stripped)
         return [origin.strip() for origin in stripped.split(",") if origin.strip()]
 
-    @field_validator("gliner_labels", mode="after")
+    @field_validator("mask_labels", mode="after")
     @classmethod
     def _split_labels(cls, value: str | None) -> str | None:
         if not value:

@@ -1,14 +1,12 @@
 # Isolated integration stack for CI. Never includes the developer's .env,
-# volumes or log directories. The backend downloads the GLiNER model on first
-# boot (no cache volume here), so its healthcheck is given a long start period;
-# the CI job's `--wait-timeout` is raised accordingly.
+# volumes or log directories. The masker is deterministic, so the backend
+# starts and answers /health immediately (no model download, no warm-up).
 name: docmasker-ci
 
 x-back-env: &back-env
   BACKEND_PORT: "8001"
   AUTH_APP_ORIGIN: http://127.0.0.1:15001
   BACKEND_CORS_ORIGINS: '["http://127.0.0.1:15001"]'
-  GLINER_THRESHOLD: "0.35"
 
 services:
   back:
@@ -22,10 +20,9 @@ services:
     ports: ["127.0.0.1:18001:8001"]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
-      interval: 5s
+      interval: 2s
       timeout: 5s
-      retries: 60
-      start_period: 300s
+      retries: 30
   front:
     image: dm-front:ci
     build:

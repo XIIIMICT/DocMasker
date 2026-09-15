@@ -3,10 +3,11 @@ DOCX masking that preserves formatting.
 
 python-docx is read/write over OOXML; formatting lives in the XML runs, so we
 mask at the *run* level (paragraph.runs) and never re-layout a paragraph. For
-each paragraph we run GLiNER on its joined text, then rewrite only the
-overlapping slice of each run with `[LABEL]`. An entity that spans several
-runs (e.g. a name split across bold/look-styles) is handled by replacing the
-covered part of each run, keeping the surrounding formatting intact.
+each paragraph we run the deterministic masker on its joined text, then rewrite
+only the overlapping slice of each run with ``[LABEL]``. An entity that spans
+several runs (e.g. a name split across bold/italic styles) is handled by
+replacing the covered part of each run, keeping the surrounding formatting
+intact.
 
 Coverage: body paragraphs, all table cells (recursively), and the default /
 first / even header & footer paragraphs of every section.
@@ -22,31 +23,43 @@ from docx.document import Document as DocumentObject
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from .constants import mask_marker
+from .rule_based import RuleBasedMasker, get_masker
 from .schemas import MaskedEntity
-from .service import GLiNERModelLike, detect_entities, mask_text
 
 
-def _iter_table_paragraphs(table: Table, seen: set[int]) -> Iterable[Paragraph]:
+def _iter_table_paragraphs(table: Table, seen: set[int], keep_alive: list[object]) -> Iterable[Paragraph]:
     for row in table.rows:
         for cell in row.cells:
             for paragraph in cell.paragraphs:
                 if id(paragraph._p) not in seen:
                     seen.add(id(paragraph._p))
+                    keep_alive.append(paragraph._p)
                     yield paragraph
             for nested in cell.tables:
-                yield from _iter_table_paragraphs(nested, seen)
+                yield from _iter_table_paragraphs(nested, seen, keep_alive)
 
 
 def iter_paragraphs(doc: DocumentObject) -> Iterable[Paragraph]:
-    """Yield every text paragraph in the document exactly once."""
+    """
+    Yield every text paragraph in the document exactly once.
+
+    Paragraphs are deduplicated by the identity of their underlying XML element
+    (``paragraph._p``). python-docx hands out fresh proxy objects, so we keep a
+    strong reference to every element we have seen: otherwise a proxy can be
+    garbage-collected mid-iteration and its address reused by a later element,
+    which would make ``id()`` collide and silently drop paragraphs.
+    """
     seen: set[int] = set()
+    keep_alive: list[object] = []
 
     for paragraph in doc.paragraphs:
         seen.add(id(paragraph._p))
+        keep_alive.append(paragraph._p)
         yield paragraph
 
     for table in doc.tables:
-        yield from _iter_table_paragraphs(table, seen)
+        yield from _iter_table_paragraphs(table, seen, keep_alive)
 
     for section in doc.sections:
         # python-docx exposes the default header/footer (first-page/even variants
@@ -55,6 +68,7 @@ def iter_paragraphs(doc: DocumentObject) -> Iterable[Paragraph]:
             for paragraph in header_footer.paragraphs:
                 if id(paragraph._p) not in seen:
                     seen.add(id(paragraph._p))
+                    keep_alive.append(paragraph._p)
                     yield paragraph
 
 
@@ -62,9 +76,13 @@ def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], Maske
     """
     Mask the runs of one paragraph in place; returns the entity count masked.
 
-    Entities are keyed by absolute offsets in the paragraph text. We edit runs
-    back-to-front: replacing a span in a later run shortens only the region to
-    its right, so the absolute offsets of earlier runs stay valid.
+    Entities are keyed by absolute offsets in the paragraph text. An entity may
+    span several runs (e.g. ``АО «Росхим»`` split as ``АО «`` | ``Росхим`` |
+    ``»``); it must still collapse to a **single** ``[LABEL]``. So we process
+    entities back-to-front and, for each one, write the marker into the run
+    that contains its start and blank out the covered slices of the following
+    runs. Working back-to-front keeps the absolute offsets of earlier entities
+    valid, since edits only ever shorten text to the right of the cursor.
     """
     runs = list(paragraph.runs)
     bounds: list[tuple[int, int]] = []
@@ -75,57 +93,48 @@ def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], Maske
         cursor += length
 
     covered = 0
-    for index in range(len(runs) - 1, -1, -1):
-        run = runs[index]
-        if not run.text:
-            continue
-        run_start, run_end = bounds[index]
-        local_entities: list[MaskedEntity] = []
-        for (es, ee), entity in entity_map.items():
-            if es >= run_end or ee <= run_start:
+    for (entity_start, entity_end), entity in sorted(entity_map.items(), reverse=True):
+        marker = mask_marker(entity.label)
+        for index, (run_start, run_end) in enumerate(bounds):
+            if entity_start >= run_end or entity_end <= run_start:
                 continue
-            left = max(es, run_start)
-            right = min(ee, run_end)
-            local_entities.append(
-                MaskedEntity(
-                    label=entity.label,
-                    text=run.text[left - run_start : right - run_start],
-                    start=left - run_start,
-                    end=right - run_start,
-                    score=entity.score,
-                )
-            )
-        if local_entities:
-            run.text = mask_text(run.text, local_entities)
-            covered += len(local_entities)
+            left = max(entity_start, run_start) - run_start
+            right = min(entity_end, run_end) - run_start
+            run = runs[index]
+            if entity_start < run_end and entity_start >= run_start:
+                # First covered run: keep the text before the span, emit the
+                # marker once, keep the text after the span.
+                run.text = run.text[:left] + marker + run.text[right:]
+            else:
+                # Continuation run: drop only the covered slice.
+                run.text = run.text[:left] + run.text[right:]
+        covered += 1
     return covered
 
 
 def mask_docx_in_memory(
     source_bytes: bytes,
-    model: GLiNERModelLike,
+    masker: RuleBasedMasker | None = None,
 ) -> tuple[bytes, list[MaskedEntity]]:
     """Mask PII in a .docx (bytes) and return the new .docx bytes + entities."""
+    active = masker or get_masker()
     document = Document(io.BytesIO(source_bytes))
 
     all_entities: list[MaskedEntity] = []
-    total_masked = 0
     for paragraph in iter_paragraphs(document):
         text = paragraph.text
         if not text.strip():
             continue
-        entities = detect_entities(model, text)
+        entities = [
+            MaskedEntity(label=entity.label, text=entity.text, start=entity.start, end=entity.end, score=entity.score)
+            for entity in active.detect(text)
+        ]
         if not entities:
             continue
-        # Re-detect the full paragraph text once; entities are absolute within
-        # `text`. Build an offset map and mask the representative spans.
+        # Build an offset map and mask the representative spans.
         entity_map = _paragraph_entity_map(text, entities)
-        masked = mask_paragraph(paragraph, entity_map)
-        total_masked += masked
-        if total_masked > 0:
-            # Record the detected entities (dedup by span) for the response.
-            for entity in entities:
-                all_entities.append(entity)
+        mask_paragraph(paragraph, entity_map)
+        all_entities.extend(entities)
 
     out = io.BytesIO()
     document.save(out)
@@ -134,9 +143,6 @@ def mask_docx_in_memory(
 
 def _paragraph_entity_map(text: str, entities: list[MaskedEntity]) -> dict[tuple[int, int], MaskedEntity]:
     """Map (text offset, text offset) -> clamped entity, with non-overlapping spans."""
-    # GLiNER may return nested/overlapping spans across labels; flatten by picking
-    # the highest-score span per (start,end,label) and resolving overlaps so the
-    # run rewrite stays consistent (a text offset belongs to at most one mask).
     picked: dict[tuple[int, int], MaskedEntity] = {}
     for entity in entities:
         es, ee = entity.start, entity.end

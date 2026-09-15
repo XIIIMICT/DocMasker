@@ -1,1 +1,1 @@
-"""Sensitive-information masking (PII) backed by GLiNER."""
+"""Sensitive-information masking (PII) via a deterministic rule-based pipeline."""

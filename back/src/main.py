@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import api_router
 from .config import get_settings
-from .masking.service import get_gliner_model
 
 settings = get_settings()
 LOGGER = logging.getLogger("docmasker.application")
@@ -18,11 +17,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Load the GLiNER model once at startup so /health reflects readiness."""
+    """No warm-up is needed: the masker is deterministic and starts instantly."""
     LOGGER.info("DocMasker starting.")
-    get_gliner_model()
-    LOGGER.info("DocMasker ready.")
     yield
+    LOGGER.info("DocMasker stopped.")
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -38,5 +36,5 @@ app.include_router(api_router)
 
 @app.get("/health")
 async def healthcheck() -> dict[str, str]:
-    """Readiness probe for Docker (returns ok once the model is loaded)."""
+    """Readiness probe for Docker."""
     return {"status": "ok"}

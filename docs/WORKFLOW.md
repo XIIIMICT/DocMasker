@@ -10,7 +10,7 @@ this file in the same change (see "Documentation discipline").
 2. Dependencies: `just deps` (`uv sync --directory back` + `bun install --cwd front`).
 3. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts `dm-back-dev` and `dm-front-dev`. Or on the host `just back` / `just front`.
 
-Ports come from the root `.env` (`BACKEND_PORT`=8001, `FRONT_PORT`=5001); they are mandatory and fail loudly if unset. The GLiNER model lives in the `dm-hf-cache` volume: `docker compose down` keeps it, `just clean` removes it and forces a re-download.
+Ports come from the root `.env` (`BACKEND_PORT`=8001, `FRONT_PORT`=5001); they are mandatory and fail loudly if unset. The backend starts instantly — the masker is deterministic, there is no model to download and no cache volume.
 
 CI prerequisites (once, in GitHub repo settings): push the repo, create the `main` and `dev` branches, and set **`CI required`** as the required status check for the protected branches. CodeQL additionally needs code scanning enabled (see "CI" below).
 
@@ -28,8 +28,8 @@ Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
 
 - `ruff` with rule `ALL` and explicit exclusions (`back/pyproject.toml`); Cyrillic `RUF001-003` allowed, docstrings optional.
 - `ty check` — static type checker (**not mypy**).
-- `pytest`: `asyncio_mode=auto`, `filterwarnings=error`. Tests run **without** the real GLiNER model — deterministic stubs (`tests/test_mask.py::StubModel`, `tests/test_docx.py::StubDocxModel`) keep them offline and fast.
-- Test files: `back/tests/test_mask.py` (text masking), `back/tests/test_docx.py` (DOCX masking + formatting preservation), `back/tests/test_mask_file.py` (multipart endpoints + download headers).
+- `pytest`: `asyncio_mode=auto`, `filterwarnings=error` (with a scoped ignore for the `pkg_resources` deprecation that `natasha`→`pymorphy2` emits). Tests are deterministic and offline — no model, no network.
+- Test files: `back/tests/test_rule_based.py` (CAPSLOCK, inflected names, phone/email/address/org cases, label overrides), `test_mask.py` (service + `/api/mask` endpoint), `test_docx.py` (DOCX masking + formatting preservation), `test_mask_file.py` (multipart endpoints + download headers).
 - Coverage: `--cov=src --cov-branch`; CI requires ≥80% (see `[tool.coverage]` in `back/pyproject.toml`).
 
 ### Front
@@ -120,7 +120,7 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 
 Notes:
 - The backend job enforces **80% branch coverage** (`--cov-fail-under=80`); it fails below that.
-- `production` builds the **backend image once** and starts it through compose; the first boot downloads the GLiNER model (no cache volume in CI), so the backend healthcheck has a 300s `start_period` and the stack `--wait-timeout` is 600s. Keep that margin if the model changes.
+- `production` builds the **backend image once** and starts it through compose; the deterministic masker means `/health` answers immediately, so the stack `--wait-timeout` is 120s.
 - CI ports are isolated: front **15001**, back **18001** (`infra/compose.ci.yaml` never loads the developer's `.env` or volumes).
 - `.github/workflows/codeql.yaml` runs CodeQL for `javascript-typescript`, `python` and `actions` (build-mode `none`). Enable code scanning in repo settings; use advanced setup, not default setup. CodeQL ≠ `CI required`.
 - `.github/dependabot.yaml` — weekly updates for actions, docker, uv and npm (patch bumps ignored for deps).
@@ -131,7 +131,7 @@ Local reproduction of the `production` job: build the images (`docker compose -f
 
 - [ ] quality checks green: back — typecheck + lint + tests; front — typecheck + lint + tests
 - [ ] CI green (`CI required`) for the pushed branch/PR
-- [ ] behavior verified by hand where tests can't see it — open the masked `.docx` for formatting fidelity; sanity-check the model on real Russian text
+- [ ] behavior verified by hand where tests can't see it — open the masked `.docx` for formatting fidelity; sanity-check the masker on real Russian text (names, addresses, orgs)
 - [ ] `AGENTS.md` and the matching `docs/*` file updated for the new behavior
 - [ ] no debug artifacts left behind (`debug_*`, `*-probe*`, stray `.mjs`/`.cjs`)
 - [ ] commit message is a conventional commit + Why/What/Verified
@@ -146,6 +146,6 @@ Local reproduction of the `production` job: build the images (`docker compose -f
 ## Working principles
 
 - **Minimal changes:** edit existing files; follow the file's style and the project's vocabulary (HeroUI v3 slots, the existing masking pipeline) — don't invent parallel patterns.
-- **Measure, don't guess, on the model.** `GLINER_THRESHOLD` and label quality are empirical (see `docs/ARCHITECTURE.md`); change one knob at a time and note what moved.
+- **Precision over recall on names, measured not guessed.** The natasha guard (given name + surname/patronymic) and the address/org heuristics are empirical (see `docs/ARCHITECTURE.md`); change one rule at a time and back it with a test case.
 - **Check before delivery** with the quality table above.
 - **Sync into a running dev stack by restarting with `just dev`** (compose `--watch`), never by `docker cp`.

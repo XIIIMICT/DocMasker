@@ -94,7 +94,7 @@ jobs:
     name: Production images and browser smoke
     needs: config
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       E2E_BASE_URL: http://127.0.0.1:15001
     steps:
@@ -125,7 +125,7 @@ jobs:
           cache-from: type=gha,scope=front
           cache-to: type=gha,mode=max,scope=front
       - name: Start tested production images
-        run: docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 600 back front
+        run: docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 120 back front
       - name: Install browser
         working-directory: front
         run: |

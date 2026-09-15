@@ -20,9 +20,6 @@ services:
         required: true
     environment:
       BACKEND_CORS_ORIGINS: '${BACKEND_CORS_ORIGINS:-["http://localhost:5001","http://127.0.0.1:5001","${AUTH_APP_ORIGIN:?}"]}'
-    volumes:
-      # Persist the HuggingFace model cache so restart doesn't re-download ~GBs.
-      - dm-hf-cache:/app/.cache/huggingface
     ports:
       - "${BACKEND_PORT:?}:${BACKEND_PORT:?}"
     healthcheck:
@@ -127,6 +124,3 @@ networks:
     name: dm-net
   net-dev:
     name: dm-net-dev
-
-volumes:
-  dm-hf-cache:
