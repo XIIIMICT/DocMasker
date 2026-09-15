@@ -299,14 +299,14 @@ html {
     font-size: 0.85rem;
 }
 
-/* Masking summary shown inside the result pane label; two lines kept apart,
-   aligned to the top so the pane name stays on the first line. */
+/* Masking summary shown inside the result pane label; the breakdown lives in
+   a Tooltip. It is the Tooltip.Trigger, so it must look like plain text. */
 .editor-pane__stats {
     min-width: 0;
     color: var(--muted);
     font-weight: 500;
     text-align: right;
-    white-space: pre-line;
+    cursor: default;
 }
 
 /* Errors are shown inside the result pane's TextArea, in red. `className` on

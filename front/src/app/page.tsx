@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, ButtonGroup, TextArea } from "@heroui/react";
+import { Button, ButtonGroup, TextArea, Tooltip } from "@heroui/react";
 import { useRef, useState, type DragEvent } from "react";
 
 import type { MaskResponse } from "@/shared/api/mask";
@@ -56,20 +56,24 @@ function labelName(label: string, count: number): string {
     return plural(count, ["фрагмент", "фрагмента", "фрагментов"]);
 }
 
+/** "5 фрагментов" — the short result-label summary. */
+function totalText(stats: MaskStats): string {
+    return `${stats.total} ${plural(stats.total, ["фрагмент", "фрагмента", "фрагментов"])}`;
+}
+
 /**
- * Two-line summary, e.g.
+ * Tooltip body: one line per label, e.g.
  * ```
  * 1 организация + 2 телефона + 4 физлица
- * = 7 фрагментов всего
  * ```
+ * (the total is already shown in the label itself).
  */
-function statsText(stats: MaskStats): string {
+function statsBreakdown(stats: MaskStats): string {
     const parts = Object.entries(stats.byLabel)
         .filter(([, count]) => count > 0)
         .sort(([, a], [, b]) => b - a)
         .map(([label, count]) => `${count} ${labelName(label, count)}`);
-    const total = `${stats.total} ${plural(stats.total, ["фрагмент", "фрагмента", "фрагментов"])} всего`;
-    return parts.length > 0 ? `${parts.join(" + ")}\n= ${total}` : `= ${total}`;
+    return parts.join(" + ");
 }
 
 function countLabels(entities: { label: string }[]): MaskStats {
@@ -470,8 +474,16 @@ export default function Home() {
                             {showResultPreview && maskedFile
                                 ? maskedFile.downloadName
                                 : "Замаскированный текст"}
-                            {stats !== null && error === null ? (
-                                <span className="editor-pane__stats">{statsText(stats)}</span>
+                            {stats !== null && error === null && stats.total > 0 ? (
+                                <Tooltip delay={150}>
+                                    <Tooltip.Trigger className="editor-pane__stats">
+                                        {totalText(stats)}
+                                    </Tooltip.Trigger>
+                                    <Tooltip.Content showArrow placement="bottom">
+                                        <Tooltip.Arrow />
+                                        {statsBreakdown(stats)}
+                                    </Tooltip.Content>
+                                </Tooltip>
                             ) : null}
                         </div>
                         {error !== null ? (

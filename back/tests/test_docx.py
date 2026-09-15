@@ -5,10 +5,25 @@ from __future__ import annotations
 import io
 
 from docx import Document as DocxDocument
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
+from docx.oxml.ns import qn
 from docx.shared import Pt
+from docx.text.paragraph import Paragraph
 
 from src.masking.docx_service import mask_docx_in_memory
 from src.masking.rule_based import RuleBasedMasker
+
+
+def _add_hyperlink(paragraph: Paragraph, text: str, url: str) -> None:
+    """Append an external hyperlink run, like Word does for a mailto: link."""
+    relationship_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+    hyperlink = paragraph._p.makeelement(qn("w:hyperlink"), {qn("r:id"): relationship_id})
+    run = paragraph._p.makeelement(qn("w:r"), {})
+    text_element = paragraph._p.makeelement(qn("w:t"), {})
+    text_element.text = text
+    run.append(text_element)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
 
 
 def _build_docx() -> bytes:
@@ -82,6 +97,29 @@ def test_docx_masking_preserves_formatting_and_runs() -> None:
     cell_text = table.cell(0, 0).text
     assert "+7 900 123-45-67" not in cell_text
     assert "[PHONE]" in cell_text
+
+
+def test_hyperlinked_email_collapses_to_plain_mask() -> None:
+    # Word represents a mailto: link as a w:hyperlink whose run holds the email.
+    # The masked result must be a plain [EMAIL] run with no link left behind.
+    doc = DocxDocument()
+    p = doc.add_paragraph()
+    p.add_run("Пишите на ")
+    _add_hyperlink(p, "dksir@ruschem.ru", "mailto:dksir@ruschem.ru")
+    out = io.BytesIO()
+    doc.save(out)
+
+    masked_bytes, entities = mask_docx_in_memory(out.getvalue())
+
+    document = DocxDocument(io.BytesIO(masked_bytes))
+    paragraph = document.paragraphs[0]
+    assert "[EMAIL]" in paragraph.text
+    assert "dksir@ruschem.ru" not in paragraph.text
+    # The hyperlink was unwrapped: no w:hyperlink element and no relationship.
+    assert paragraph._p.findall(qn("w:hyperlink")) == []
+    hyperlink_rels = [rel for rel in paragraph.part.rels.values() if rel.reltype == RT.HYPERLINK]
+    assert hyperlink_rels == []
+    assert [entity.label for entity in entities] == ["email"]
 
 
 def test_repeated_masking_keeps_all_paragraphs() -> None:

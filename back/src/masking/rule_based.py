@@ -15,6 +15,7 @@ spans still to be applied.
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from natasha import AddrExtractor, MorphVocab, NamesExtractor
 
 from src.config import get_settings
 
-from .constants import DEFAULT_LABELS
+from .constants import ALWAYS_MASK_ORGANIZATIONS, DEFAULT_LABELS
 
 # --- Label vocabulary (mask markers are the upper-cased label) ---------------
 PERSON = "person"
@@ -45,14 +46,50 @@ _EMAIL_RE = re.compile(
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)+",
 )
 
-# Legal-form prefixes for organisations (Cyrillic). The name that follows is
-# either a quoted name (straight/guillemet/low-high/English-curly quotes) or a
-# capitalised word chain (ООО Ромашка; ПАО Сбербанк). Separators between the
-# prefix and the name may include punctuation ("АО, «Росхим»", "АО - «…»").
-_ORG_PREFIX = r"ООО|ОАО|ЗАО|ПАО|АО|ИП|ФГБУ|ГБУ|МБУ|ФГУП|ГУП|МУП|НКО|ОО"
+# Legal-form prefixes for organisations. The name that follows is either a
+# quoted name (straight/guillemet/low-high/English-curly quotes) or a capitalised
+# word chain (ООО Ромашка; ПАО Сбербанк). Separators between the prefix and the
+# name may include punctuation. Spelled-out forms ("Акционерное общество",
+# "Общество с ограниченной ответственностью") are matched separately by
+# `_match_full_form` in any grammatical case.
+_ORG_ABBREV = r"ООО|ОАО|ЗАО|ПАО|АО|ИП|ФГБУ|ГБУ|МБУ|ФГУП|ГУП|МУП|НКО|ОО"
+
+#: Spelled-out legal forms, as flat lemma sequences (nominative phrases lemmatised
+#: once here so the matcher never needs a per-word case table). A token in the
+#: text matches a lemma when their lemmas are equal *or* similar enough
+#: (``_ORG_LEMMA_RATIO``) — that admits any declension ("Акционерным обществом",
+#: "Общества с ограниченной ответственностью") and small inflections, without
+#: hand-writing cases.
+_ORG_FULL_FORMS: tuple[tuple[str, ...], ...] = (
+    ("акционерный", "общество"),
+    ("публичный", "акционерный", "общество"),
+    ("закрытый", "акционерный", "общество"),
+    ("открытый", "акционерный", "общество"),
+    ("общество", "с", "ограниченный", "ответственность"),
+    ("унитарный", "предприятие"),
+    ("индивидуальный", "предприниматель"),
+)
+
+#: Shortest legal-form phrases we try to match, in words.
+_ORG_FORM_LENGTHS = tuple(sorted({len(form) for form in _ORG_FULL_FORMS}))
+
+#: Minimum lemma similarity for a token to count as part of a legal form.
+#: "акциноерным" (typo) vs "акционерный" scores 0.909; unrelated words stay
+#: well below (max observed false positive: 0.889 for "сообществом").
+_ORG_LEMMA_RATIO = 0.9
+
+#: Separators allowed *between* the words of a legal form ("Общество, с ограниченной …").
+_ORG_GAP_RE = re.compile(r"[\s,.;:()\-–—]+")
+
+#: A single word token anywhere in the text.
+_WORD_RE = re.compile(r"[А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\-]*")
+
+#: Characters allowed between a legal-form prefix and the organisation name.
+_ORG_SEPARATORS = " \t\n,;.-–—"
+
 _ORG_NAME = r"[А-ЯЁ][\w\-]*(?:\s+[А-ЯЁ][\w\-]*){0,4}"
-# Paired quotes accepted around an organisation name: "…", «…», „…“, “…”,
-# ‘…’ and the ASCII angle form <…>.
+# Paired quotes accepted around an organisation name: "…", «…», „…“, “…”, ‘…’
+# and the ASCII angle form <…>.
 _ORG_QUOTED = (
     r"\"[^\"\n]{1,80}\""
     r"|«[^»\n]{1,80}»"
@@ -62,7 +99,21 @@ _ORG_QUOTED = (
     r"|'[^'\n]{1,80}'"
     r"|<[^>\n]{1,80}>"
 )
-_ORG_PREFIX_RE = re.compile(rf"\b(?:{_ORG_PREFIX})\b\.?[\s,;\-–—]*(?:{_ORG_QUOTED}|{_ORG_NAME})")
+#: The name after a prefix: a quoted name *including its quotes*, or a
+#: capitalised word chain. The quotes are kept so they are masked as well.
+_ORG_NAME_PART = rf"(?:{_ORG_QUOTED})|{_ORG_NAME}"
+
+#: A capitalised word chain that can act as an organisation name.
+_ORG_NAME_RE = re.compile(_ORG_NAME)
+#: A quoted organisation name — quotes included, so they are masked too.
+_ORG_QUOTED_RE = re.compile(_ORG_QUOTED)
+
+#: Legal-form prefix + separator + name, e.g. `ООО «Ромашка»`. The abbreviated
+#: prefixes are matched case-insensitively and need no inflection.
+_ORG_ABBREV_RE = re.compile(
+    rf"\b(?:{_ORG_ABBREV})\b\.?[\s,;\-–—]*(?:{_ORG_NAME_PART})",
+    re.IGNORECASE,
+)
 
 # Phrases that introduce an organisation without a legal-form prefix.
 _ORG_LEAD_RE = re.compile(
@@ -116,6 +167,123 @@ def _merge_spans(entities: Iterable[Entity]) -> list[Entity]:
             continue
         result.append(entity)
     return sorted(result, key=lambda entity: entity.start)
+
+
+def _lemmatize(morph: MorphVocab, word: str) -> str:
+    """Return the dictionary form of `word`, lower-cased; the word itself if unknown."""
+    parses = morph(word)
+    return parses[0].normal_form if parses else word.lower().replace("ё", "е")
+
+
+def _lemma_close(morph: MorphVocab, token: str, lemma: str) -> bool:
+    """
+    Whether `token` is (a form of) `lemma` — by exact lemma or close spelling.
+
+    The similarity branch admits typos ("акциноерным" → "акционерный") and
+    unusual forms the dictionary does not lemmatise; the threshold is tuned so
+    random adjectives ending in "-ым" are rejected (see `_ORG_LEMMA_RATIO`).
+    """
+    normalized = _lemmatize(morph, token)
+    if normalized == lemma:
+        return True
+    return difflib.SequenceMatcher(None, normalized, lemma).ratio() >= _ORG_LEMMA_RATIO
+
+
+@lru_cache(maxsize=1)
+def _register_lexicon() -> frozenset[str]:
+    """Every known word of a spelled-out legal form, for the trigram pre-filter."""
+    return frozenset(lemma for form in _ORG_FULL_FORMS for lemma in form if len(lemma) >= 4)
+
+
+def _suspicious_positions(text: str) -> Iterator[int]:
+    """
+    Yield the start offset of each token that could begin a spelled-out form.
+
+    A cheap pre-filter: a token must share its leading trigram with some known
+    legal-form word, so a paragraph with no organisation-like word never runs the
+    (much costlier) lemmatiser. This keeps the per-request cost near zero.
+    """
+    lexicon = _register_lexicon()
+    prefixes = {word[:3] for word in lexicon}
+    for match in re.finditer(r"[А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\-]*", text):
+        if match.group(0).lower()[:3] in prefixes:
+            yield match.start()
+
+
+def _match_full_form(morph: MorphVocab, text: str, start: int) -> tuple[int, int] | None:
+    """
+    If a spelled-out legal form starts at `start`, return its `(start, end)`.
+
+    Words are matched one by one (their lemmas must equal or resemble the lemma
+    of the form), separated by `_ORG_GAP_RE`, over each form length — shorter
+    forms are tried first so "Публичное акционерное общество" is not reported as
+    just "…акционерное общество".
+    """
+    for length in _ORG_FORM_LENGTHS:
+        cursor = start
+        position = -1
+        for index in range(length):
+            word = _WORD_RE.match(text, cursor)
+            if word is None:
+                break
+            if index == 0:
+                position = word.start()
+            cursor = word.end()
+            if index < length - 1:
+                gap = _ORG_GAP_RE.match(text, cursor)
+                if gap is None:
+                    break
+                cursor = gap.end()
+        else:
+            tokens = _tokens(text, position, cursor)
+            for form in (form for form in _ORG_FULL_FORMS if len(form) == length):
+                if all(_lemma_close(morph, token, lemma) for token, lemma in zip(tokens, form, strict=False)):
+                    return position, cursor
+    return None
+
+
+def _tokens(text: str, start: int, end: int) -> list[str]:
+    """Return the word tokens of `text[start:end]`, in order."""
+    return _WORD_RE.findall(text, start, end)
+
+
+def _org_name_span(text: str, end: int) -> int:
+    r"""
+    End of the organisation name that follows a legal form at `end`.
+
+    A separator (`[\s,;\-–—]*`) may sit between the form and its name ("АО,
+    «Росхим»"). Prefers a quoted name (quotes included) and falls back to a
+    capitalised word chain. Returns `end` when there is no name, so the legal
+    form itself is still masked ("индивидуальный предприниматель" without a
+    following brand).
+    """
+    cursor = end
+    while cursor < len(text) and text[cursor] in _ORG_SEPARATORS:
+        cursor += 1
+    tail = text[cursor:]
+    quoted = _ORG_QUOTED_RE.match(tail)
+    if quoted is not None:
+        return cursor + quoted.end()
+    name = _ORG_NAME_RE.match(tail)
+    if name is not None:
+        return cursor + name.end()
+    return end
+
+
+@lru_cache(maxsize=1)
+def _always_mask_re() -> re.Pattern[str] | None:
+    """
+    Case-insensitive pattern for the always-mask organisation list.
+
+    Applied last, after every rule-based span has been merged, so a brand that
+    must never leak is masked even when no legal-form prefix or extractor
+    matched it (bare "Росхим", lowercase "росхим", "АО Росхим", …). An optional
+    Cyrillic tail covers inflected mentions ("Росхима", "Росхиме", "Росхимом").
+    """
+    if not ALWAYS_MASK_ORGANIZATIONS:
+        return None
+    names = "|".join(re.escape(name) for name in sorted(ALWAYS_MASK_ORGANIZATIONS, key=len, reverse=True))
+    return re.compile(rf"(?<![A-Za-zА-Яа-яЁё0-9])(?:{names})[а-яё]*(?![A-Za-zА-Яа-яЁё0-9])", re.IGNORECASE)
 
 
 class RuleBasedMasker:
@@ -174,11 +342,33 @@ class RuleBasedMasker:
     def _find_organizations(self, text: str) -> Iterator[Entity]:
         if ORGANIZATION not in self.labels:
             return
-        for regex in (_ORG_PREFIX_RE, _ORG_LEAD_RE):
+        # Abbreviated prefixes: the regex already consumes the quoted name and
+        # its quotes, so the span is used as-is (no trailing-quote trimming).
+        for regex in (_ORG_ABBREV_RE, _ORG_LEAD_RE):
             for match in regex.finditer(text):
-                start, end = _trim_span(text, match.start(), match.end())
-                if end > start:
-                    yield Entity(ORGANIZATION, text[start:end], start, end)
+                yield Entity(ORGANIZATION, match.group(0), match.start(), match.end())
+        yield from self._find_full_forms(text)
+
+    def _find_full_forms(self, text: str) -> Iterator[Entity]:
+        """Spelled-out legal forms in any case ("Акционерным обществом …")."""
+        morph = self._morph
+        for start in _suspicious_positions(text):
+            matched = _match_full_form(morph, text, start)
+            if matched is None:
+                continue
+            span_start, span_end = matched
+            span_end = _org_name_span(text, span_end)
+            yield Entity(ORGANIZATION, text[span_start:span_end], span_start, span_end)
+
+    def _find_always_masked(self, text: str) -> Iterator[Entity]:
+        """Brands from ALWAYS_MASK_ORGANIZATIONS, regardless of context/case."""
+        if ORGANIZATION not in self.labels:
+            return
+        regex = _always_mask_re()
+        if regex is None:
+            return
+        for match in regex.finditer(text):
+            yield Entity(ORGANIZATION, match.group(0), match.start(), match.end())
 
     # -- public API -----------------------------------------------------------
 
@@ -190,7 +380,10 @@ class RuleBasedMasker:
         raw.extend(self._find_persons(text))
         raw.extend(self._find_addresses(text))
         raw.extend(self._find_organizations(text))
-        return _merge_spans(raw)
+        merged = _merge_spans(raw)
+        # Last resort: brands that must never leak, even when no rule matched
+        # them on their own (bare name, no legal-form prefix). Existing spans win.
+        return _merge_spans([*merged, *self._find_always_masked(text)])
 
     def mask(self, text: str, entities: list[Entity] | None = None) -> str:
         """Replace detected spans with `[LABEL]`, working back-to-front."""
@@ -252,14 +445,24 @@ def _trim_span(text: str, start: int, end: int) -> tuple[int, int]:
 
 
 def _looks_like_address(raw: str) -> bool:
-    """Reject stubs that are just a stray word or a lone number."""
+    """
+    Reject stubs that are just a stray word or a bare number.
+
+    A span must either carry an explicit address keyword ("г.", "ул.", …) or mix
+    letters with digits ("Ленина 5"). A lone number ("270023", "6402 270023") is
+    *not* an address — `natasha` emits digit-only `AddrPart`s for passport /
+    index-like sequences, which must not be masked.
+    """
     if not _WORD_CHAR.search(raw):
         return False
     has_keyword = any(
         marker in raw.lower() for marker in ("г.", "г ", "ул", "д.", "д ", "просп", "пер", "шоссе", "обл", "р-н", "кв")
     )
+    if has_keyword:
+        return True
+    has_letters = any(char.isalpha() for char in raw)
     has_digits = any(char.isdigit() for char in raw)
-    return has_keyword or has_digits
+    return has_letters and has_digits
 
 
 @lru_cache(maxsize=1)

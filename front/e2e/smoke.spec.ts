@@ -18,9 +18,11 @@ test("текст с PII маскируется через /api/mask", async ({ p
     await expect
         .poll(async () => page.getByRole("textbox").nth(1).inputValue(), { timeout: 30000 })
         .toContain("[PERSON]");
-    // The result label carries the breakdown plus the total, two lines.
-    await expect(page.getByText(/1 физлицо \+ 1 телефон/)).toBeVisible();
-    await expect(page.getByText(/= 2 фрагмента всего/)).toBeVisible();
+    // The result label shows the total; the breakdown is in its Tooltip.
+    const stats = page.locator(".editor-pane__stats");
+    await expect(stats).toHaveText("2 фрагмента");
+    await stats.hover();
+    await expect(page.getByRole("tooltip")).toContainText("1 физлицо + 1 телефон");
     // Text results are downloadable as .txt regardless of the input source.
     await expect(page.getByRole("button", { name: "Скачать файл" })).toBeVisible();
 });

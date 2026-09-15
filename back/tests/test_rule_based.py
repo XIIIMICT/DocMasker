@@ -66,6 +66,43 @@ def test_masks_organisation_prefixes() -> None:
     assert "Сбербанк" not in masked
 
 
+def test_organisation_full_names() -> None:
+    # Spelled-out legal forms must be masked too, not only the abbreviations.
+    single = [
+        'Акционерное общество "Росхим"',
+        "Акционерное общество «Росхим»",
+        'Общество с ограниченной ответственностью "Ромашка"',
+        "Публичное акционерное общество «Сбербанк»",
+        "Индивидуальный предприниматель Иванов",
+    ]
+    for text in single:
+        assert _masker().mask(text) == "[ORGANIZATION]", text
+
+
+def test_organisation_full_names_in_any_case() -> None:
+    # The form is declinable ("Акционерным обществом"), so matching is done on
+    # lemmas rather than a hand-written case table. The brand must never leak.
+    cases = [
+        ('Я восхищаюсь акционерным обществом "Росхим"', "Росхим"),
+        ('Письмо от акционерного общества "Росхим"', "Росхим"),
+        ('Акционерному обществу "Росхим"', "Росхим"),
+        ('Обществом с ограниченной ответственностью "Ромашка"', "Ромашка"),
+        ('Общества с ограниченной ответственностью "Ромашка"', "Ромашка"),
+        ('Публичным акционерным обществом "Сбербанк"', "Сбербанк"),
+    ]
+    for text, brand in cases:
+        masked = _masker().mask(text)
+        assert "[ORGANIZATION]" in masked, text
+        assert brand not in masked, text
+
+
+def test_organisation_full_names_with_typo() -> None:
+    # A misspelt form still matches via lemma similarity, but an unrelated
+    # adjective in the same position does not.
+    assert _masker().mask('Я восхищаюсь акциноерным обществом "Росхим"') == "Я восхищаюсь [ORGANIZATION]"
+    assert "Росхим" not in _masker().mask('Восхищаюсь красивым обществом "Росхим"')
+
+
 def test_organisation_quoting_and_separator_variants() -> None:
     # Every common quote style plus punctuation between prefix and name must be
     # a single organisation span.
@@ -84,6 +121,19 @@ def test_organisation_quoting_and_separator_variants() -> None:
         assert masked == "[ORGANIZATION]", text
     # Adjacent organisations stay distinct (no accidental gluing).
     assert _masker().mask("АО «Росхим» и ООО «Ромашка»") == "[ORGANIZATION] и [ORGANIZATION]"
+
+
+def test_digit_only_sequences_are_not_addresses() -> None:
+    # `natasha` emits digit-only AddrParts for passport/index-like numbers; a
+    # bare number must not be masked (and passport numbers are out of scope).
+    for text in ["Паспорт РФ №6402 270023", "Паспорт РФ № 6402 270023", "код 6402 270023"]:
+        assert _masker().mask(text) == text
+
+
+def test_address_still_masks_letters_with_digits() -> None:
+    masked = _masker().mask("Адрес: г. Москва, ул. Ленина, д. 5, кв. 10.")
+    assert "[ADDRESS]" in masked
+    assert "Москва" not in masked
 
 
 def test_masks_combined_pii_in_one_pass() -> None:

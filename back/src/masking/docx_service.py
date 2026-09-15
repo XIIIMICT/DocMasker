@@ -16,16 +16,59 @@ first / even header & footer paragraphs of every section.
 from __future__ import annotations
 
 import io
+import re
 from collections.abc import Iterable
 
 from docx import Document
 from docx.document import Document as DocumentObject
+from docx.oxml.ns import qn
 from docx.table import Table
+from docx.text.hyperlink import Hyperlink
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 from .constants import mask_marker
 from .rule_based import RuleBasedMasker, get_masker
 from .schemas import MaskedEntity
+
+#: A hyperlink whose visible text is nothing but mask markers (``[EMAIL]``, …).
+_MASK_ONLY_RE = re.compile(r"(?:\[[A-Z ]+\]\s*)+")
+
+
+def _paragraph_runs(paragraph: Paragraph) -> list[Run]:
+    """
+    All runs whose text is part of `paragraph.text`, in document order.
+
+    Hyperlinked runs are included: `paragraph.text` renders them inline, so a
+    mask offset can land inside a hyperlink. `paragraph.runs` alone skips them,
+    which is why we walk `iter_inner_content()`.
+    """
+    runs: list[Run] = []
+    for item in paragraph.iter_inner_content():
+        if isinstance(item, Run):
+            runs.append(item)
+        elif isinstance(item, Hyperlink):
+            runs.extend(item.runs)
+    return runs
+
+
+def _unwrap_hyperlink(hyperlink: Hyperlink) -> None:
+    """
+    Replace a ``w:hyperlink`` element with its child runs, dropping the link.
+
+    The relationship is deleted too, so the saved document carries no unused
+    ``mailto:``/``http:`` relationship pointing at masked text.
+    """
+    element = hyperlink._hyperlink
+    relationship_id = element.get(qn("r:id"))
+    parent = element.getparent()
+    index = parent.index(element)
+    for child in list(element):
+        parent.insert(index, child)
+        index += 1
+    parent.remove(element)
+    if relationship_id:
+        hyperlink.part.drop_rel(relationship_id)
 
 
 def _iter_table_paragraphs(table: Table, seen: set[int], keep_alive: list[object]) -> Iterable[Paragraph]:
@@ -83,8 +126,11 @@ def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], Maske
     that contains its start and blank out the covered slices of the following
     runs. Working back-to-front keeps the absolute offsets of earlier entities
     valid, since edits only ever shorten text to the right of the cursor.
+
+    Hyperlinks covered by an entity are unwrapped (their runs are lifted out of
+    the ``w:hyperlink`` element) so a masked email/URL is no longer clickable.
     """
-    runs = list(paragraph.runs)
+    runs = _paragraph_runs(paragraph)
     bounds: list[tuple[int, int]] = []
     cursor = 0
     for run in runs:
@@ -109,7 +155,21 @@ def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], Maske
                 # Continuation run: drop only the covered slice.
                 run.text = run.text[:left] + run.text[right:]
         covered += 1
+    _unwrap_covered_hyperlinks(paragraph)
     return covered
+
+
+def _unwrap_covered_hyperlinks(paragraph: Paragraph) -> None:
+    """
+    Un-link hyperlinks whose visible text is now only mask markers.
+
+    An email that was a ``mailto:`` hyperlink becomes a plain ``[EMAIL]`` run,
+    so the masked document carries no dangling link. A hyperlink that still
+    shows unmasked text (a partially masked address) is left alone.
+    """
+    for item in list(paragraph.iter_inner_content()):
+        if isinstance(item, Hyperlink) and _MASK_ONLY_RE.fullmatch(item.text.strip()):
+            _unwrap_hyperlink(item)
 
 
 def mask_docx_in_memory(

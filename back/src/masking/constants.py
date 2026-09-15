@@ -15,6 +15,11 @@ DEFAULT_LABELS: tuple[str, ...] = (
     "organization",
 )
 
+#: Organisation names masked unconditionally — case-insensitively and with or
+#: without a legal-form prefix. Project-specific exclusions (brands that must
+#: never leak); applied as a last resort after the rule-based spans are merged.
+ALWAYS_MASK_ORGANIZATIONS: tuple[str, ...] = ("Росхим",)
+
 
 def mask_marker(label: str) -> str:
     """Marker text for an entity label (`person` -> ``[PERSON]``)."""
