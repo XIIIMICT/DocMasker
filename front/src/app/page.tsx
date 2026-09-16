@@ -1,16 +1,20 @@
 "use client";
 
-import { Button, ButtonGroup, TextArea, Tooltip } from "@heroui/react";
+import { Button, ButtonGroup, Tabs, TextArea, Tooltip } from "@heroui/react";
 import { useRef, useState, type DragEvent } from "react";
 
 import type { MaskResponse } from "@/shared/api/mask";
+import { unpackMaskArchive } from "@/shared/api/mask-archive";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import { DocxViewer } from "@/shared/ui/docx-viewer";
 import { ThemeSwitcher } from "@/shared/ui/theme-switcher";
 
+/** The two downloadable artifacts of a masking run. */
 interface MaskedFileResult {
-    blob: Blob;
-    downloadName: string;
+    result: Blob;
+    resultName: string;
+    keys: Blob;
+    keysName: string;
 }
 
 /** Masking totals: `total` plus a per-label breakdown (e.g. `person: 3`). */
@@ -85,20 +89,6 @@ function countLabels(entities: { label: string }[]): MaskStats {
     return { total: entities.length, byLabel };
 }
 
-function parseDispositionFilename(disposition: string | null): string {
-    if (!disposition) return "";
-    // Prefer the RFC 5987 `filename*=UTF-8''<percent-encoded>` value (keeps Cyrillic).
-    const star = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-    if (star?.[1]) {
-        try {
-            return decodeURIComponent(star[1]);
-        } catch {
-            /* fall through to the ASCII fallback */
-        }
-    }
-    return disposition.match(/filename="([^"]+)"/)?.[1] ?? "";
-}
-
 /** Parse the backend's `X-Masked-Breakdown` header (a JSON label→count map). */
 function parseBreakdown(header: string | null): Record<string, number> {
     if (!header) return {};
@@ -159,6 +149,10 @@ function DocPreviewShell({
 export default function Home() {
     const [input, setInput] = useState("");
     const [result, setResult] = useState("");
+    // Demasking keys (YAML) produced together with the result, always. Shown on
+    // the "Ключи демаскировки" tab and downloaded as a separate file.
+    const [keys, setKeys] = useState("");
+    const [resultTab, setResultTab] = useState("result");
     const [stats, setStats] = useState<MaskStats | null>(null);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     // Base name of an uploaded `.txt`, reused for the masked download; it is
@@ -187,18 +181,24 @@ export default function Home() {
     // An error always surfaces in the result pane, so the result is a TextArea
     // (never a document preview) while one is shown.
     const showResultPreview = inFileMode && maskedFile !== null && error === null;
-    // Text mode always offers a download: the masked text is a `.txt`, whether
-    // it was typed by hand or loaded from an uploaded `.txt`.
-    const canDownloadText = !inFileMode && result.length > 0 && error === null;
+    // A run happened and masked nothing: the result pane explains it and the
+    // keys tab / downloads stay disabled.
+    const maskedNothing = error === null && stats !== null && stats.total === 0;
+    // The result tab holds the masked artifact once a run has produced one.
+    const canDownloadResult =
+        error === null && !maskedNothing && (inFileMode ? maskedFile !== null : result.length > 0);
+    const canDownloadKeys = error === null && keys.length > 0;
 
-    useSyncedScroll(inputTextRef, resultTextRef, !inFileMode);
-    useSyncedScroll(sourceDocRef, maskedDocRef, showResultPreview);
+    useSyncedScroll(inputTextRef, resultTextRef, !inFileMode && resultTab === "result");
+    useSyncedScroll(sourceDocRef, maskedDocRef, showResultPreview && resultTab === "result");
 
     function resetResult() {
         setResult("");
+        setKeys("");
         setStats(null);
         setMaskedFile(null);
         setError(null);
+        setResultTab("result");
     }
 
     function onTextChange(value: string) {
@@ -298,9 +298,11 @@ export default function Home() {
             }
             const data = (await response.json()) as MaskResponse;
             setResult(data.text);
+            setKeys(data.keys);
             setStats(countLabels(data.masked_entities));
         } catch (requestError) {
             setResult("");
+            setKeys("");
             setStats(null);
             setError(
                 requestError instanceof Error
@@ -333,14 +335,15 @@ export default function Home() {
             }
             const total = Number(response.headers.get("X-Masked-Count") ?? "0");
             const byLabel = parseBreakdown(response.headers.get("X-Masked-Breakdown"));
-            const downloadName = parseDispositionFilename(
-                response.headers.get("Content-Disposition"),
-            );
-            const blob = await response.blob();
-            setMaskedFile({ blob, downloadName });
+            // The backend returns one ZIP holding the masked .docx and its keys;
+            // unpack it so each half can be downloaded on its own.
+            const bundle = await unpackMaskArchive(await response.blob());
+            setMaskedFile(bundle);
+            setKeys(await bundle.keys.text());
             setStats({ total, byLabel });
         } catch (requestError) {
             setMaskedFile(null);
+            setKeys("");
             setStats(null);
             setError(
                 requestError instanceof Error
@@ -363,7 +366,7 @@ export default function Home() {
 
     function downloadMaskedFile() {
         if (!maskedFile) return;
-        downloadBlob(maskedFile.blob, maskedFile.downloadName);
+        downloadBlob(maskedFile.result, maskedFile.resultName);
     }
 
     function downloadMaskedText() {
@@ -372,6 +375,29 @@ export default function Home() {
         downloadBlob(
             new Blob([result], { type: "text/plain;charset=utf-8" }),
             `${base} (замаскированный).txt`,
+        );
+    }
+
+    /** Download the masked artifact, whichever mode produced it. */
+    function downloadResult() {
+        if (inFileMode) {
+            downloadMaskedFile();
+        } else {
+            downloadMaskedText();
+        }
+    }
+
+    /** Keys download: in file mode the name comes from the archive, else derived. */
+    function downloadKeys() {
+        if (keys.length === 0) return;
+        if (maskedFile) {
+            downloadBlob(maskedFile.keys, maskedFile.keysName);
+            return;
+        }
+        const base = textBaseName ?? "текст";
+        downloadBlob(
+            new Blob([keys], { type: "application/yaml;charset=utf-8" }),
+            `${base} (ключи демаскировки).yaml`,
         );
     }
 
@@ -385,6 +411,7 @@ export default function Home() {
         setTextBaseName(null);
         setMaskedFile(null);
         setResult("");
+        setKeys("");
         setStats(null);
         setError(null);
         if (fileInputRef.current) {
@@ -475,9 +502,24 @@ export default function Home() {
 
                     <div className="editor-pane">
                         <div className="editor-pane__label">
-                            {showResultPreview && maskedFile
-                                ? maskedFile.downloadName
-                                : "Замаскированный текст"}
+                            <Tabs
+                                className="result-tabs"
+                                selectedKey={resultTab}
+                                onSelectionChange={(key) => setResultTab(String(key))}
+                            >
+                                <Tabs.ListContainer>
+                                    <Tabs.List aria-label="Результат маскировки">
+                                        <Tabs.Tab id="result">
+                                            Результат маскировки
+                                            <Tabs.Indicator />
+                                        </Tabs.Tab>
+                                        <Tabs.Tab id="keys" isDisabled={!canDownloadKeys}>
+                                            Ключи демаскировки
+                                            <Tabs.Indicator />
+                                        </Tabs.Tab>
+                                    </Tabs.List>
+                                </Tabs.ListContainer>
+                            </Tabs>
                             {stats !== null && error === null && stats.total > 0 ? (
                                 <Tooltip delay={150}>
                                     <Tooltip.Trigger className="editor-pane__stats">
@@ -499,39 +541,59 @@ export default function Home() {
                                 readOnly
                                 rows={12}
                             />
+                        ) : resultTab === "keys" ? (
+                            <TextArea
+                                aria-label="Ключи демаскировки"
+                                className="result-area--keys"
+                                value={keys}
+                                readOnly
+                                rows={12}
+                            />
+                        ) : maskedNothing ? (
+                            <TextArea
+                                aria-label="Результат"
+                                className="result-area--empty"
+                                value="Маскировка не выполнена: в тексте не нашлось чувствительной информации."
+                                readOnly
+                                rows={12}
+                            />
                         ) : showResultPreview && maskedFile ? (
-                            <>
-                                <DocxViewer blob={maskedFile.blob} surfaceRef={maskedDocRef} />
-                                <Button variant="primary" onPress={downloadMaskedFile} fullWidth>
-                                    Скачать файл
-                                </Button>
-                            </>
+                            <DocxViewer blob={maskedFile.result} surfaceRef={maskedDocRef} />
                         ) : inFileMode ? (
                             <DocPreviewShell
                                 title="Ожидание"
                                 subtitle="Файл замаскируется после нажатия «Замаскировать»"
                             />
                         ) : (
-                            <>
-                                <TextArea
-                                    ref={resultTextRef}
-                                    aria-label="Результат"
-                                    placeholder="Здесь появится замаскированный текст..."
-                                    value={result}
-                                    readOnly
-                                    rows={12}
-                                />
-                                {canDownloadText ? (
-                                    <Button
-                                        variant="primary"
-                                        onPress={downloadMaskedText}
-                                        fullWidth
-                                    >
-                                        Скачать файл
-                                    </Button>
-                                ) : null}
-                            </>
+                            <TextArea
+                                ref={resultTextRef}
+                                aria-label="Результат"
+                                placeholder="Здесь появится замаскированный текст..."
+                                value={result}
+                                readOnly
+                                rows={12}
+                            />
                         )}
+                        <div className="editor-pane__actions">
+                            <ButtonGroup fullWidth>
+                                <Button
+                                    variant="primary"
+                                    onPress={downloadResult}
+                                    isDisabled={!canDownloadResult}
+                                    fullWidth
+                                >
+                                    Скачать результат маскировки
+                                </Button>
+                                <Button
+                                    variant="primary"
+                                    onPress={downloadKeys}
+                                    isDisabled={!canDownloadKeys}
+                                    fullWidth
+                                >
+                                    Скачать ключи демаскировки
+                                </Button>
+                            </ButtonGroup>
+                        </div>
                     </div>
                 </div>
 

@@ -11,6 +11,8 @@ export interface MaskedEntity {
 export interface MaskResponse {
     text: string;
     masked_entities: MaskedEntity[];
+    /** Demasking keys as YAML (empty string when nothing was masked). */
+    keys: string;
 }
 
 /**

@@ -9,6 +9,8 @@ dependencies = [
     "python-docx>=1.2.0",
     "python-multipart>=0.0.20",
     "pydantic-settings>=2.15.0",
+    # YAML 1.2 (spec-faithful, unlike PyYAML's 1.1) — used for the demasking keys.
+    "py-yaml12>=0.2.0",
     # natasha -> pymorphy2 imports `pkg_resources` at runtime; on Python 3.14
     # setuptools is no longer pulled in transitively, and setuptools>=81 dropped
     # `pkg_resources`, so it must be explicit AND pinned below 81.

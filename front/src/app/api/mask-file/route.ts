@@ -7,7 +7,8 @@ export const maxDuration = 3600;
 /**
  * Forward a DOCX mask request to the backend. The browser sends a multipart
  * form with the file; we replay the request server-side to the back and return
- * the masked .docx verbatim plus the X-Masked-Count header.
+ * the resulting ZIP (masked .docx + demasking keys) verbatim, plus the
+ * X-Masked-Count / X-Masked-Breakdown headers. The browser unpacks the archive.
  */
 export async function POST(request: Request) {
     const targetUrl = new URL("/api/mask-file", getBackendInternalUrl());

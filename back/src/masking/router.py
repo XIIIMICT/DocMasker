@@ -1,7 +1,9 @@
 """Masking API router."""
 
+import io
 import json
 import re
+import zipfile
 from collections import Counter
 from pathlib import Path
 from typing import Annotated
@@ -16,6 +18,7 @@ from .service import mask_document
 router = APIRouter(tags=["masking"])
 
 _DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_ZIP_CONTENT_TYPE = "application/zip"
 
 
 def _ascii_attachment_name(name: str) -> str:
@@ -40,20 +43,35 @@ def _attachment_headers(download_name: str, entities: list[MaskedEntity]) -> dic
     }
 
 
+def _archive(masked_docx: bytes, keys_yaml: str, base: str) -> bytes:
+    """
+    Bundle the masked document and its keys into one ZIP.
+
+    The front end unpacks it and offers the two files as separate downloads, so
+    the user never sees the archive. It also keeps the two artifacts of one
+    masking run together (a keys file without its document is useless).
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{base} (замаскированный).docx", masked_docx)
+        archive.writestr(f"{base} (ключи демаскировки).yaml", keys_yaml)
+    return buffer.getvalue()
+
+
 @router.post("/mask", response_model=MaskResponse)
 async def mask_text_endpoint(request: MaskRequest) -> MaskResponse:
     """Mask sensitive information in the given text."""
     if not request.text.strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Текст пуст.")
-    masked, entities = mask_document(request)
-    return MaskResponse(text=masked, masked_entities=entities)
+    masked, entities, keys = mask_document(request)
+    return MaskResponse(text=masked, masked_entities=entities, keys=keys.to_yaml())
 
 
 @router.post("/mask-file")
 async def mask_file_endpoint(
     file: Annotated[UploadFile, File(description="DOCX file to mask")],
 ) -> Response:
-    """Upload a .docx, mask PII in place (formatting preserved), return it for download."""
+    """Upload a .docx, mask PII in place (formatting preserved), return a ZIP of result + keys."""
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -64,8 +82,10 @@ async def mask_file_endpoint(
     if not source:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
 
-    masked_bytes, entities = mask_docx_in_memory(source)
+    masked_bytes, entities, keys = mask_docx_in_memory(source)
 
     base = Path(file.filename).stem
-    headers = _attachment_headers(f"{base} (замаскированный).docx", entities)
-    return Response(content=masked_bytes, media_type=_DOCX_CONTENT_TYPE, headers=headers)
+    archive = _archive(masked_bytes, keys.to_yaml(), base)
+    headers = _attachment_headers(f"{base} (замаскированный).zip", entities)
+    headers["Content-Type"] = _ZIP_CONTENT_TYPE
+    return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)

@@ -291,13 +291,18 @@ html {
 .editor-pane__label {
     display: flex;
     min-width: 0;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--text-secondary);
     word-break: break-word;
+}
+
+/* The tabs must keep their natural width; only the stats may be pushed right. */
+.editor-pane__label > .result-tabs {
+    flex: none;
 }
 
 /* Pane-sized document preview card (same area as the TextArea it replaces). */
@@ -337,10 +342,39 @@ html {
     font-size: 0.85rem;
 }
 
+/* Result tabs inside the pane label. Standard HeroUI pill tabs (the pill
+   background lives on `Tabs.ListContainer`), sized to their content so the
+   stats stay on the same row, right-aligned, on either tab. */
+.result-tabs {
+    min-width: 0;
+}
+
+.result-tabs .tabs__list-container {
+    width: fit-content;
+}
+
+/* Keep each tab on a single line. */
+.result-tabs .tabs__tab {
+    white-space: nowrap;
+}
+
+/* Keys are shown as read-only YAML: monospace and pre-wrapped. */
+textarea.result-area--keys {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.8rem;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+/* "Nothing was masked" notice, shown muted so it does not read as an error. */
+textarea.result-area--empty {
+    color: var(--muted) !important;
+}
+
 /* Masking summary shown inside the result pane label; the breakdown lives in
    a Tooltip. It is the Tooltip.Trigger, so it must look like plain text. */
 .editor-pane__stats {
-    min-width: 0;
+    flex: none;
     color: var(--muted);
     font-weight: 500;
     text-align: right;

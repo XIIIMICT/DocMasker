@@ -1,9 +1,10 @@
-"""Tests for the /api/mask-file endpoint (multipart upload -> masked .docx download)."""
+"""Tests for the /api/mask-file endpoint (multipart upload -> ZIP of masked .docx + keys)."""
 
 from __future__ import annotations
 
 import io
 import json
+import zipfile
 from urllib.parse import unquote
 
 import httpx
@@ -11,6 +12,7 @@ from docx import Document as DocxDocument
 from test_docx import _build_docx
 
 from src.main import app
+from src.masking.mapping import parse_keys_yaml
 
 
 def _client() -> httpx.AsyncClient:
@@ -18,7 +20,7 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
-async def test_mask_file_returns_masked_docx_and_headers() -> None:
+async def test_mask_file_returns_zip_of_docx_and_keys() -> None:
     async with _client() as client:
         response = await client.post(
             "/api/mask-file",
@@ -32,14 +34,12 @@ async def test_mask_file_returns_masked_docx_and_headers() -> None:
         )
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith(
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    assert response.headers["content-type"].startswith("application/zip")
     # The count header and the RFC 5987 Cyrillic download name are advertised.
     assert int(response.headers["x-masked-count"]) >= 4
     disposition = response.headers["content-disposition"]
     assert "filename*=UTF-8''" in disposition
-    assert unquote(disposition.split("filename*=UTF-8''")[1]) == "доклад (замаскированный).docx"
+    assert unquote(disposition.split("filename*=UTF-8''")[1]) == "доклад (замаскированный).zip"
 
     # Per-label breakdown lets the front render the summary in the result label.
     breakdown = json.loads(response.headers["x-masked-breakdown"])
@@ -47,10 +47,21 @@ async def test_mask_file_returns_masked_docx_and_headers() -> None:
     assert breakdown["phone"] == 2
     assert sum(breakdown.values()) == int(response.headers["x-masked-count"])
 
-    document = DocxDocument(io.BytesIO(response.content))
+    # The archive carries the masked document and its keys, unpacked by the front.
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        assert names == {"доклад (замаскированный).docx", "доклад (ключи демаскировки).yaml"}
+        masked_docx = archive.read("доклад (замаскированный).docx")
+        keys_yaml = archive.read("доклад (ключи демаскировки).yaml").decode("utf-8")
+
+    document = DocxDocument(io.BytesIO(masked_docx))
     text = "\n".join(p.text for p in document.paragraphs)
     assert "Иван Петров" not in text
-    assert "[PERSON]" in text
+    assert "[PERSON_1]" in text
+
+    keys = parse_keys_yaml(keys_yaml)
+    assert keys["Физлица"] == ["Иван Петров", "Иван Петрова"]
+    assert keys["Номера телефонов"] == ["+7 900 123-45-67"]
 
 
 async def test_mask_file_rejects_non_docx() -> None:

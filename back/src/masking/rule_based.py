@@ -386,7 +386,13 @@ class RuleBasedMasker:
         return _merge_spans([*merged, *self._find_always_masked(text)])
 
     def mask(self, text: str, entities: list[Entity] | None = None) -> str:
-        """Replace detected spans with `[LABEL]`, working back-to-front."""
+        """
+        Replace detected spans with an unnumbered ``[LABEL]``, back-to-front.
+
+        Convenience for tests and debugging that only care *what* was detected:
+        production masking goes through `service.mask_text`, which numbers each
+        occurrence (``[PERSON_1]``) and records the demasking keys.
+        """
         if entities is None:
             entities = self.detect(text)
         masked = text

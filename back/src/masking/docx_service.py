@@ -27,12 +27,12 @@ from docx.text.hyperlink import Hyperlink
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .constants import mask_marker
+from .mapping import MaskKeys
 from .rule_based import RuleBasedMasker, get_masker
 from .schemas import MaskedEntity
 
-#: A hyperlink whose visible text is nothing but mask markers (``[EMAIL]``, …).
-_MASK_ONLY_RE = re.compile(r"(?:\[[A-Z ]+\]\s*)+")
+#: A hyperlink whose visible text is nothing but mask markers (``[EMAIL_1]``, …).
+_MASK_ONLY_RE = re.compile(r"(?:\[[A-Z]+_\d+\]\s*)+")
 
 
 def _paragraph_runs(paragraph: Paragraph) -> list[Run]:
@@ -115,17 +115,18 @@ def iter_paragraphs(doc: DocumentObject) -> Iterable[Paragraph]:
                     yield paragraph
 
 
-def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], MaskedEntity]) -> int:
+def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], str]) -> int:
     """
     Mask the runs of one paragraph in place; returns the entity count masked.
 
-    Entities are keyed by absolute offsets in the paragraph text. An entity may
-    span several runs (e.g. ``АО «Росхим»`` split as ``АО «`` | ``Росхим`` |
-    ``»``); it must still collapse to a **single** ``[LABEL]``. So we process
-    entities back-to-front and, for each one, write the marker into the run
-    that contains its start and blank out the covered slices of the following
-    runs. Working back-to-front keeps the absolute offsets of earlier entities
-    valid, since edits only ever shorten text to the right of the cursor.
+    `entity_map` maps an entity's absolute offsets in the paragraph text to its
+    placeholder (``[LABEL_N]``). An entity may span several runs (e.g.
+    ``АО «Росхим»`` split as ``АО «`` | ``Росхим`` | ``»``); it must still
+    collapse to a **single** marker. So we process entities back-to-front and,
+    for each one, write the marker into the run that contains its start and
+    blank out the covered slices of the following runs. Working back-to-front
+    keeps the absolute offsets of earlier entities valid, since edits only ever
+    shorten text to the right of the cursor.
 
     Hyperlinks covered by an entity are unwrapped (their runs are lifted out of
     the ``w:hyperlink`` element) so a masked email/URL is no longer clickable.
@@ -139,8 +140,7 @@ def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], Maske
         cursor += length
 
     covered = 0
-    for (entity_start, entity_end), entity in sorted(entity_map.items(), reverse=True):
-        marker = mask_marker(entity.label)
+    for (entity_start, entity_end), marker in sorted(entity_map.items(), reverse=True):
         for index, (run_start, run_end) in enumerate(bounds):
             if entity_start >= run_end or entity_end <= run_start:
                 continue
@@ -175,11 +175,20 @@ def _unwrap_covered_hyperlinks(paragraph: Paragraph) -> None:
 def mask_docx_in_memory(
     source_bytes: bytes,
     masker: RuleBasedMasker | None = None,
-) -> tuple[bytes, list[MaskedEntity]]:
-    """Mask PII in a .docx (bytes) and return the new .docx bytes + entities."""
+) -> tuple[bytes, list[MaskedEntity], MaskKeys]:
+    """
+    Mask PII in a .docx (bytes) and return the new bytes, entities and keys.
+
+    Two passes: the first detects entities in every paragraph and assigns
+    placeholders from one document-wide `MaskKeys`, so the per-label numbering
+    is continuous across the whole document; the second rewrites the runs with
+    the already-assigned markers.
+    """
     active = masker or get_masker()
     document = Document(io.BytesIO(source_bytes))
+    keys = MaskKeys()
 
+    paragraphs: list[tuple[Paragraph, str, list[MaskedEntity], dict[tuple[int, int], str]]] = []
     all_entities: list[MaskedEntity] = []
     for paragraph in iter_paragraphs(document):
         text = paragraph.text
@@ -191,14 +200,20 @@ def mask_docx_in_memory(
         ]
         if not entities:
             continue
-        # Build an offset map and mask the representative spans.
         entity_map = _paragraph_entity_map(text, entities)
-        mask_paragraph(paragraph, entity_map)
+        placeholders = {
+            (entity.start, entity.end): keys.placeholder(entity.label, entity.text)
+            for entity in entity_map.values()
+        }
+        paragraphs.append((paragraph, text, entities, placeholders))
         all_entities.extend(entities)
+
+    for paragraph, _text, _entities, placeholders in paragraphs:
+        mask_paragraph(paragraph, placeholders)
 
     out = io.BytesIO()
     document.save(out)
-    return out.getvalue(), _dedupe_entities(all_entities)
+    return out.getvalue(), _dedupe_entities(all_entities), keys
 
 
 def _paragraph_entity_map(text: str, entities: list[MaskedEntity]) -> dict[tuple[int, int], MaskedEntity]:
