@@ -6,6 +6,7 @@ import { useRef, useState, type DragEvent } from "react";
 import type { MaskResponse } from "@/shared/api/mask";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import { DocxViewer } from "@/shared/ui/docx-viewer";
+import { ThemeSwitcher } from "@/shared/ui/theme-switcher";
 
 interface MaskedFileResult {
     blob: Blob;
@@ -413,6 +414,9 @@ export default function Home() {
                         }}
                     />
                     <span className="brand__name">ДокМаскер</span>
+                </div>
+                <div className="app-header__end">
+                    <ThemeSwitcher />
                 </div>
             </header>
 

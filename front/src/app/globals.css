@@ -120,6 +120,44 @@ html {
     align-self: center;
 }
 
+/* Right-aligned header slot (theme switcher); the fixed-height header already
+   centres its items vertically. */
+.app-header__end {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+}
+
+/* Theme switcher: icon-only HeroUI Tabs (see `theme-switcher.tsx`). */
+.theme-tabs {
+    gap: 0;
+}
+
+.theme-tabs .tabs__list {
+    padding: 0.2rem;
+    background: var(--default);
+    border-radius: calc(var(--radius) * 2.5);
+}
+
+.theme-tabs .tabs__tab {
+    height: auto;
+    padding: 0.4rem;
+    min-width: 2.1rem;
+}
+
+.theme-tabs__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15rem;
+    height: 1.15rem;
+}
+
+.theme-tabs__icon > svg {
+    width: 100%;
+    height: 100%;
+}
+
 .brand {
     display: inline-flex;
     align-items: center;
