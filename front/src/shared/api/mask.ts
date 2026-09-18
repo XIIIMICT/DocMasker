@@ -15,6 +15,143 @@ export interface MaskResponse {
     keys: string;
 }
 
+export interface UnmaskResponse {
+    text: string;
+}
+
+/**
+ * Russian section titles accepted in a demasking keys file. Must match the
+ * backend's `LABEL_TITLES` (see `docs/ARCHITECTURE.md`).
+ */
+export const KEYS_SECTION_TITLES = [
+    "Физлица",
+    "Номера телефонов",
+    "Email",
+    "Организации",
+    "Адреса",
+] as const;
+
+/**
+ * Validate a demasking keys file on the client, mirroring the backend rules
+ * (a mapping of known Russian sections to non-empty lists of non-empty
+ * strings). Returns an error message in Russian, or `null` when valid — the
+ * form uses it to block the request and mark the field invalid.
+ */
+export function validateKeysYaml(text: string): string | null {
+    if (text.trim().length === 0) {
+        return "Файл ключей пуст.";
+    }
+    let parsed: unknown;
+    try {
+        parsed = parseSimpleYaml(text);
+    } catch {
+        return "Файл ключей не является корректным YAML.";
+    }
+    if (parsed === null || parsed === undefined) {
+        return "Файл ключей пуст.";
+    }
+    if (typeof parsed !== "object" || Array.isArray(parsed)) {
+        return "Файл ключей должен содержать словарь разделов.";
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>);
+    if (entries.length === 0) {
+        return "Файл ключей не содержит ни одного раздела.";
+    }
+    for (const [title, values] of entries) {
+        if (!(KEYS_SECTION_TITLES as readonly string[]).includes(title)) {
+            const known = KEYS_SECTION_TITLES.map((name) => `«${name}»`).join(", ");
+            return `Неизвестный раздел ключей: «${title}». Ожидаются: ${known}.`;
+        }
+        if (!Array.isArray(values)) {
+            return `Раздел «${title}» должен быть списком значений.`;
+        }
+        if (!values.every((value) => typeof value === "string" && value.trim().length > 0)) {
+            return `Раздел «${title}» должен содержать непустые строки.`;
+        }
+    }
+    return null;
+}
+
+/**
+ * Minimal YAML reader for the keys subset: `Раздел:` followed by `- value`
+ * lines. Deliberately strict and dependency-free — anything the backend's
+ * YAML 1.2 parser could accept but this rejects is rare for keys files, and the
+ * backend re-validates anyway (the client check is only a fast gate).
+ */
+export function parseSimpleYaml(text: string): Record<string, unknown> | unknown[] {
+    const result: Record<string, unknown> = {};
+    let currentTitle: string | null = null;
+    let isTopLevelList = true;
+    for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.replace(/\s+$/, "");
+        if (line.trim().length === 0 || line.trimStart().startsWith("#")) continue;
+        // A section header followed by a list: `Раздел:`
+        const bareSection = line.match(/^([^\s#][^:]*):\s*$/);
+        if (bareSection) {
+            isTopLevelList = false;
+            currentTitle = unquote(bareSection[1].trim());
+            result[currentTitle] = [];
+            continue;
+        }
+        // An inline scalar value: `Раздел: value`
+        const inlineSection = line.match(/^([^\s#][^:]*):\s+(.+)$/);
+        if (inlineSection) {
+            isTopLevelList = false;
+            currentTitle = unquote(inlineSection[1].trim());
+            result[currentTitle] = unquote(inlineSection[2].trim());
+            continue;
+        }
+        // A list item under the current section.
+        const item = line.match(/^\s+-\s+(.*)$/);
+        if (item && currentTitle !== null && Array.isArray(result[currentTitle])) {
+            (result[currentTitle] as unknown[]).push(unquote(item[1].trim()));
+            continue;
+        }
+        // A top-level list item: the document is not a mapping.
+        const topLevelItem = line.match(/^-\s+(.*)$/);
+        if (topLevelItem && currentTitle === null && Object.keys(result).length === 0) {
+            continue; // stay a top-level list; the validator reports it
+        }
+        throw new Error("unsupported yaml");
+    }
+    if (isTopLevelList && Object.keys(result).length === 0) {
+        return [];
+    }
+    return result;
+}
+
+/** Strip a single pair of matching quotes from a YAML scalar. */
+function unquote(value: string): string {
+    if (
+        value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'")))
+    ) {
+        return value.slice(1, -1);
+    }
+    return value;
+}
+
+/**
+ * Forward an unmask request to the backend (server-side, no CORS).
+ * Used by the Next.js API route `/api/unmask`.
+ */
+export async function proxyUnmaskRequest(text: string, keys: string): Promise<Response> {
+    const targetUrl = new URL("/api/unmask", getBackendInternalUrl());
+
+    const response = await fetch(targetUrl, {
+        cache: "no-store",
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ text, keys }),
+    });
+
+    const responseContentType = response.headers.get("Content-Type") ?? "application/json";
+    const responseBody = await response.arrayBuffer();
+    const headers = new Headers({ "Content-Type": responseContentType });
+    return new Response(responseBody, { headers, status: response.status });
+}
+
 /**
  * Forward a mask request to the backend (server-side, no CORS).
  * Used by the Next.js API route `/api/mask`. Returns the backend's HTTP

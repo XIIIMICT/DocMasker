@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import io
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from docx import Document
 from docx.document import Document as DocumentObject
@@ -202,8 +202,7 @@ def mask_docx_in_memory(
             continue
         entity_map = _paragraph_entity_map(text, entities)
         placeholders = {
-            (entity.start, entity.end): keys.placeholder(entity.label, entity.text)
-            for entity in entity_map.values()
+            (entity.start, entity.end): keys.placeholder(entity.label, entity.text) for entity in entity_map.values()
         }
         paragraphs.append((paragraph, text, entities, placeholders))
         all_entities.extend(entities)
@@ -214,6 +213,65 @@ def mask_docx_in_memory(
     out = io.BytesIO()
     document.save(out)
     return out.getvalue(), _dedupe_entities(all_entities), keys
+
+
+def unmask_docx_in_memory(source_bytes: bytes, placeholders: Mapping[str, str]) -> bytes:
+    """
+    Restore a masked .docx (bytes) by replacing every placeholder with its value.
+
+    Masking writes each ``[LABEL_N]`` marker into a single run, so a run-level
+    substitution is enough for the common case. A marker split across runs is
+    handled too: the whole paragraph text is scanned, and when a placeholder
+    spans several runs the replacement is written into the run that holds its
+    start and the covered slices of the following runs are blanked — the same
+    collapse rule `mask_paragraph` uses, so the restored value keeps the
+    formatting of the run where the marker began.
+    """
+    document = Document(io.BytesIO(source_bytes))
+    for paragraph in iter_paragraphs(document):
+        text = paragraph.text
+        if not text:
+            continue
+        spans = _placeholder_spans(text, placeholders)
+        if spans:
+            _replace_spans(paragraph, spans)
+    out = io.BytesIO()
+    document.save(out)
+    return out.getvalue()
+
+
+def _placeholder_spans(text: str, placeholders: Mapping[str, str]) -> list[tuple[int, int, str]]:
+    """Find every known placeholder in `text` as (start, end, replacement)."""
+    spans: list[tuple[int, int, str]] = []
+    for placeholder, value in placeholders.items():
+        start = text.find(placeholder)
+        while start != -1:
+            spans.append((start, start + len(placeholder), value))
+            start = text.find(placeholder, start + len(placeholder))
+    return sorted(spans, key=lambda span: span[0])
+
+
+def _replace_spans(paragraph: Paragraph, spans: list[tuple[int, int, str]]) -> None:
+    """Rewrite runs so each (start, end) span becomes its replacement text."""
+    runs = _paragraph_runs(paragraph)
+    bounds: list[tuple[int, int]] = []
+    cursor = 0
+    for run in runs:
+        length = len(run.text)
+        bounds.append((cursor, cursor + length))
+        cursor += length
+
+    for span_start, span_end, replacement in sorted(spans, key=lambda span: span[0], reverse=True):
+        for index, (run_start, run_end) in enumerate(bounds):
+            if span_start >= run_end or span_end <= run_start:
+                continue
+            left = max(span_start, run_start) - run_start
+            right = min(span_end, run_end) - run_start
+            run = runs[index]
+            if span_start < run_end and span_start >= run_start:
+                run.text = run.text[:left] + replacement + run.text[right:]
+            else:
+                run.text = run.text[:left] + run.text[right:]
 
 
 def _paragraph_entity_map(text: str, entities: list[MaskedEntity]) -> dict[tuple[int, int], MaskedEntity]:

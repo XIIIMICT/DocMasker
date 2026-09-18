@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from src.masking.mapping import MaskKeys, format_keys_yaml, parse_keys_yaml
+from src.masking.mapping import (
+    KeysValidationError,
+    MaskKeys,
+    format_keys_yaml,
+    parse_keys_yaml,
+    validate_keys_yaml,
+)
 
 
 def test_numbering_is_per_label_and_follows_detection_order() -> None:
@@ -59,9 +65,7 @@ def test_yaml_is_empty_when_no_entities() -> None:
 
 
 def test_format_keys_yaml_skips_empty_sections() -> None:
-    assert format_keys_yaml({"Физлица": [], "Организации": ["АО Ромашка"]}) == (
-        "Организации:\n  - АО Ромашка"
-    )
+    assert format_keys_yaml({"Физлица": [], "Организации": ["АО Ромашка"]}) == ("Организации:\n  - АО Ромашка")
 
 
 def test_yaml_roundtrip_preserves_values() -> None:
@@ -80,3 +84,43 @@ def test_parse_rejects_non_mapping() -> None:
 def test_parse_rejects_non_string_items() -> None:
     with pytest.raises(TypeError):
         parse_keys_yaml("Физлица:\n  - 42\n")
+
+
+def test_validate_accepts_a_wellformed_document() -> None:
+    document = validate_keys_yaml("Физлица:\n  - Иван Петров\nОрганизации:\n  - АО «Росхим»")
+    assert document == {"Физлица": ["Иван Петров"], "Организации": ["АО «Росхим»"]}
+
+
+def test_validate_rejects_empty_text() -> None:
+    with pytest.raises(KeysValidationError, match="пуст"):
+        validate_keys_yaml("   ")
+
+
+def test_validate_rejects_malformed_yaml() -> None:
+    with pytest.raises(KeysValidationError, match="корректным YAML"):
+        validate_keys_yaml("Физлица:\n  - [не закрыт\n")
+
+
+def test_validate_rejects_non_mapping() -> None:
+    with pytest.raises(KeysValidationError, match="словарь разделов"):
+        validate_keys_yaml("- просто\n- список\n")
+
+
+def test_validate_rejects_unknown_section() -> None:
+    with pytest.raises(KeysValidationError, match="Неизвестный раздел"):
+        validate_keys_yaml("Телефоны:\n  - +7 900")
+
+
+def test_validate_rejects_non_list_section() -> None:
+    with pytest.raises(KeysValidationError, match="должен быть списком"):
+        validate_keys_yaml("Физлица: Иван Петров")
+
+
+def test_validate_rejects_empty_item() -> None:
+    with pytest.raises(KeysValidationError, match="непустые строки"):
+        validate_keys_yaml("Физлица:\n  - ''\n")
+
+
+def test_validate_rejects_a_document_without_sections() -> None:
+    with pytest.raises(KeysValidationError, match="ни одного раздела"):
+        validate_keys_yaml("{}")

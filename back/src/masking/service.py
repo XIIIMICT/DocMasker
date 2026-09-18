@@ -1,5 +1,5 @@
 """
-Text masking service.
+Text masking and unmasking service.
 
 Thin orchestration over `RuleBasedMasker`: detect spans in a request and
 render the masked text with a per-entity placeholder. The masking itself is
@@ -8,13 +8,17 @@ model, no warm-up and no network access involved.
 
 Masking is reversible: each occurrence becomes a numbered ``[LABEL_N]`` marker
 and its original value is collected in a `MaskKeys` document (see `mapping.py`).
+Unmasking is the inverse: replace every known placeholder with its original
+value.
 """
 
 from __future__ import annotations
 
-from .mapping import MaskKeys
+from collections.abc import Mapping
+
+from .mapping import MaskKeys, placeholders_from_document, validate_keys_yaml
 from .rule_based import Entity, RuleBasedMasker, get_masker
-from .schemas import MaskedEntity, MaskRequest
+from .schemas import MaskedEntity, MaskRequest, UnmaskRequest
 
 
 def mask_text(text: str, entities: list[MaskedEntity], keys: MaskKeys) -> str:
@@ -34,6 +38,20 @@ def mask_text(text: str, entities: list[MaskedEntity], keys: MaskKeys) -> str:
         marker = placeholders[(entity.start, entity.end)]
         masked = masked[: entity.start] + marker + masked[entity.end :]
     return masked
+
+
+def unmask_text(text: str, placeholders: Mapping[str, str]) -> str:
+    """
+    Replace every known placeholder back with its original value.
+
+    A plain left-to-right substitution: placeholders are self-delimiting
+    (``[LABEL_N]``), so no ordering or back-to-front dance is needed. A
+    placeholder missing from the keys is left in place rather than dropped.
+    """
+    restored = text
+    for placeholder, value in placeholders.items():
+        restored = restored.replace(placeholder, value)
+    return restored
 
 
 def to_schema(entity: Entity) -> MaskedEntity:
@@ -57,3 +75,9 @@ def mask_with(masker: RuleBasedMasker, text: str) -> tuple[str, list[MaskedEntit
 def mask_document(request: MaskRequest) -> tuple[str, list[MaskedEntity], MaskKeys]:
     """Run the full pipeline for a `/api/mask` request using the singleton masker."""
     return mask_with(get_masker(), request.text)
+
+
+def unmask_document(request: UnmaskRequest) -> str:
+    """Restore a masked text for a `/api/unmask` request from its keys."""
+    placeholders = placeholders_from_document(validate_keys_yaml(request.keys))
+    return unmask_text(request.text, placeholders)
