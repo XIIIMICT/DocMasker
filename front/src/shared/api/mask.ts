@@ -31,6 +31,55 @@ export const KEYS_SECTION_TITLES = [
     "Адреса",
 ] as const;
 
+/** Russian keys section title → entity label (mirrors the backend `LABEL_TITLES`). */
+export const KEYS_TITLE_LABELS: Record<string, string> = {
+    Физлица: "person",
+    "Номера телефонов": "phone",
+    Email: "email",
+    Организации: "organization",
+    Адреса: "address",
+};
+
+/**
+ * The placeholders a keys document stands for, e.g. `["[PERSON_1]", …]`.
+ *
+ * Numbers restart at 1 within each section (that is how the backend writes
+ * them), so the n-th value of a section is `[LABEL_n]`. Unparseable input
+ * yields an empty list rather than throwing — highlighting is a nicety.
+ */
+export function placeholdersFromKeys(text: string): string[] {
+    return keysEntries(text).map(([label, index]) => `[${label.toUpperCase()}_${index}]`);
+}
+
+/** The original values a keys document carries, in order. */
+export function valuesFromKeys(text: string): string[] {
+    return keysEntries(text).map(([, , value]) => value);
+}
+
+/** `(label, number, value)` triples of a keys document, in document order. */
+function keysEntries(text: string): Array<[string, number, string]> {
+    let parsed: unknown;
+    try {
+        parsed = parseSimpleYaml(text);
+    } catch {
+        return [];
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return [];
+    }
+    const entries: Array<[string, number, string]> = [];
+    for (const [title, values] of Object.entries(parsed as Record<string, unknown>)) {
+        const label = KEYS_TITLE_LABELS[title];
+        if (label === undefined || !Array.isArray(values)) continue;
+        values.forEach((value, index) => {
+            if (typeof value === "string" && value.length > 0) {
+                entries.push([label, index + 1, value]);
+            }
+        });
+    }
+    return entries;
+}
+
 /**
  * Validate a demasking keys file on the client, mirroring the backend rules
  * (a mapping of known Russian sections to non-empty lists of non-empty

@@ -1,13 +1,14 @@
 "use client";
 
 import { Button, ButtonGroup, Tabs, TextArea, Tooltip } from "@heroui/react";
-import { useRef, useState, type DragEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type DragEvent, type RefObject } from "react";
 
 import {
-    parseSimpleYaml,
     type MaskResponse,
+    placeholdersFromKeys,
     type UnmaskResponse,
     validateKeysYaml,
+    valuesFromKeys,
 } from "@/shared/api/mask";
 import { unpackMaskArchive } from "@/shared/api/mask-archive";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
@@ -147,27 +148,15 @@ function countLabels(entities: { label: string }[]): MaskStats {
     return { total: entities.length, byLabel };
 }
 
-/** Russian keys section title → entity label (must mirror the backend's titles). */
-const KEYS_TITLE_LABELS: Record<string, string> = {
-    Физлица: "person",
-    "Номера телефонов": "phone",
-    Email: "email",
-    Организации: "organization",
-    Адреса: "address",
-};
-
 /** Count the values in a validated keys document, as a `MaskStats`. */
 function countKeysValues(keysYaml: string): MaskStats {
-    const document = parseSimpleYaml(keysYaml);
     const byLabel: Record<string, number> = {};
-    let total = 0;
-    for (const [title, values] of Object.entries(document)) {
-        const label = KEYS_TITLE_LABELS[title] ?? title;
-        const count = Array.isArray(values) ? values.length : 0;
-        byLabel[label] = (byLabel[label] ?? 0) + count;
-        total += count;
+    for (const placeholder of placeholdersFromKeys(keysYaml)) {
+        // `[LABEL_N]` → the lower-cased label, to match the mask stats keys.
+        const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
+        byLabel[label] = (byLabel[label] ?? 0) + 1;
     }
-    return { total, byLabel };
+    return { total: Object.values(byLabel).reduce((sum, count) => sum + count, 0), byLabel };
 }
 
 /** Decode the RFC 5987 filename from a `Content-Disposition` header. */
@@ -216,6 +205,19 @@ function DocIcon() {
             />
         </svg>
     );
+}
+
+/**
+ * Props that visually disable a `Button` without setting the native `disabled`
+ * attribute. react-aria renders `disabled` on the server but resolves it to
+ * `undefined` on the client, so `isDisabled` on a conditionally-disabled button
+ * trips React's hydration check — `aria-disabled` + a class is stable.
+ */
+function disabledProps(disabled: boolean) {
+    return {
+        "aria-disabled": disabled,
+        className: disabled ? "action-disabled" : undefined,
+    } as const;
 }
 
 function DocPreviewShell({
@@ -327,16 +329,16 @@ function MaskResultPane({
                     <Button
                         variant="primary"
                         onPress={onDownloadResult}
-                        isDisabled={!canDownloadResult}
                         fullWidth
+                        {...disabledProps(!canDownloadResult)}
                     >
                         Скачать результат маскировки
                     </Button>
                     <Button
                         variant="tertiary"
                         onPress={onDownloadKeys}
-                        isDisabled={!canDownloadKeys}
                         fullWidth
+                        {...disabledProps(!canDownloadKeys)}
                     >
                         Скачать ключи демаскировки
                     </Button>
@@ -405,7 +407,13 @@ function ResultBody({
         );
     }
     if (showResultPreview && maskedFile) {
-        return <DocxViewer blob={maskedFile.result} surfaceRef={maskedDocRef} />;
+        return (
+            <DocxViewer
+                blob={maskedFile.result}
+                surfaceRef={maskedDocRef}
+                highlight={placeholdersFromKeys(keys)}
+            />
+        );
     }
     if (inFileMode) {
         return (
@@ -433,6 +441,7 @@ function UnmaskResultPane({
     restored,
     restoredFile,
     restoredDocRef,
+    demaskKeys,
     inFileMode,
     canDownload,
     onDownload,
@@ -441,6 +450,7 @@ function UnmaskResultPane({
     restored: string;
     restoredFile: DocxResult | null;
     restoredDocRef: RefObject<HTMLDivElement | null>;
+    demaskKeys: string;
     inFileMode: boolean;
     canDownload: boolean;
     onDownload: () => void;
@@ -460,7 +470,11 @@ function UnmaskResultPane({
                     rows={12}
                 />
             ) : restoredFile ? (
-                <DocxViewer blob={restoredFile.blob} surfaceRef={restoredDocRef} />
+                <DocxViewer
+                    blob={restoredFile.blob}
+                    surfaceRef={restoredDocRef}
+                    highlight={valuesFromKeys(demaskKeys)}
+                />
             ) : inFileMode ? (
                 <DocPreviewShell
                     title="Ожидание"
@@ -476,7 +490,12 @@ function UnmaskResultPane({
                 />
             )}
             <div className="editor-pane__actions">
-                <Button variant="primary" onPress={onDownload} isDisabled={!canDownload} fullWidth>
+                <Button
+                    variant="primary"
+                    onPress={onDownload}
+                    fullWidth
+                    {...disabledProps(!canDownload)}
+                >
                     Скачать файл
                 </Button>
             </div>
@@ -690,12 +709,12 @@ function DemaskInputPane({
             <div className="editor-pane__actions">
                 <ButtonGroup fullWidth>
                     <Button
-                        variant="tertiary"
+                        variant={inFileMode ? "danger" : "tertiary"}
                         isDisabled={busy}
                         onPress={onDataFilePress}
                         fullWidth
                     >
-                        Выбрать файл данных
+                        {inFileMode ? "Удалить файл" : "Выбрать файл данных"}
                     </Button>
                     <Button
                         variant="tertiary"
@@ -723,6 +742,11 @@ function DemaskInputPane({
 export default function Home() {
     const [mode, setMode] = useState<AppMode>("mask");
     const inMaskMode = mode === "mask";
+
+    // The tab title follows the active mode (the metadata title is static).
+    useEffect(() => {
+        document.title = inMaskMode ? "ДокМаскер — Маскировка" : "ДокМаскер — Демаскировка";
+    }, [inMaskMode]);
 
     // --- Per-mode state -------------------------------------------------------
     // Every editable/renderable field lives under the mode that owns it, so
@@ -1239,6 +1263,7 @@ export default function Home() {
                                 restored={restored}
                                 restoredFile={restoredFile}
                                 restoredDocRef={restoredDocRef}
+                                demaskKeys={demaskKeys}
                                 inFileMode={inFileMode}
                                 canDownload={canDownloadRestored}
                                 onDownload={downloadRestored}

@@ -322,6 +322,15 @@ html {
     padding: 0.75rem;
 }
 
+/* Preview-only highlight of mask placeholders / restored values. Never written
+   to the document itself — the downloaded file stays plain. */
+.docx-marker {
+    background: #fff36b;
+    color: inherit;
+    padding: 0;
+    border-radius: 0;
+}
+
 /* Small file-name label above a DOCX preview. The fixed min-height matches the
    in-pane tabs' row height (40px), so a pane with tabs and a pane with a plain
    label end up with TextAreas of exactly the same height. */

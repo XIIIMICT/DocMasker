@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 
 import {
     parseSimpleYaml,
+    placeholdersFromKeys,
     proxyMaskRequest,
     proxyUnmaskRequest,
     validateKeysYaml,
+    valuesFromKeys,
 } from "@/shared/api/mask";
 
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -130,5 +132,23 @@ describe("parseSimpleYaml", () => {
             Физлица: ["Иван"],
             Организации: ["АО Ромашка"],
         });
+    });
+});
+
+describe("placeholdersFromKeys / valuesFromKeys", () => {
+    const keys =
+        'Физлица:\n  - Иван Петров\n  - Пётр Сидоров\nНомера телефонов:\n  - "+79494271795"';
+
+    it("numbers placeholders per section in document order", () => {
+        expect(placeholdersFromKeys(keys)).toEqual(["[PERSON_1]", "[PERSON_2]", "[PHONE_1]"]);
+    });
+
+    it("returns the original values in the same order", () => {
+        expect(valuesFromKeys(keys)).toEqual(["Иван Петров", "Пётр Сидоров", "+79494271795"]);
+    });
+
+    it("returns empty lists for unparseable input rather than throwing", () => {
+        expect(placeholdersFromKeys("- не словарь")).toEqual([]);
+        expect(valuesFromKeys("")).toEqual([]);
     });
 });

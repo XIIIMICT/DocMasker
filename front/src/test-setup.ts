@@ -19,6 +19,7 @@ Object.defineProperties(globalThis, {
     MutationObserver: { configurable: true, value: domWindow.MutationObserver, writable: true },
     Element: { configurable: true, value: domWindow.Element, writable: true },
     Node: { configurable: true, value: domWindow.Node, writable: true },
+    NodeFilter: { configurable: true, value: domWindow.NodeFilter, writable: true },
     SVGElement: { configurable: true, value: domWindow.SVGElement, writable: true },
     ResizeObserver: { configurable: true, value: domWindow.ResizeObserver, writable: true },
     requestAnimationFrame: {

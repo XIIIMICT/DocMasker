@@ -1,7 +1,11 @@
+import { fileURLToPath } from "node:url";
+
 import { expect, test, type Page } from "@playwright/test";
 
 const MASK_DATA = "Данные для маскировки";
 const DEMASK_DATA = "Данные для демаскировки";
+/** A minimal .docx fixture (one paragraph with a name and a phone). */
+const SAMPLE_DOCX = fileURLToPath(new URL("./fixtures/sample.docx", import.meta.url));
 
 /** Switch the app mode through the brand dropdown (opens on hover). */
 async function switchMode(page: Page, name: string): Promise<void> {
@@ -15,6 +19,13 @@ test("страница маскирования загружается с обо
     await expect(page.getByRole("textbox", { name: MASK_DATA })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Результат маскировки" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Замаскировать" })).toBeVisible();
+});
+
+test("заголовок вкладки следует за режимом", async ({ page }) => {
+    await page.goto("/");
+    await expect(page).toHaveTitle("ДокМаскер — Маскировка");
+    await switchMode(page, "Демаскировка");
+    await expect(page).toHaveTitle("ДокМаскер — Демаскировка");
 });
 
 test("вкладки и кнопки видны сразу, ключи недоступны без маскировки", async ({ page }) => {
@@ -113,6 +124,40 @@ test("на демаскировке три кнопки видны сразу", 
     await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
     await page.getByRole("textbox", { name: "Ключи демаскировки" }).fill("Физлица:\n  - Иван");
     await expect(demask).not.toHaveAttribute("aria-disabled", "true");
+});
+
+test("на демаскировке выбранный файл данных даёт кнопку удаления", async ({ page }) => {
+    await page.goto("/");
+    await switchMode(page, "Демаскировка");
+    // Attach a .docx to the hidden data input.
+    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await expect(page.getByRole("button", { name: "Удалить файл" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Выбрать файл данных" })).toHaveCount(0);
+});
+
+test("замаскированный превью подсвечивает плейсхолдеры ровно один раз", async ({ page }) => {
+    await page.goto("/");
+    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    // The masked preview is the second surface (the first is the source file).
+    const surfaces = page.locator(".docx-viewer__surface");
+    await expect(surfaces).toHaveCount(2);
+    const maskedSurface = surfaces.nth(1);
+    await expect(maskedSurface.locator("mark.docx-marker").first()).toBeVisible({ timeout: 30000 });
+
+    const info = await maskedSurface.evaluate((surface) => {
+        const text = (surface as HTMLElement).innerText;
+        const count = (needle: string) => text.split(needle).length - 1;
+        return {
+            person: count("[PERSON_1]"),
+            phone: count("[PHONE_1]"),
+            marks: surface.querySelectorAll("mark.docx-marker").length,
+        };
+    });
+    // Each marker once — the highlight must not duplicate them.
+    expect(info.person).toBe(1);
+    expect(info.phone).toBe(1);
+    expect(info.marks).toBe(2);
 });
 
 test("невалидные ключи помечают поле и блокируют демаскировку", async ({ page }) => {

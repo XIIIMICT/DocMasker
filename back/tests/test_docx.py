@@ -200,3 +200,46 @@ def test_entity_spanning_three_runs_collapses_to_one_marker() -> None:
     assert "[ORGANIZATION_1]" in paragraph.text
     assert "оно находится здесь." in paragraph.text
     assert len(paragraph.runs) == 3  # run formatting preserved
+
+
+def test_masked_document_has_no_highlight() -> None:
+    # The yellow tint is preview-only (front `DocxViewer`); the downloaded file
+    # must stay plain.
+    doc = DocxDocument()
+    doc.add_paragraph("Контакты: Иван Петров, тел +7 900 123-45-67.")
+    out = io.BytesIO()
+    doc.save(out)
+
+    masked_bytes, _entities, _keys = mask_docx_in_memory(out.getvalue())
+    document = DocxDocument(io.BytesIO(masked_bytes))
+    for paragraph in document.paragraphs:
+        assert paragraph.text == "Контакты: [PERSON_1], тел [PHONE_1]."
+        assert all(run.font.highlight_color is None for run in paragraph.runs)
+
+
+def test_entity_split_across_many_runs_yields_one_marker() -> None:
+    # Regression: a stale `bounds` list (computed once) emitted one marker per
+    # covered run ("[PERSON_1][PERSON_1][ORGANIZATION_1]"). The bounds must be
+    # recomputed per entity so each span yields exactly one marker.
+    doc = DocxDocument()
+    paragraph = doc.add_paragraph()
+    for chunk in [
+        "Привет! Меня зовут ",
+        "Иван ",
+        "Петров",
+        ", я работаю в ",
+        "АО «",
+        "Росхим",
+        "» и живу в ",
+        "Донецке",
+        "…",
+    ]:
+        paragraph.add_run(chunk)
+    out = io.BytesIO()
+    doc.save(out)
+
+    masked_bytes, _entities, _keys = mask_docx_in_memory(out.getvalue())
+    text = DocxDocument(io.BytesIO(masked_bytes)).paragraphs[0].text
+    assert text == "Привет! Меня зовут [PERSON_1], я работаю в [ORGANIZATION_1] и живу в Донецке…"
+    assert text.count("[PERSON_1]") == 1
+    assert text.count("[ORGANIZATION_1]") == 1

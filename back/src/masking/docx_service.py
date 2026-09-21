@@ -128,19 +128,26 @@ def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], str])
     keeps the absolute offsets of earlier entities valid, since edits only ever
     shorten text to the right of the cursor.
 
+    No highlight is applied here: the yellow tint is a **preview-only** effect
+    (`DocxViewer`), so the downloaded file stays plain.
+
     Hyperlinks covered by an entity are unwrapped (their runs are lifted out of
     the ``w:hyperlink`` element) so a masked email/URL is no longer clickable.
     """
     runs = _paragraph_runs(paragraph)
-    bounds: list[tuple[int, int]] = []
-    cursor = 0
-    for run in runs:
-        length = len(run.text)
-        bounds.append((cursor, cursor + length))
-        cursor += length
 
     covered = 0
+    # Work back-to-front so earlier offsets stay valid, and recompute the run
+    # bounds each iteration: a later (further-right) entity shortens runs, so a
+    # cached `bounds` list would be stale and could emit a marker per run.
     for (entity_start, entity_end), marker in sorted(entity_map.items(), reverse=True):
+        bounds: list[tuple[int, int]] = []
+        cursor = 0
+        for run in runs:
+            length = len(run.text)
+            bounds.append((cursor, cursor + length))
+            cursor += length
+
         for index, (run_start, run_end) in enumerate(bounds):
             if entity_start >= run_end or entity_end <= run_start:
                 continue
