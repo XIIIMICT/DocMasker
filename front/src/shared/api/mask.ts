@@ -48,12 +48,20 @@ export const KEYS_TITLE_LABELS: Record<string, string> = {
  * yields an empty list rather than throwing — highlighting is a nicety.
  */
 export function placeholdersFromKeys(text: string): string[] {
-    return keysEntries(text).map(([label, index]) => `[${label.toUpperCase()}_${index}]`);
+    return keyEntries(text).map(([placeholder]) => placeholder);
 }
 
 /** The original values a keys document carries, in order. */
 export function valuesFromKeys(text: string): string[] {
-    return keysEntries(text).map(([, , value]) => value);
+    return keyEntries(text).map(([, value]) => value);
+}
+
+/** `(placeholder, value)` pairs of a keys document, in document order. */
+export function keyEntries(text: string): Array<[string, string]> {
+    return keysEntries(text).map(([label, index, value]) => [
+        `[${label.toUpperCase()}_${index}]`,
+        value,
+    ]);
 }
 
 /** `(label, number, value)` triples of a keys document, in document order. */

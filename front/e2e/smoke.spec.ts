@@ -49,8 +49,9 @@ test("текст с PII маскируется через /api/mask", async ({ p
         .toContain("[PERSON_1]");
     const stats = page.locator(".editor-pane__stats");
     await expect(stats).toHaveText("2 фрагмента");
-    await stats.hover();
-    await expect(page.getByRole("tooltip")).toContainText("1 физлицо + 1 телефон");
+    await stats.focus();
+    await expect(page.getByRole("tooltip")).toContainText("Физлица: 1 (1 уникальный)");
+    await expect(page.getByRole("tooltip")).toContainText("Номера телефонов: 1 (1 уникальный)");
     // The keys tab carries the demasking YAML; both downloads become available.
     await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
     await expect(page.getByRole("textbox", { name: "Ключи демаскировки" })).toHaveValue(
@@ -186,4 +187,34 @@ test("очистка данных на маскировке убирает со�
     );
     await page.getByRole("textbox", { name: MASK_DATA }).fill("");
     await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue("");
+});
+
+test("tooltip маскировки показывает уникальные счётчики по типам", async ({ page }) => {
+    await page.goto("/");
+    await page
+        .getByRole("textbox", { name: MASK_DATA })
+        .fill("Иван Петров, Иван Петров, ivan@mail.ru, тел +7 900 123-45-67");
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    const stats = page.locator(".editor-pane__stats");
+    await expect(stats).toBeVisible({ timeout: 30000 });
+    await stats.focus();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("Физлица:", { timeout: 10000 });
+    await expect(tooltip).toContainText("уникальн");
+});
+
+test("tooltip демаскировки перечисляет неприменённые ключи", async ({ page }) => {
+    await page.goto("/");
+    await switchMode(page, "Демаскировка");
+    await page.getByRole("textbox", { name: DEMASK_DATA }).fill("[PERSON_1] пришёл.");
+    await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+    await page
+        .getByRole("textbox", { name: "Ключи демаскировки" })
+        .fill("Физлица:\n  - Иван Петров\nОрганизации:\n  - ООО «Рога и копыта»");
+    const stats = page.locator(".editor-pane__stats");
+    await expect(stats).toBeVisible({ timeout: 10000 });
+    await stats.focus();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("Не применено 1:", { timeout: 10000 });
+    await expect(tooltip).toContainText("- ООО «Рога и копыта»;");
 });

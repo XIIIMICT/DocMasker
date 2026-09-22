@@ -4,6 +4,7 @@ import { Button, ButtonGroup, Tabs, TextArea, Tooltip } from "@heroui/react";
 import { useEffect, useRef, useState, type DragEvent, type RefObject } from "react";
 
 import {
+    keyEntries,
     type MaskResponse,
     placeholdersFromKeys,
     type UnmaskResponse,
@@ -12,6 +13,13 @@ import {
 } from "@/shared/api/mask";
 import { unpackMaskArchive } from "@/shared/api/mask-archive";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
+import {
+    countKeysValues,
+    countLabels,
+    type MaskStats,
+    statsBreakdown,
+    totalText,
+} from "@/shared/mask-stats";
 import { Brand, type AppMode } from "@/shared/ui/brand";
 import { DocxViewer } from "@/shared/ui/docx-viewer";
 import { ThemeSwitcher } from "@/shared/ui/theme-switcher";
@@ -29,21 +37,6 @@ interface DocxResult {
     blob: Blob;
     name: string;
 }
-
-/** Masking totals: `total` plus a per-label breakdown (e.g. `person: 3`). */
-interface MaskStats {
-    total: number;
-    byLabel: Record<string, number>;
-}
-
-/** Russian plural/name forms for the entity labels the backend can return. */
-const LABEL_LABELS: Record<string, [one: string, few: string, many: string]> = {
-    person: ["физлицо", "физлица", "физлиц"],
-    phone: ["телефон", "телефона", "телефонов"],
-    email: ["эл. почта", "эл. почты", "эл. почт"],
-    address: ["адрес", "адреса", "адресов"],
-    organization: ["организация", "организации", "организаций"],
-};
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const TEXT_MIME = "text/plain";
@@ -102,61 +95,6 @@ function fileKind(file: File): FileKind | null {
     if (name.endsWith(".docx") || file.type === DOCX_MIME) return "docx";
     if (name.endsWith(".txt") || file.type === TEXT_MIME) return "txt";
     return null;
-}
-
-/** Pick the Russian plural form for `count` (1 фрагмент / 2 фрагмента / 5 фрагментов). */
-function plural(count: number, forms: [string, string, string]): string {
-    const mod100 = count % 100;
-    const mod10 = count % 10;
-    if (mod100 >= 11 && mod100 <= 14) return forms[2];
-    if (mod10 === 1) return forms[0];
-    if (mod10 >= 2 && mod10 <= 4) return forms[1];
-    return forms[2];
-}
-
-function labelName(label: string, count: number): string {
-    const forms = LABEL_LABELS[label];
-    if (forms) return plural(count, forms);
-    return plural(count, ["фрагмент", "фрагмента", "фрагментов"]);
-}
-
-/** "5 фрагментов" — the short result-label summary. */
-function totalText(stats: MaskStats): string {
-    return `${stats.total} ${plural(stats.total, ["фрагмент", "фрагмента", "фрагментов"])}`;
-}
-
-/**
- * Tooltip body: one line per label, e.g.
- * ```
- * 1 организация + 2 телефона + 4 физлица
- * ```
- * (the total is already shown in the label itself).
- */
-function statsBreakdown(stats: MaskStats): string {
-    const parts = Object.entries(stats.byLabel)
-        .filter(([, count]) => count > 0)
-        .sort(([, a], [, b]) => b - a)
-        .map(([label, count]) => `${count} ${labelName(label, count)}`);
-    return parts.join(" + ");
-}
-
-function countLabels(entities: { label: string }[]): MaskStats {
-    const byLabel: Record<string, number> = {};
-    for (const entity of entities) {
-        byLabel[entity.label] = (byLabel[entity.label] ?? 0) + 1;
-    }
-    return { total: entities.length, byLabel };
-}
-
-/** Count the values in a validated keys document, as a `MaskStats`. */
-function countKeysValues(keysYaml: string): MaskStats {
-    const byLabel: Record<string, number> = {};
-    for (const placeholder of placeholdersFromKeys(keysYaml)) {
-        // `[LABEL_N]` → the lower-cased label, to match the mask stats keys.
-        const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
-        byLabel[label] = (byLabel[label] ?? 0) + 1;
-    }
-    return { total: Object.values(byLabel).reduce((sum, count) => sum + count, 0), byLabel };
 }
 
 /** Decode the RFC 5987 filename from a `Content-Disposition` header. */
@@ -307,7 +245,7 @@ function MaskResultPane({
                         </Tooltip.Trigger>
                         <Tooltip.Content showArrow placement="bottom">
                             <Tooltip.Arrow />
-                            {statsBreakdown(stats)}
+                            <span className="stats-breakdown">{statsBreakdown(stats)}</span>
                         </Tooltip.Content>
                     </Tooltip>
                 ) : null}
@@ -664,7 +602,7 @@ function DemaskInputPane({
                         </Tooltip.Trigger>
                         <Tooltip.Content showArrow placement="bottom">
                             <Tooltip.Arrow />
-                            {statsBreakdown(demaskStats)}
+                            <span className="stats-breakdown">{statsBreakdown(demaskStats)}</span>
                         </Tooltip.Content>
                     </Tooltip>
                 ) : null}
@@ -804,9 +742,12 @@ export default function Home() {
     const keysInvalid = keysError !== null;
     const hasDemaskKeys = demaskKeys.trim().length > 0 && !keysInvalid;
     const unmaskEnabled = !busy && (hasText || hasFile) && hasDemaskKeys;
-    // For demasking, the "count" is how many values the keys carry — one per
-    // placeholder restored. Shown near the left tabs like the masking stats.
-    const demaskStats: MaskStats | null = hasDemaskKeys ? countKeysValues(demaskKeys) : null;
+    // For demasking, the counts mirror masking; entries whose placeholder is
+    // absent from the masked input are reported as "не применено". A `.docx` is
+    // only known to the backend, so the scan is skipped in file mode.
+    const demaskStats: MaskStats | null = hasDemaskKeys
+        ? countKeysValues(demaskKeys, inFileMode ? null : input)
+        : null;
     // An error always surfaces in the result pane, so the result is a TextArea
     // (never a document preview) while one is shown.
     const showResultPreview = inFileMode && maskedFile !== null && error === null;
@@ -978,10 +919,18 @@ export default function Home() {
             // The backend returns one ZIP holding the masked .docx and its keys;
             // unpack it so each half can be downloaded on its own.
             const bundle = await unpackMaskArchive(await response.blob());
+            const keysYaml = await bundle.keys.text();
+            // Keys are deduped by value, so their per-label count is the unique
+            // count (the headers only carry occurrence totals).
+            const uniqueByLabel: Record<string, number> = {};
+            for (const [placeholder] of keyEntries(keysYaml)) {
+                const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
+                uniqueByLabel[label] = (uniqueByLabel[label] ?? 0) + 1;
+            }
             update({
                 maskedFile: bundle,
-                keys: await bundle.keys.text(),
-                stats: { total, byLabel },
+                keys: keysYaml,
+                stats: { total, byLabel, uniqueByLabel, unused: [] },
             });
         } catch (requestError) {
             update({

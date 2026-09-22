@@ -447,6 +447,13 @@ textarea.result-area--error {
     color: var(--danger) !important;
 }
 
+/* Stats tooltip body: one line per label plus an optional "Не применено"
+   block; the text carries real newlines, so keep them. */
+.stats-breakdown {
+    display: block;
+    white-space: pre-line;
+}
+
 @media (width < 64rem) {
     .editor-grid {
         grid-template-columns: 1fr;
