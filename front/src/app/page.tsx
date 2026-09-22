@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, ButtonGroup, Tabs, TextArea, Tooltip } from "@heroui/react";
-import { useEffect, useRef, useState, type DragEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type RefObject } from "react";
 
 import {
     keyEntries,
@@ -62,6 +62,9 @@ interface ModeState {
     inputTab: string;
     restored: string;
     restoredFile: DocxResult | null;
+    // Keys the backend reported as unused after a file demasking (a `.docx`
+    // text is only known server-side). `null` → derive live from the input.
+    demaskUnused: string[] | null;
     // Shared UI state.
     busy: boolean;
     dragging: boolean;
@@ -82,6 +85,7 @@ function emptyModeState(): ModeState {
         inputTab: "data",
         restored: "",
         restoredFile: null,
+        demaskUnused: null,
         busy: false,
         dragging: false,
         error: null,
@@ -123,6 +127,20 @@ function parseBreakdown(header: string | null): Record<string, number> {
         /* malformed header — show no breakdown */
     }
     return {};
+}
+
+/** Parse the backend's `X-Unused-Keys` header (a percent-encoded JSON list). */
+function parseUnusedKeys(header: string | null): string[] | null {
+    if (!header) return null;
+    try {
+        const parsed = JSON.parse(decodeURIComponent(header)) as unknown;
+        if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+            return parsed as string[];
+        }
+    } catch {
+        /* malformed header — fall back to the live derivation */
+    }
+    return null;
 }
 
 function DocIcon() {
@@ -310,6 +328,9 @@ function ResultBody({
     resultTextRef: RefObject<HTMLTextAreaElement | null>;
     maskedDocRef: RefObject<HTMLDivElement | null>;
 }) {
+    // Stable identity so the preview is not re-highlighted on unrelated renders.
+    const placeholders = useMemo(() => placeholdersFromKeys(keys), [keys]);
+
     if (error !== null) {
         return (
             <TextArea
@@ -349,7 +370,7 @@ function ResultBody({
             <DocxViewer
                 blob={maskedFile.result}
                 surfaceRef={maskedDocRef}
-                highlight={placeholdersFromKeys(keys)}
+                highlight={placeholders}
             />
         );
     }
@@ -393,6 +414,9 @@ function UnmaskResultPane({
     canDownload: boolean;
     onDownload: () => void;
 }) {
+    // Stable identity so editing the keys does not re-highlight the preview.
+    const restoredValues = useMemo(() => valuesFromKeys(demaskKeys), [demaskKeys]);
+
     return (
         <>
             <div className="editor-pane__label">
@@ -411,7 +435,7 @@ function UnmaskResultPane({
                 <DocxViewer
                     blob={restoredFile.blob}
                     surfaceRef={restoredDocRef}
-                    highlight={valuesFromKeys(demaskKeys)}
+                    highlight={restoredValues}
                 />
             ) : inFileMode ? (
                 <DocPreviewShell
@@ -710,6 +734,7 @@ export default function Home() {
         demaskKeys,
         restored,
         restoredFile,
+        demaskUnused,
         inputTab,
         resultTab,
         busy,
@@ -743,10 +768,14 @@ export default function Home() {
     const hasDemaskKeys = demaskKeys.trim().length > 0 && !keysInvalid;
     const unmaskEnabled = !busy && (hasText || hasFile) && hasDemaskKeys;
     // For demasking, the counts mirror masking; entries whose placeholder is
-    // absent from the masked input are reported as "не применено". A `.docx` is
-    // only known to the backend, so the scan is skipped in file mode.
+    // absent from the masked input are reported as "не применено". In file mode
+    // the document text is only known to the backend, so the unused list comes
+    // from its response (`demaskUnused`); in text mode it is derived live.
     const demaskStats: MaskStats | null = hasDemaskKeys
-        ? countKeysValues(demaskKeys, inFileMode ? null : input)
+        ? {
+              ...countKeysValues(demaskKeys, inFileMode ? null : input),
+              ...(inFileMode && demaskUnused !== null ? { unused: demaskUnused } : {}),
+          }
         : null;
     // An error always surfaces in the result pane, so the result is a TextArea
     // (never a document preview) while one is shown.
@@ -777,6 +806,7 @@ export default function Home() {
             maskedFile: null,
             restored: "",
             restoredFile: null,
+            demaskUnused: null,
             error: null,
             resultTab: "result",
             inputTab: "data",
@@ -965,7 +995,11 @@ export default function Home() {
                     throw new Error(await readErrorDetail(response));
                 }
                 const name = parseDispositionFilename(response.headers.get("Content-Disposition"));
-                update({ restoredFile: { blob: await response.blob(), name } });
+                const unused = parseUnusedKeys(response.headers.get("X-Unused-Keys"));
+                update({
+                    restoredFile: { blob: await response.blob(), name },
+                    demaskUnused: unused,
+                });
             } else {
                 const response = await requestTextUnmask();
                 if (!response.ok) {

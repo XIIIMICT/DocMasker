@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import json
+from urllib.parse import unquote
 
 import httpx
 from docx import Document as DocxDocument
@@ -61,10 +63,11 @@ def test_unmask_docx_restores_the_document() -> None:
 
     masked_bytes, _entities, keys = mask_docx_in_memory(out.getvalue())
     placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
-    restored = unmask_docx_in_memory(masked_bytes, placeholders)
+    restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)
 
     text = "\n".join(p.text for p in DocxDocument(io.BytesIO(restored)).paragraphs)
     assert text == "Доклад: Иван Петров, тел +7 900 123-45-67."
+    assert unused == []
 
 
 def test_unmask_docx_restores_a_marker_split_across_runs() -> None:
@@ -77,9 +80,24 @@ def test_unmask_docx_restores_a_marker_split_across_runs() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    restored = unmask_docx_in_memory(out.getvalue(), {"[PERSON_1]": "Иван Петров"})
+    restored, unused = unmask_docx_in_memory(out.getvalue(), {"[PERSON_1]": "Иван Петров"})
     text = DocxDocument(io.BytesIO(restored)).paragraphs[0].text
     assert text == "Иван Петров пришёл."
+    assert unused == []
+
+
+def test_unmask_docx_reports_keys_absent_from_the_document() -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("[PERSON_1] пришёл.")
+    out = io.BytesIO()
+    doc.save(out)
+
+    restored, unused = unmask_docx_in_memory(
+        out.getvalue(),
+        {"[PERSON_1]": "Иван Петров", "[ORGANIZATION_1]": "ООО «Рога и копыта»"},
+    )
+    assert unused == ["ООО «Рога и копыта»"]
+    assert DocxDocument(io.BytesIO(restored)).paragraphs[0].text == "Иван Петров пришёл."
 
 
 async def test_post_unmask_endpoint() -> None:
@@ -159,3 +177,25 @@ async def test_post_unmask_file_endpoint() -> None:
     assert "filename*=UTF-8''" in response.headers["content-disposition"]
     text = "\n".join(p.text for p in DocxDocument(io.BytesIO(response.content)).paragraphs)
     assert text == "Контакты: Иван Петров, тел +7 900 123-45-67."
+    # Every key was applied.
+    assert json.loads(unquote(response.headers["x-unused-keys"])) == []
+
+
+async def test_post_unmask_file_endpoint_reports_unused_keys() -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("[PERSON_1] пришёл.")
+    out = io.BytesIO()
+    doc.save(out)
+
+    keys = "Физлица:\n  - Иван Петров\nОрганизации:\n  - ООО «Рога и копыта»"
+    async with _client() as client:
+        response = await client.post(
+            "/api/unmask-file",
+            files={"file": ("masked.docx", out.getvalue(), "application/octet-stream")},
+            data={"keys": keys},
+        )
+
+    assert response.status_code == 200
+    # The header is percent-encoded (latin-1 safe); decode it back.
+    unused = json.loads(unquote(response.headers["x-unused-keys"]))
+    assert unused == ["ООО «Рога и копыта»"]

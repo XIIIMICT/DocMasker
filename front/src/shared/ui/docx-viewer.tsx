@@ -28,30 +28,46 @@ export function DocxViewer({
     const internalRef = useRef<HTMLDivElement>(null);
     const surfaceRef = externalRef ?? internalRef;
     const [localError, setLocalError] = useState<string | null>(null);
+    // Latest highlight list, read by the render pass without re-triggering it.
+    const highlightRef = useRef(highlight);
+    highlightRef.current = highlight;
+    // Whether a document has finished rendering (so highlights can be applied).
+    const renderedRef = useRef(false);
 
-    const clearAndRender = useCallback(async () => {
+    // Render once per document, then apply the current highlight. A change to
+    // the highlight list alone re-applies it without re-parsing the document.
+    const render = useCallback(async () => {
         const container = surfaceRef.current;
         if (!container) return;
         container.innerHTML = "";
         setLocalError(null);
+        renderedRef.current = false;
         try {
             await renderAsync(blob, container);
-            if (highlight.length > 0) {
-                highlightTexts(container, highlight);
+            renderedRef.current = true;
+            if (highlightRef.current.length > 0) {
+                highlightTexts(container, highlightRef.current);
             }
         } catch {
             setLocalError("Не удалось отобразить предпросмотр документа.");
         }
-    }, [blob, surfaceRef, highlight]);
+    }, [blob, surfaceRef]);
 
     useEffect(() => {
-        void clearAndRender();
+        void render();
         return () => {
             if (surfaceRef.current) {
                 surfaceRef.current.innerHTML = "";
             }
         };
-    }, [clearAndRender, surfaceRef]);
+    }, [render, surfaceRef]);
+
+    // Re-apply highlights when the list changes, but only once a render exists.
+    useEffect(() => {
+        const container = surfaceRef.current;
+        if (!container || !renderedRef.current) return;
+        highlightTexts(container, highlight);
+    }, [highlight, surfaceRef]);
 
     return (
         <div className="docx-viewer">
@@ -63,6 +79,11 @@ export function DocxViewer({
 
 /** Wrap every occurrence of any `needles` in `root` (preview-only). */
 export function highlightTexts(root: HTMLElement, needles: string[]): void {
+    // Undo any previous pass first, so re-applying never nests marks.
+    for (const mark of Array.from(root.querySelectorAll("mark.docx-marker"))) {
+        mark.replaceWith(document.createTextNode(mark.textContent ?? ""));
+    }
+
     const escaped = needles
         .filter((needle) => needle.length > 0)
         .map((needle) => needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));

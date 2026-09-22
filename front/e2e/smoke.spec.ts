@@ -6,6 +6,8 @@ const MASK_DATA = "Данные для маскировки";
 const DEMASK_DATA = "Данные для демаскировки";
 /** A minimal .docx fixture (one paragraph with a name and a phone). */
 const SAMPLE_DOCX = fileURLToPath(new URL("./fixtures/sample.docx", import.meta.url));
+/** The same fixture already masked: `Контакты: [PERSON_1], тел [PHONE_1].` */
+const SAMPLE_MASKED_DOCX = fileURLToPath(new URL("./fixtures/sample-masked.docx", import.meta.url));
 
 /** Switch the app mode through the brand dropdown (opens on hover). */
 async function switchMode(page: Page, name: string): Promise<void> {
@@ -211,6 +213,30 @@ test("tooltip демаскировки перечисляет неприменё
     await page
         .getByRole("textbox", { name: "Ключи демаскировки" })
         .fill("Физлица:\n  - Иван Петров\nОрганизации:\n  - ООО «Рога и копыта»");
+    const stats = page.locator(".editor-pane__stats");
+    await expect(stats).toBeVisible({ timeout: 10000 });
+    await stats.focus();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText("Не применено 1:", { timeout: 10000 });
+    await expect(tooltip).toContainText("- ООО «Рога и копыта»;");
+});
+
+test("демаскировка файла сообщает неприменённые ключи", async ({ page }) => {
+    await page.goto("/");
+    await switchMode(page, "Демаскировка");
+    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_MASKED_DOCX);
+    await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+    // The first two keys exist in the masked fixture; the third does not.
+    await page
+        .getByRole("textbox", { name: "Ключи демаскировки" })
+        .fill(
+            "Физлица:\n  - Иван Петров\nНомера телефонов:\n  - '+7 900 123-45-67'\nОрганизации:\n  - ООО «Рога и копыта»",
+        );
+    await page.getByRole("button", { name: "Демаскировать" }).click();
+    await expect(page.locator(".docx-viewer__surface mark.docx-marker").last()).toBeVisible({
+        timeout: 30000,
+    });
+
     const stats = page.locator(".editor-pane__stats");
     await expect(stats).toBeVisible({ timeout: 10000 });
     await stats.focus();

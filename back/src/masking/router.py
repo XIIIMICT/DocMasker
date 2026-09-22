@@ -127,9 +127,14 @@ async def unmask_file_endpoint(
         placeholders = placeholders_from_document(validate_keys_yaml(keys))
     except KeysValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
-    restored = unmask_docx_in_memory(source, placeholders)
+    restored, unused = unmask_docx_in_memory(source, placeholders)
 
     base = Path(file.filename).stem
     download_name = f"{base} (демаскированный).docx"
-    headers = {"Content-Disposition": _content_disposition(download_name)}
+    headers = {
+        "Content-Disposition": _content_disposition(download_name),
+        # Keys whose placeholder was absent from the document, as a JSON list.
+        # Headers are latin-1, so the JSON (Cyrillic values) is percent-encoded.
+        "X-Unused-Keys": quote(json.dumps(unused, ensure_ascii=False)),
+    }
     return Response(content=restored, media_type=_DOCX_CONTENT_TYPE, headers=headers)

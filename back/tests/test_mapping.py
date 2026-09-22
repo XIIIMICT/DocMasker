@@ -124,3 +124,13 @@ def test_validate_rejects_empty_item() -> None:
 def test_validate_rejects_a_document_without_sections() -> None:
     with pytest.raises(KeysValidationError, match="ни одного раздела"):
         validate_keys_yaml("{}")
+
+
+def test_validate_rejects_duplicate_values_in_a_section() -> None:
+    with pytest.raises(KeysValidationError, match="дубликаты значений"):
+        validate_keys_yaml("Физлица:\n  - Иван Петров\n  - Иван Петров\n")
+
+
+def test_validate_rejects_a_duplicated_section() -> None:
+    with pytest.raises(KeysValidationError, match="больше одного раза"):
+        validate_keys_yaml("Физлица:\n  - Иван\nФизлица:\n  - Пётр\n")

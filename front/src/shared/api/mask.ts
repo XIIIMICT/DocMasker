@@ -98,6 +98,18 @@ export function validateKeysYaml(text: string): string | null {
     if (text.trim().length === 0) {
         return "Файл ключей пуст.";
     }
+    // YAML keeps only the last of repeated mapping keys, so a duplicated section
+    // is invisible after parsing — detect it from the raw lines first.
+    const seenSections = new Set<string>();
+    for (const line of text.split(/\r?\n/)) {
+        const match = line.match(/^([^\s#][^:]*):\s*$/);
+        if (match === null) continue;
+        const title = match[1].trim();
+        if (seenSections.has(title)) {
+            return `Раздел «${title}» встречается в файле больше одного раза.`;
+        }
+        seenSections.add(title);
+    }
     let parsed: unknown;
     try {
         parsed = parseSimpleYaml(text);
@@ -124,6 +136,9 @@ export function validateKeysYaml(text: string): string | null {
         }
         if (!values.every((value) => typeof value === "string" && value.trim().length > 0)) {
             return `Раздел «${title}» должен содержать непустые строки.`;
+        }
+        if (new Set(values).size !== values.length) {
+            return `Раздел «${title}» содержит дубликаты значений.`;
         }
     }
     return null;

@@ -40,6 +40,8 @@ export async function POST(request: Request) {
     });
     const disposition = response.headers.get("Content-Disposition");
     if (disposition) forwarded.set("Content-Disposition", disposition);
+    const unused = response.headers.get("X-Unused-Keys");
+    if (unused) forwarded.set("X-Unused-Keys", unused);
 
     return new Response(await response.arrayBuffer(), {
         headers: forwarded,

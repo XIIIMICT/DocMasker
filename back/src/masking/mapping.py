@@ -22,11 +22,15 @@ Sections with no entities are omitted.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 
 import yaml12
 
 from .constants import LABEL_TITLES, mask_marker
+
+#: A top-level section header line (`Физлица:`), used to spot duplicate sections.
+_SECTION_RE = re.compile(r"^([^\s#][^:]*):\s*$")
 
 #: Value of a single keys section (a list of original strings).
 KeysSection = list[str]
@@ -164,6 +168,19 @@ def validate_keys_yaml(text: str) -> KeysDocument:
         msg = "Файл ключей должен содержать словарь разделов."
         raise KeysValidationError(msg)
 
+    # YAML keeps only the last of repeated mapping keys, so a duplicated section
+    # is invisible after parsing — detect it from the raw text first.
+    seen_titles: set[str] = set()
+    for raw_line in text.splitlines():
+        match = _SECTION_RE.match(raw_line)
+        if match is None:
+            continue
+        title = match.group(1).strip()
+        if title in seen_titles:
+            msg = f"Раздел «{title}» встречается в файле больше одного раза."
+            raise KeysValidationError(msg)
+        seen_titles.add(title)
+
     document: KeysDocument = {}
     for title, values in parsed.items():
         if not isinstance(title, str) or title not in TITLE_LABELS:
@@ -175,6 +192,9 @@ def validate_keys_yaml(text: str) -> KeysDocument:
             raise KeysValidationError(msg)
         if not all(isinstance(value, str) and value.strip() for value in values):
             msg = f"Раздел «{title}» должен содержать непустые строки."
+            raise KeysValidationError(msg)
+        if len({value for value in values}) != len(values):
+            msg = f"Раздел «{title}» содержит дубликаты значений."
             raise KeysValidationError(msg)
         document[title] = list(values)
     if not document:

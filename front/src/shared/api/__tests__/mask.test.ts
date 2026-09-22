@@ -112,6 +112,18 @@ describe("validateKeysYaml", () => {
         expect(validateKeysYaml("Физлица:\n  - ''")).toMatch(/непустые строки/);
     });
 
+    it("rejects duplicate values within a section", () => {
+        expect(validateKeysYaml("Физлица:\n  - Иван Петров\n  - Иван Петров")).toMatch(
+            /дубликаты значений/,
+        );
+    });
+
+    it("rejects a duplicated section", () => {
+        expect(validateKeysYaml("Физлица:\n  - Иван\nФизлица:\n  - Пётр")).toMatch(
+            /больше одного раза/,
+        );
+    });
+
     it("runs on every change: valid then invalid", () => {
         const good = "Физлица:\n  - Иван";
         const bad = "Физлица:\n  - Иван\nНеизвестно:\n  - x";

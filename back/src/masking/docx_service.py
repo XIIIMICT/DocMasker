@@ -222,7 +222,7 @@ def mask_docx_in_memory(
     return out.getvalue(), _dedupe_entities(all_entities), keys
 
 
-def unmask_docx_in_memory(source_bytes: bytes, placeholders: Mapping[str, str]) -> bytes:
+def unmask_docx_in_memory(source_bytes: bytes, placeholders: Mapping[str, str]) -> tuple[bytes, list[str]]:
     """
     Restore a masked .docx (bytes) by replacing every placeholder with its value.
 
@@ -233,8 +233,12 @@ def unmask_docx_in_memory(source_bytes: bytes, placeholders: Mapping[str, str]) 
     start and the covered slices of the following runs are blanked — the same
     collapse rule `mask_paragraph` uses, so the restored value keeps the
     formatting of the run where the marker began.
+
+    Returns the restored bytes plus the values whose placeholder never appeared
+    in the document (the keys the caller should report as "не применено").
     """
     document = Document(io.BytesIO(source_bytes))
+    full_text = "\n".join(paragraph.text for paragraph in iter_paragraphs(document))
     for paragraph in iter_paragraphs(document):
         text = paragraph.text
         if not text:
@@ -244,7 +248,8 @@ def unmask_docx_in_memory(source_bytes: bytes, placeholders: Mapping[str, str]) 
             _replace_spans(paragraph, spans)
     out = io.BytesIO()
     document.save(out)
-    return out.getvalue()
+    unused = [value for placeholder, value in placeholders.items() if placeholder not in full_text]
+    return out.getvalue(), unused
 
 
 def _placeholder_spans(text: str, placeholders: Mapping[str, str]) -> list[tuple[int, int, str]]:
