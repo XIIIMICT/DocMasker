@@ -136,6 +136,44 @@ def test_address_still_masks_letters_with_digits() -> None:
     assert "Москва" not in masked
 
 
+def test_full_address_line_is_masked_whole() -> None:
+    # natasha drops parts of a long, comma-separated address; a line introduced
+    # by "адрес:" must be masked in full.
+    address = (
+        "121151, г. Москва, вн. тер. г. муниципальный округ Дрогомилово, "
+        "наб. Тараса Шевченко, д. 23А, этаж 12, помещ. I, ком. 77"
+    )
+    masked = _masker().mask(f"Юр. адрес: {address}.")
+    assert masked == "Юр. адрес: [ADDRESS]."
+    assert "Дрогомилово" not in masked
+    assert "23А" not in masked
+
+
+def test_address_line_stops_at_the_sentence_end() -> None:
+    # Trailing prose after the address must not be swallowed by the mask.
+    masked = _masker().mask("Адрес: г. Москва, ул. Ленина, д. 5. Пишите Ивану Петрову.")
+    assert "[ADDRESS]" in masked
+    assert "Пишите" in masked
+    assert "Москва" not in masked
+
+
+def test_address_line_keeps_the_whole_value_before_the_boundary() -> None:
+    # A trailing room number must stay inside the mask (no stray digit leaks).
+    masked = _masker().mask("Адрес: г. Москва, ул. Ленина, д. 5, ком. 77. Пишите нам.")
+    assert masked == "Адрес: [ADDRESS]. Пишите нам."
+
+
+def test_masks_links() -> None:
+    masked = _masker().mask("Сайт: https://example.com/path?q=1 и http://test.ru.")
+    assert masked == "Сайт: [LINK] и [LINK]."
+
+
+def test_does_not_mask_common_phrases_as_persons() -> None:
+    # `NamesExtractor` labels any two adjacent words; these are not names.
+    for text in ["у каждой из Сторон", "Оператор ЭДО", "Сторон света"]:
+        assert _masker().mask(text) == text
+
+
 def test_masks_combined_pii_in_one_pass() -> None:
     text = "Иван Петров, тел +7 900 123-45-67, почта ivan.petrov@mail.ru"
     masked = _masker().mask(text)

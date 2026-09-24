@@ -19,6 +19,7 @@ const LABEL_LABELS: Record<string, [one: string, few: string, many: string]> = {
     person: ["физлицо", "физлица", "физлиц"],
     phone: ["телефон", "телефона", "телефонов"],
     email: ["эл. почта", "эл. почты", "эл. почт"],
+    link: ["ссылка", "ссылки", "ссылок"],
     address: ["адрес", "адреса", "адресов"],
     organization: ["организация", "организации", "организаций"],
 };
@@ -28,6 +29,7 @@ const LABEL_TITLES: Record<string, string> = {
     person: "Физлица",
     phone: "Номера телефонов",
     email: "Email",
+    link: "Ссылки",
     address: "Адреса",
     organization: "Организации",
 };

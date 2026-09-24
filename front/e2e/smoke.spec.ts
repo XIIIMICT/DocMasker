@@ -59,6 +59,24 @@ test("текст с PII маскируется через /api/mask", async ({ p
     await expect(page.getByRole("textbox", { name: "Ключи демаскировки" })).toHaveValue(
         /Физлица:\s*\n\s+- Иван Петров/,
     );
+
+    // Links and addresses are masked too; a common phrase is not a person.
+    await page
+        .getByRole("textbox", { name: MASK_DATA })
+        .fill(
+            "Адрес: г. Москва, ул. Ленина, д. 5. Сайт: https://example.com/path?q=1. " +
+                "Это у каждой из Сторон.",
+        );
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    await expect
+        .poll(async () => page.getByRole("textbox", { name: "Результат" }).inputValue(), {
+            timeout: 30000,
+        })
+        .toContain("[LINK_1]");
+    const masked = await page.getByRole("textbox", { name: "Результат" }).inputValue();
+    expect(masked).toContain("[ADDRESS_1]");
+    expect(masked).toContain("у каждой из Сторон");
+    expect(masked).not.toContain("[PERSON");
     await expect(page.getByRole("button", { name: "Скачать результат маскировки" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Скачать ключи демаскировки" })).toBeEnabled();
 });

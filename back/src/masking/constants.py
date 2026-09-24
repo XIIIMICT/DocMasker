@@ -11,6 +11,7 @@ DEFAULT_LABELS: tuple[str, ...] = (
     "person",
     "phone",
     "email",
+    "link",
     "address",
     "organization",
 )
@@ -21,6 +22,7 @@ LABEL_TITLES: dict[str, str] = {
     "person": "Физлица",
     "phone": "Номера телефонов",
     "email": "Email",
+    "link": "Ссылки",
     "organization": "Организации",
     "address": "Адреса",
 }

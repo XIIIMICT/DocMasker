@@ -27,6 +27,7 @@ export const KEYS_SECTION_TITLES = [
     "Физлица",
     "Номера телефонов",
     "Email",
+    "Ссылки",
     "Организации",
     "Адреса",
 ] as const;
@@ -36,6 +37,7 @@ export const KEYS_TITLE_LABELS: Record<string, string> = {
     Физлица: "person",
     "Номера телефонов": "phone",
     Email: "email",
+    Ссылки: "link",
     Организации: "organization",
     Адреса: "address",
 };

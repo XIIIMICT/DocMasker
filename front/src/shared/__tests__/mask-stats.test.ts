@@ -14,6 +14,16 @@ describe("countLabels", () => {
         expect(stats.uniqueByLabel).toEqual({ person: 1, organization: 1 });
         expect(stats.unused).toEqual([]);
     });
+
+    it("counts links like any other label", () => {
+        const stats = countLabels([
+            { label: "link", text: "https://example.com" },
+            { label: "link", text: "https://example.com" },
+        ]);
+        expect(stats.total).toBe(2);
+        expect(stats.byLabel).toEqual({ link: 2 });
+        expect(stats.uniqueByLabel).toEqual({ link: 1 });
+    });
 });
 
 describe("countKeysValues", () => {
