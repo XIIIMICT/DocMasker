@@ -99,7 +99,11 @@ class MaskKeys:
 
 def format_keys_yaml(document: Mapping[str, Iterable[str]]) -> str:
     """Serialize a keys document to YAML, or return `""` when it is empty."""
-    sections = {title: list(values) for title, values in document.items() if values}
+    sections: dict[str, list[str]] = {}
+    for title, values in document.items():
+        materialized = list(values)
+        if materialized:
+            sections[title] = materialized
     if not sections:
         return ""
     return yaml12.format_yaml(sections)
@@ -118,7 +122,7 @@ def parse_keys_yaml(text: str) -> KeysDocument:
         if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
             msg = "Каждый раздел ключей должен быть списком строк."
             raise TypeError(msg)
-        document[str(title)] = list(values)
+        document[str(title)] = [value for value in values if isinstance(value, str)]
     return document
 
 
@@ -196,7 +200,7 @@ def validate_keys_yaml(text: str) -> KeysDocument:
         if len({value for value in values}) != len(values):
             msg = f"Раздел «{title}» содержит дубликаты значений."
             raise KeysValidationError(msg)
-        document[title] = list(values)
+        document[title] = [value for value in values if isinstance(value, str)]
     if not document:
         msg = "Файл ключей не содержит ни одного раздела."
         raise KeysValidationError(msg)

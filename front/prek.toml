@@ -29,8 +29,8 @@ pass_filenames = false
 files = '^(package\.json|bunfig\.toml|tsconfig.*\.json|.*\.(cts|mts|ts|tsx))$'
 
 [[repos.hooks]]
-id = "tsc-typecheck"
-name = "tsc typecheck"
+id = "bun-typecheck"
+name = "bun check"
 entry = "bun typecheck"
 language = "system"
 pass_filenames = false
