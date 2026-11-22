@@ -35,12 +35,13 @@ typecheck:
     uv run --directory back ty check --fix
     bun run --cwd front typecheck
 
-# Тестирование (требует just db-stand, тесты используют TEST_DATABASE_URL)
+# Тестирование (детерминированное, офлайн — без сети и моделей)
 test:
     uv run --directory back pytest
     bun run --cwd front test
 
-# Интеграционное тестирование (требует just prod и заполненную БД).
+# Интеграционное e2e-тестирование (требует запущенного стека: just prod или just dev,
+# затем E2E_BASE_URL=http://127.0.0.1:5001 — см. docs/WORKFLOW.md).
 e2e:
     bun run --cwd front test:e2e --project=smoke
 

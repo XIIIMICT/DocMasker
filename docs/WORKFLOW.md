@@ -8,11 +8,13 @@ this file in the same change (see "Documentation discipline").
 
 1. Copy the config: `cp .env.example .env` (root — single source).
 2. Dependencies: `just deps` (`uv sync --directory back` + `bun install --cwd front`).
-3. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts `dm-back-dev` and `dm-front-dev`. Or on the host `just back` / `just front`.
+3. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts `dm-back-dev` and `dm-front-dev`.
+
+There are no host-run recipes for the servers (`just back` / `just front` are commented out in the `justfile`). If needed, run the backend manually with Granian: `uv run --directory back granian --interface asgi --reload --reload-ignore-dirs logs src.main:app --port 8001`. For host-run installs the `justfile` exports `UV_SYSTEM_CERTS=1` and `NODE_OPTIONS=--use-system-ca` so corporate CAs are trusted.
 
 Ports come from the root `.env` (`BACKEND_PORT`=8001, `FRONT_PORT`=5001); they are mandatory and fail loudly if unset. The backend starts instantly — the masker is deterministic, there is no model to download and no cache volume.
 
-CI prerequisites (once, in GitHub repo settings): push the repo, create the `main` and `dev` branches, and set **`CI required`** as the required status check for the protected branches. CodeQL additionally needs code scanning enabled (see "CI" below).
+CI prerequisites (once, in GitHub repo settings): push the repo, create the `main` and `dev` branches remotely (push triggers fire only for `main`/`dev` — pushes to other branches run no CI), make `dev` the default branch, and set **`CI required`** as the required status check for the protected branches. A job *named* `CI required` is not a required check by itself — branch rulesets live in GitHub repository settings. CodeQL additionally needs code scanning enabled (see "CI" below).
 
 ## Quality (what we check before delivery)
 
@@ -41,7 +43,7 @@ Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
 
 ### e2e (Playwright)
 
-The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered: `/api/health`, the masking page rendering, and a text-mask round-trip. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
+The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (17 scenarios in 3 files, including the `rerender-smoke.spec.ts` regression — the `smoke` project's `testMatch` regex is unanchored, so it matches): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
 
 ## Pre-commit (prek)
 
@@ -92,11 +94,11 @@ dev         ← integration. squash-merge from feature/*; agent documentation is
 feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 ```
 
-1. **Branches** — short-lived, from `dev`: `fix/<short>`, `feat/<short>` (ASCII, lowercase).
+1. **Branches** — short-lived, from `dev`: `fix/<short>`, `feat/<short>`, `docs/<short>` (ASCII, lowercase). One logical task per branch; start the next task only after the previous one is merged into `dev`.
 2. **Commits** — conventional commits: `type(scope): short English summary`. Scope — module (`masking`, `docx`, `front`, `api`, `ci`, `docs`, …). Body — three sections, enough context for an agent without token bloat (header ≤ ~72 chars, body 3–10 lines).
-3. **feature → dev:** only after green CI and user confirmation; merge with `git merge --squash feature/<branch>` — the merge message is a single conventional commit that distills the branch's commits (they are squashed away, so it must carry the essentials). The feature branch itself is left in place with its granular history.
+3. **task/feature → dev:** only after green checks and user confirmation; merge with **`git merge --no-ff <branch>`** — a regular merge commit that keeps the branch's granular history (no squash). After the merge, run the integration checks affected by the change on `dev`, then delete the local branch; never delete a remote branch without permission.
 4. **Agent documentation** (`AGENTS.md` + `docs/*`) is updated at this step — not earlier. Exception: landmines in `AGENTS.md` are written down immediately when discovered.
-5. **dev → main:** squash-merge (release boundary, clean changelog), tag `vX.Y.Z`; human documentation is updated here.
+5. **dev → main:** squash-merge (release boundary, clean changelog), tag `vX.Y.Z`; human documentation is updated here. Release promotion requires explicit release approval.
 
 ### Merge checklist (into dev)
 
@@ -145,6 +147,17 @@ Local reproduction of the `production` job: build the images (`docker compose -f
 
 ## Working principles
 
+- **When in doubt, ask the maintainer — do not guess.** If a product, config or
+  process decision is ambiguous (semantics, versions, naming, what to commit),
+  stop and ask; a wrong silent guess costs more than a short question. Safe,
+  reversible technical choices may proceed and be documented, but anything with
+  product or convention weight needs an answer first.
+- **Tooling preference: use ripgrep (`rg`) over grep, `uv` over bare Python, and
+  `bun` over node.** `rg` — every code/doc search; `uv run --directory back …` —
+  any Python execution (the interpreter is uv-managed, do not call `python`
+  directly); `bun` — package management, scripts and TS/JS execution (do not
+  call `node`/`npm`/`npx` outside containers). This keeps one toolchain per
+  language and avoids drift with the lockfiles.
 - **Minimal changes:** edit existing files; follow the file's style and the project's vocabulary (HeroUI v3 slots, the existing masking pipeline) — don't invent parallel patterns.
 - **Precision over recall on names, measured not guessed.** The natasha guard (given name + surname/patronymic) and the address/org heuristics are empirical (see `docs/ARCHITECTURE.md`); change one rule at a time and back it with a test case.
 - **Check before delivery** with the quality table above.

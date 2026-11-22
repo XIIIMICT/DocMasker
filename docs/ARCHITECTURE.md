@@ -10,7 +10,7 @@ Browser ── http://<host>:5001 ──► front (Next.js, dev: bun dev / prod:
                                    └── /api/health  → healthcheck
                                    └── /api/mask    → server-side proxy (text)
                                    └── /api/mask-file → server-side proxy (DOCX)
-front ── BACKEND_INTERNAL_URL ──► back (FastAPI/uvicorn, :8001)
+front ── BACKEND_INTERNAL_URL ──► back (FastAPI/Granian, :8001)
                                      ├── POST /api/mask        → masker → masked text + keys
                                      ├── POST /api/mask-file   → masker → ZIP (masked .docx + keys)
                                      ├── POST /api/unmask      → keys → restored text
@@ -25,10 +25,74 @@ The browser talks only to the front origin; the front proxies `/api/mask` to the
 
 | Service | Container | Profile | What |
 |---|---|---|---|
-| `back` / `back-dev` | `dm-back` / `dm-back-dev` | prod / dev | FastAPI, uvicorn, port `BACKEND_PORT` |
+| `back` / `back-dev` | `dm-back` / `dm-back-dev` | prod / dev | FastAPI on Granian, port `BACKEND_PORT` |
 | `front` / `front-dev` | `dm-front` / `dm-front-dev` | prod / dev | Next.js standalone (prod) or `bun dev` (dev, hot-reload), port `FRONT_PORT` |
 
 Key point: **ports and hosts are set once in the root `.env`** and spread into the Dockerfiles (build-arg `PORT`/`BACKEND_PORT`), port publishing, healthchecks, and internal URLs. All mandatory (`:?` in compose — fails with a clear error instead of staying silent). `BACKEND_INTERNAL_URL` is derived from the service name + `BACKEND_PORT` (e.g. `http://back-dev:8001` in dev).
+
+## Toolchain versions (canonical)
+
+This table is the single source of truth for versions. It separates the
+manifest constraint from the lock-resolved version, the CI version and the
+Docker/production runtime. When a doc mentions a version, it must agree with
+this table. Python 3.15.0 is the current stable release (final 2026-10-09,
+bugfix support until ~2028-10); the backend targets it explicitly.
+
+| Component | Manifest constraint | Resolved (lock/host) | CI | Docker / production runtime |
+|---|---|---|---|---|
+| Python | `==3.15.*` (`back/pyproject.toml`, `uv.lock`) | 3.15.0 (uv-managed) | **3.14 — mismatch, see below** | builder `uv:python3.15-alpine`, runtime `python:3.15-alpine` |
+| uv | — | 0.13.8 (host) | `astral-sh/setup-uv@v10.0.1` | `ghcr.io/astral-sh/uv:python3.15-alpine` (floating tag) |
+| Bun | `engines >=1.4` (`front/package.json`) | 1.4.4 (host) | `setup-bun@v2` bun-version `1.4` | `oven/bun:1.4-slim` (build) |
+| Node.js | — | 26.13.1 (host) | `setup-node@v7` version `26` | `node:26-alpine` (prod runtime, `node:26` in CI) |
+| FastAPI | `>=0.165.0` | 0.165.0 | — | — |
+| natasha | `>=1.6.0` | 1.6.0 | — | — |
+| phonenumbers | `>=9.0.44` | 9.0.44 | — | — |
+| python-docx | `>=1.2.0` | 1.2.0 | — | — |
+| python-multipart | `>=0.0.34` | 0.0.34 | — | — |
+| pydantic / pydantic-settings | `>=2.16.3` (settings) | 2.14.4 / 2.16.3 | — | — |
+| py-yaml12 | `>=0.2.1` | 0.2.1 | — | — |
+| granian | `>=2.8.9` | 2.8.9 | — | ASGI server in both Docker stages |
+| setuptools | `>=80.0.0,<81` | 80.10.2 | — | — |
+| ruff | `>=0.17.6` | 0.17.6 | — | — |
+| ty | `>=0.0.107` | 0.0.107 | — | — |
+| pytest / pytest-asyncio / pytest-cov | `>=9.2.0` / `>=1.4.0` / `>=7.1.0` | 9.2.0 / 1.5.0 / 7.1.0 | — | — |
+| Next.js | `16.4.6` (pinned) | 16.4.6 | — | — |
+| React / ReactDOM | `19.3.1` (pinned) | 19.3.1 | — | — |
+| @heroui/react, @heroui/styles | `^3.2.7` | 3.2.7 | — | — |
+| docx-preview | `^0.4.1` | 0.4.1 | — | — |
+| jszip | `^3.10.2` | 3.10.2 | — | — |
+| undici | `^8.13.1` | 8.13.1 | — | — |
+| Tailwind CSS / @tailwindcss/postcss | `^4.3.5` | 4.3.5 | — | — |
+| TypeScript | `^7.0.2` | 7.0.2 | — | — |
+| oxlint / oxfmt | `^1.94.0` / `^0.79.0` | 1.94.0 / 0.79.0 | — | — |
+| @playwright/test | `^1.65.1` | 1.65.1 | — | — |
+
+### Known configuration mismatches (as of 2026-11-22)
+
+Documented problems, not decisions — each one gets its own change when fixed:
+
+1. **CI Python is 3.14, the project requires `==3.15.*`.** The `back` job of
+   `.github/workflows/ci.yaml` sets `python-version: "3.14"`; `uv sync --locked`
+   against a lock that requires 3.15 cannot satisfy it. CI must use Python 3.15
+   (single minor, matching pyproject/Docker) — a runtime-consistency change.
+2. **TLS verification is bypassed for dependency installs.** `back/Dockerfile`
+   deps stage runs `uv sync --allow-insecure-host pypi.org --allow-insecure-host
+   files.pythonhosted.org`; `front/Dockerfile` base stage sets
+   `NODE_TLS_REJECT_UNAUTHORIZED=0` (inherited by the dev/build stages); the
+   host `justfile` exports `UV_SYSTEM_CERTS=1` and `NODE_OPTIONS=--use-system-ca`.
+   These are corporate-proxy workarounds, not trust decisions — the intended fix
+   is proper CA trust (`NODE_EXTRA_CA_CERTS`, system trust store) with no
+   insecure flags in images.
+3. **`front/Dockerfile` prod stage runs as root.** The backend image already
+   drops to `appuser`; the frontend `node:26-alpine` stage has no `USER`.
+4. **Git/CI topology diverges from the workflow docs.** Origin currently holds
+   only `feat/demasking`; `main`/`dev` exist locally. CI push/PR triggers fire
+   only for `main`/`dev`, so pushes to other branches run no CI. The job named
+   `CI required` is not a required check by itself — branch rulesets live in
+   GitHub repository settings and cannot be verified from the repo.
+5. **compose prod publishes the backend port to the host** (`${BACKEND_PORT}:${BACKEND_PORT}`),
+   so the backend is reachable directly, bypassing the front proxy. Loopback-only
+   or internal-network-only publishing is the intended hardening.
 
 ## Environment variables (root `.env`, single source)
 
@@ -57,13 +121,13 @@ Deterministic, rule-based: `natasha` (morphology/rules) + `phonenumbers` + regul
 - `docx_service.py` — DOCX masking that **preserves formatting**: iterates every paragraph (body, all table cells recursively, default header/footer of each section) via `iter_paragraphs` in **two passes** — the first detects entities and assigns placeholders from one document-wide `MaskKeys` (so per-label numbering is continuous across the whole document), the second rewrites runs with the already-assigned markers. An entity spanning several runs (`АО «Росхим»` = `АО «` | `Росхим` | `»`) collapses into a **single** `[LABEL_N]`: the marker goes in the run holding the entity start and the covered slices of the following runs are blanked. The run bounds are **recomputed for every entity** (a cached list goes stale as later entities shorten runs and would emit one marker per run). No highlight is written here — the yellow tint is a **preview-only** effect (front `DocxViewer`), so the downloaded file stays plain. `unmask_docx_in_memory` is the inverse: it finds every placeholder in the paragraph text and rewrites the runs, collapsing a marker that happens to span several runs the same way. Only the overlapping slices of the XML runs are changed (`paragraph.runs` plus hyperlinked runs from `iter_inner_content()`); a hyperlink whose text is fully replaced by a mask (e.g. a `mailto:` email) is **unwrapped** (the `w:hyperlink` element is replaced by its runs and the relationship is dropped), so the masked document carries no dangling link.
 - `router.py` — `POST /api/mask`, `POST /api/mask-file`, `POST /api/unmask`, `POST /api/unmask-file`.
 
-Default labels: `person, phone, email, address, organization`. Russian section titles: `Физлица, Номера телефонов, Email, Организации, Адреса`.
+Default labels: `person, phone, email, link, address, organization`. Russian section titles (in keys-file order): `Физлица, Номера телефонов, Email, Ссылки, Организации, Адреса`.
 
 ## API (back, prefix `/api`)
 
 - `POST /mask` — body `{"text": "..."}` → `{"text": "<masked>", "masked_entities": [{label, text, start, end, score}], "keys": "<YAML>"}`. 422 for empty/whitespace text.
 - `POST /mask-file` — multipart field `file` (.docx) → a **ZIP** (`Content-Disposition: attachment`, `application/zip`) holding `<base> (замаскированный).docx` and `<base> (ключи демаскировки).yaml`, with the masked-entity count in the `X-Masked-Count` header and a per-label JSON map in `X-Masked-Breakdown` (e.g. `{"person":2,"phone":1}`). The archive keeps the two artifacts of one run together; the **front unpacks it** and offers them as two separate downloads, the user never sees the ZIP. 422 for non-`.docx` or empty files.
-- `POST /unmask` — body `{"text": "...", "keys": "<YAML>"}` → `{"text": "<restored>"}`. Unknown placeholders are left as-is; unknown key sections are ignored.
+- `POST /unmask` — body `{"text": "...", "keys": "<YAML>"}` → `{"text": "<restored>"}`. The keys are validated by `validate_keys_yaml` first: empty/malformed YAML, unknown sections, non-list sections, empty values, duplicate values or a duplicated section name all fail with **422** and a Russian `detail`. Unknown placeholders in the text are left as-is.
 - `POST /unmask-file` — multipart fields `file` (masked .docx) and `keys` (YAML as a form field) → the restored `.docx` (`Content-Disposition: attachment`, `application/vnd...docx`).
 - `GET /health` — readiness probe used by Docker healthcheck; always `ok` (no warm-up).
 
@@ -95,7 +159,7 @@ The header brand mirrors ReportCollector: the `ruschem_icon.png` icon (also the 
 
 ## Deployment (prod)
 
-`just prod` builds the prod-profile images and starts `dm-back` + `dm-front`. The front publishes `FRONT_PORT`, the back `BACKEND_PORT`. The backend starts instantly — there is no model download and no persistent cache volume. The base image is Alpine (`python:3.14-alpine`), matching the project convention, because dropping PyTorch removed the glibc/musl constraint.
+`just prod` builds the prod-profile images and starts `dm-back` + `dm-front`. The front publishes `FRONT_PORT`, the back `BACKEND_PORT`. The backend starts instantly — there is no model download and no persistent cache volume. The base image is Alpine (`python:3.15-alpine`), matching the project convention, because dropping PyTorch removed the glibc/musl constraint.
 
 ## CI stack (`infra/compose.ci.yaml`)
 
@@ -103,6 +167,6 @@ The header brand mirrors ReportCollector: the `ruschem_icon.png` icon (also the 
 
 ## Testing
 
-- **Back** (`back/tests/`): pytest with `filterwarnings=error` and ≥80% branch coverage. The pipeline is deterministic, so tests assert exact output — no stubs and no network. Files: `test_rule_based.py` (CAPSLOCK, inflected names, phone formats, emails, addresses, org prefixes, label overrides), `test_mask.py` (service + `/api/mask` endpoint), `test_docx.py` (run-level formatting preservation), `test_mask_file.py` (multipart endpoints + download headers).
+- **Back** (`back/tests/`): pytest with `filterwarnings=error` and ≥80% branch coverage. The pipeline is deterministic, so tests assert exact output — no stubs and no network. Files: `test_rule_based.py` (CAPSLOCK, inflected names, phone formats, emails, addresses, org prefixes, label overrides), `test_mask.py` (service + `/api/mask` endpoint), `test_mapping.py` (keys YAML build/validate), `test_docx.py` (run-level formatting preservation), `test_unmask.py` (keys validation and text/DOCX restore), `test_mask_file.py` (multipart endpoints + download headers).
 - **Front** (`front/src/**/__tests__/`): `bun test` with happy-dom (`front/src/test-setup.ts`). Covers the server-side proxy contract (`shared/api/mask.ts`) and config resolution (`shared/config.ts`).
 - **e2e** (`front/e2e/`): Playwright `smoke` project against a running stack (`/api/health`, page render, text-mask round-trip). Setup — `docs/WORKFLOW.md`.
