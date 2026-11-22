@@ -69,26 +69,26 @@ bugfix support until ~2028-10); the backend targets it explicitly.
 
 ### Known configuration mismatches (as of 2026-11-22)
 
-Documented problems, not decisions — each one gets its own change when fixed:
-
-1. **TLS verification is bypassed for dependency installs.** `back/Dockerfile`
-   deps stage runs `uv sync --allow-insecure-host pypi.org --allow-insecure-host
-   files.pythonhosted.org`; `front/Dockerfile` base stage sets
-   `NODE_TLS_REJECT_UNAUTHORIZED=0` (inherited by the dev/build stages); the
-   host `justfile` exports `UV_SYSTEM_CERTS=1` and `NODE_OPTIONS=--use-system-ca`.
-   These are corporate-proxy workarounds, not trust decisions — the intended fix
-   is proper CA trust (`NODE_EXTRA_CA_CERTS`, system trust store) with no
-   insecure flags in images.
-3. **`front/Dockerfile` prod stage runs as root.** The backend image already
-   drops to `appuser`; the frontend `node:26-alpine` stage has no `USER`.
-4. **Git/CI topology diverges from the workflow docs.** Origin currently holds
+1. **TLS verification is bypassed for dependency installs — maintainer decision.**
+   `back/Dockerfile` deps stage runs `uv sync --allow-insecure-host pypi.org
+   --allow-insecure-host files.pythonhosted.org`; `front/Dockerfile` base stage
+   sets `NODE_TLS_REJECT_UNAUTHORIZED=0` (build/dev stages only — the Node
+   production runtime does not inherit it); the host `justfile` exports
+   `UV_SYSTEM_CERTS=1` and `NODE_OPTIONS=--use-system-ca`. Accepted as the
+   corporate-proxy workaround (mirrors ReportCollector, where the same setup
+   works for uv and bun). The `node` prod runtime verifies TLS normally. If a
+   corporate CA becomes available, replace the bypasses with
+   `NODE_EXTRA_CA_CERTS` / system trust store.
+2. **Git/CI topology diverges from the workflow docs.** Origin currently holds
    only `feat/demasking`; `main`/`dev` exist locally. CI push/PR triggers fire
    only for `main`/`dev`, so pushes to other branches run no CI. The job named
    `CI required` is not a required check by itself — branch rulesets live in
    GitHub repository settings and cannot be verified from the repo.
-5. **compose prod publishes the backend port to the host** (`${BACKEND_PORT}:${BACKEND_PORT}`),
-   so the backend is reachable directly, bypassing the front proxy. Loopback-only
-   or internal-network-only publishing is the intended hardening.
+
+Resolved (kept for the record): the frontend prod container now runs as the
+unprivileged `node` user, and compose prod publishes the backend port to
+loopback only (`127.0.0.1:$BACKEND_PORT`), so the API is no longer reachable
+from the network directly.
 
 ## Environment variables (root `.env`, single source)
 

@@ -26,12 +26,15 @@ RUN bun run build
 FROM node:26-alpine AS prod
 ARG PORT=5001
 EXPOSE ${PORT}
+# Run as the image's unprivileged `node` user; the copied app tree is chowned
+# so the standalone server needs no root to read its files or write caches.
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
     PORT=${PORT}
 WORKDIR /app
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+USER node
 CMD ["node", "server.js"]
