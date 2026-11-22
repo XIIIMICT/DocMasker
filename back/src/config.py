@@ -6,8 +6,6 @@ from functools import lru_cache
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from src.masking.constants import resolve_labels
-
 
 class Settings(BaseSettings):
     """Environment-driven configuration (single source: root .env)."""
@@ -20,8 +18,9 @@ class Settings(BaseSettings):
 
     app_name: str = "DocMasker API"
     backend_port: int = Field(default=8000, validation_alias="BACKEND_PORT")
-    #: Pipe-separated override of the active PII label set (see `constants.py`).
-    mask_labels: str | None = Field(default=None, validation_alias="MASK_LABELS")
+    #: Removed together with the env-var label override (ADR-0001): a config
+    #: that still sets MASK_LABELS fails loudly instead of being ignored.
+    mask_labels_removed: str | None = Field(default=None, validation_alias="MASK_LABELS")
     # Resource limits for the file/text endpoints. The Next proxy may enforce
     # the same values for early 413s, but the backend is the real boundary.
     max_upload_mb: int = Field(default=25, validation_alias="UPLOAD_MAX_MB")
@@ -44,15 +43,16 @@ class Settings(BaseSettings):
             return json.loads(stripped)
         return [origin.strip() for origin in stripped.split(",") if origin.strip()]
 
-    @field_validator("mask_labels", mode="after")
+    @field_validator("mask_labels_removed", mode="after")
     @classmethod
-    def _split_labels(cls, value: str | None) -> str | None:
-        if not value:
-            return None
-        # resolve_labels rejects duplicates/unknown labels at startup (fail fast)
-        # before the masker ever runs with a half-valid configuration.
-        resolved = resolve_labels(value.split("|"))
-        return "|".join(resolved)
+    def _reject_mask_labels(cls, value: str | None) -> str | None:
+        if value:
+            msg = (
+                "MASK_LABELS удалена: типы сущностей задаются профилями маскирования "
+                "(см. GET /api/profiles). Уберите переменную из окружения."
+            )
+            raise ValueError(msg)
+        return value
 
 
 @lru_cache

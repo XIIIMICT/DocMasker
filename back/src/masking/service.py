@@ -16,7 +16,7 @@ from collections import Counter
 from collections.abc import Mapping
 
 from .mapping import MaskKeys, placeholders_from_document, validate_keys_yaml
-from .rule_based import Entity, RuleBasedMasker, get_masker
+from .rule_based import Entity, RuleBasedMasker, get_masker_for
 from .schemas import MaskedEntity, MaskRequest, MaskStats, UnmaskRequest
 
 
@@ -80,13 +80,13 @@ def mask_stats(entities: list[MaskedEntity]) -> MaskStats:
 def mask_with(masker: RuleBasedMasker, text: str) -> tuple[str, list[MaskedEntity], MaskKeys]:
     """Detect and mask `text` with an explicit masker (used by tests/docx)."""
     entities = [to_schema(entity) for entity in masker.detect(text)]
-    keys = MaskKeys()
+    keys = MaskKeys(masker.profile)
     return mask_text(text, entities, keys), entities, keys
 
 
 def mask_document(request: MaskRequest) -> tuple[str, list[MaskedEntity], MaskKeys]:
-    """Run the full pipeline for a `/api/mask` request using the singleton masker."""
-    return mask_with(get_masker(), request.text)
+    """Run the full pipeline for a `/api/mask` request with the request's profile."""
+    return mask_with(get_masker_for(request.profile_id), request.text)
 
 
 def unmask_document(request: UnmaskRequest) -> str:

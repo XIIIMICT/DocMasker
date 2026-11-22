@@ -7,6 +7,10 @@ class MaskRequest(BaseModel):
     """Incoming text to mask."""
 
     text: str = Field(min_length=1, description="Source text to mask sensitive information in.")
+    profile_id: str | None = Field(
+        default=None,
+        description="Masking profile to run (see GET /api/profiles); omitted = the default profile.",
+    )
 
 
 class MaskedEntity(BaseModel):
@@ -17,6 +21,29 @@ class MaskedEntity(BaseModel):
     start: int
     end: int
     score: float
+
+
+class ProfileLabelInfo(BaseModel):
+    """One label of a masking profile, in display order."""
+
+    id: str
+    title: str
+    order: int
+
+
+class ProfileInfo(BaseModel):
+    """A masking profile as advertised to clients (read-only metadata)."""
+
+    profile_id: str
+    version: int
+    display_name: str
+    labels: list[ProfileLabelInfo]
+
+
+class ProfilesResponse(BaseModel):
+    """All registered masking profiles."""
+
+    profiles: list[ProfileInfo]
 
 
 class MaskStats(BaseModel):
