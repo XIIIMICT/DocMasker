@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     backend_port: int = Field(default=8000, validation_alias="BACKEND_PORT")
     #: Pipe-separated override of the active PII label set (see `constants.py`).
     mask_labels: str | None = Field(default=None, validation_alias="MASK_LABELS")
+    # Resource limits for the file/text endpoints. The Next proxy may enforce
+    # the same values for early 413s, but the backend is the real boundary.
+    max_upload_mb: int = Field(default=25, validation_alias="UPLOAD_MAX_MB")
+    max_text_chars: int = Field(default=200_000, validation_alias="MAX_TEXT_CHARS")
+    max_keys_chars: int = Field(default=1_000_000, validation_alias="MAX_KEYS_CHARS")
     # Defaults to local dev origins. Only relevant when the browser talks to
     # the backend directly (the Next frontend proxies /api/* server-side).
     backend_cors_origins: list[str] = Field(

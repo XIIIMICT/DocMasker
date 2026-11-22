@@ -7,7 +7,8 @@ export const maxDuration = 3600;
 /**
  * Forward a DOCX unmask request to the backend. The browser sends a multipart
  * form with the masked file and the keys (YAML text); we replay it server-side
- * to the back and return the restored .docx verbatim.
+ * to the back and return the resulting ZIP (restored .docx + report manifest)
+ * verbatim.
  */
 export async function POST(request: Request) {
     const formData = await request.formData();
@@ -34,14 +35,10 @@ export async function POST(request: Request) {
     });
 
     const forwarded = new Headers({
-        "Content-Type":
-            response.headers.get("Content-Type") ??
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "Content-Type": response.headers.get("Content-Type") ?? "application/zip",
     });
     const disposition = response.headers.get("Content-Disposition");
     if (disposition) forwarded.set("Content-Disposition", disposition);
-    const unused = response.headers.get("X-Unused-Keys");
-    if (unused) forwarded.set("X-Unused-Keys", unused);
 
     return new Response(await response.arrayBuffer(), {
         headers: forwarded,
