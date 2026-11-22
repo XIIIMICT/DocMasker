@@ -86,6 +86,14 @@ ignore = [
     "BLE001",  # Degraded windowing fallback may catch any prepare_batch error
     "SLF001",  # python-docx lxml element access (paragraph._p) for stable identity
 ]
+"benchmarks/*" = [
+    "ANN001",  # Benchmark helpers take the shared masker; typing it imports src internals
+    "ANN201",  # Probe entry points return None implicitly
+    "ARG001",  # The masker argument documents intent even when the probe uses get_masker()
+    "S101",  # Benchmarks double as reproducer tests and rely on assert
+    "S311",  # Synthetic data generation, not cryptography
+    "T201",  # Benchmarks print their measurements
+]
 "tests/*" = [
     "ANN001",  # Параметры тестов не аннотируются
     "ANN201",  # Возвращаемые типы фикстур не аннотируются
