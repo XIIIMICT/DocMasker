@@ -2,7 +2,7 @@
 
 import io
 import json
-from urllib.parse import unquote
+import zipfile
 
 from docx import Document as DocxDocument
 from httpx2 import ASGITransport, AsyncClient
@@ -169,14 +169,21 @@ async def test_post_unmask_file_endpoint() -> None:
         )
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith(
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    assert response.headers["content-type"].startswith("application/zip")
     assert "filename*=UTF-8''" in response.headers["content-disposition"]
-    text = "\n".join(p.text for p in DocxDocument(io.BytesIO(response.content)).paragraphs)
+    assert "x-unused-keys" not in response.headers
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        assert names == {
+            "доклад (демаскированный).docx",
+            "доклад (отчёт о демаскировке).json",
+        }
+        restored_docx = archive.read("доклад (демаскированный).docx")
+        manifest = json.loads(archive.read("доклад (отчёт о демаскировке).json").decode("utf-8"))
+    text = "\n".join(p.text for p in DocxDocument(io.BytesIO(restored_docx)).paragraphs)
     assert text == "Контакты: Иван Петров, тел +7 900 123-45-67."
     # Every key was applied.
-    assert json.loads(unquote(response.headers["x-unused-keys"])) == []
+    assert manifest == {"unused_keys": []}
 
 
 async def test_post_unmask_file_endpoint_reports_unused_keys() -> None:
@@ -194,6 +201,7 @@ async def test_post_unmask_file_endpoint_reports_unused_keys() -> None:
         )
 
     assert response.status_code == 200
-    # The header is percent-encoded (latin-1 safe); decode it back.
-    unused = json.loads(unquote(response.headers["x-unused-keys"]))
-    assert unused == ["ООО «Рога и копыта»"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest_name = next(name for name in archive.namelist() if name.endswith(".json"))
+        manifest = json.loads(archive.read(manifest_name).decode("utf-8"))
+    assert manifest == {"unused_keys": ["ООО «Рога и копыта»"]}

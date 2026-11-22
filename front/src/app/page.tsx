@@ -11,7 +11,7 @@ import {
     validateKeysYaml,
     valuesFromKeys,
 } from "@/shared/api/mask";
-import { unpackMaskArchive } from "@/shared/api/mask-archive";
+import { unpackMaskArchive, unpackRestoreArchive } from "@/shared/api/mask-archive";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import {
     countKeysValues,
@@ -101,20 +101,6 @@ function fileKind(file: File): FileKind | null {
     return null;
 }
 
-/** Decode the RFC 5987 filename from a `Content-Disposition` header. */
-function parseDispositionFilename(disposition: string | null): string {
-    if (!disposition) return "";
-    const star = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-    if (star?.[1]) {
-        try {
-            return decodeURIComponent(star[1]);
-        } catch {
-            /* fall through to the ASCII fallback */
-        }
-    }
-    return disposition.match(/filename="([^"]+)"/)?.[1] ?? "";
-}
-
 /** Parse the backend's `X-Masked-Breakdown` header (a JSON label→count map). */
 function parseBreakdown(header: string | null): Record<string, number> {
     if (!header) return {};
@@ -127,20 +113,6 @@ function parseBreakdown(header: string | null): Record<string, number> {
         /* malformed header — show no breakdown */
     }
     return {};
-}
-
-/** Parse the backend's `X-Unused-Keys` header (a percent-encoded JSON list). */
-function parseUnusedKeys(header: string | null): string[] | null {
-    if (!header) return null;
-    try {
-        const parsed = JSON.parse(decodeURIComponent(header)) as unknown;
-        if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
-            return parsed as string[];
-        }
-    } catch {
-        /* malformed header — fall back to the live derivation */
-    }
-    return null;
 }
 
 function DocIcon() {
@@ -994,11 +966,11 @@ export default function Home() {
                 if (!response.ok) {
                     throw new Error(await readErrorDetail(response));
                 }
-                const name = parseDispositionFilename(response.headers.get("Content-Disposition"));
-                const unused = parseUnusedKeys(response.headers.get("X-Unused-Keys"));
+                // The backend returns a ZIP: restored .docx + a report manifest.
+                const bundle = await unpackRestoreArchive(await response.blob());
                 update({
-                    restoredFile: { blob: await response.blob(), name },
-                    demaskUnused: unused,
+                    restoredFile: { blob: bundle.docx, name: bundle.docxName },
+                    demaskUnused: bundle.manifest.unused_keys,
                 });
             } else {
                 const response = await requestTextUnmask();
