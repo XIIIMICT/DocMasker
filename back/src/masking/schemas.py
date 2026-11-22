@@ -10,7 +10,7 @@ class MaskRequest(BaseModel):
 
 
 class MaskedEntity(BaseModel):
-    """A single detected sensitive span in the *original* text."""
+    """A single detected sensitive span in the *original* text (internal)."""
 
     label: str
     text: str
@@ -19,11 +19,25 @@ class MaskedEntity(BaseModel):
     score: float
 
 
+class MaskStats(BaseModel):
+    """Aggregate counts per label — the client never receives raw entity values."""
+
+    total: int = Field(description="Total masked occurrences across all labels.")
+    occurrences_by_label: dict[str, int] = Field(description="Masked occurrence count per label.")
+    unique_by_label: dict[str, int] = Field(description="Distinct masked values per label.")
+
+
 class MaskResponse(BaseModel):
-    """The masked text, the detected entities and the demasking keys (YAML)."""
+    """
+    The masked text, aggregate statistics and the demasking keys (YAML).
+
+    Raw entity spans (original values + offsets) are deliberately not part of
+    the response: the UI only needs aggregates, so original PII values are not
+    duplicated over the wire (the keys file already carries the originals).
+    """
 
     text: str
-    masked_entities: list[MaskedEntity]
+    stats: MaskStats
     keys: str = Field(description="Demasking keys as YAML (empty when nothing was masked).")
 
 

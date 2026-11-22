@@ -1,28 +1,34 @@
 import { describe, expect, it } from "bun:test";
 
-import { countKeysValues, countLabels, statsBreakdown, totalText } from "@/shared/mask-stats";
+import {
+    countKeysValues,
+    statsBreakdown,
+    statsFromAggregate,
+    totalText,
+} from "@/shared/mask-stats";
 
-describe("countLabels", () => {
-    it("counts occurrences and unique values per label", () => {
-        const stats = countLabels([
-            { label: "person", text: "Иван Петров" },
-            { label: "person", text: "Иван Петров" },
-            { label: "organization", text: "АО «Росхим»" },
-        ]);
+describe("statsFromAggregate", () => {
+    it("maps the backend aggregates to the display stats", () => {
+        const stats = statsFromAggregate({
+            total: 3,
+            occurrences_by_label: { person: 2, organization: 1 },
+            unique_by_label: { person: 1, organization: 1 },
+        });
         expect(stats.total).toBe(3);
         expect(stats.byLabel).toEqual({ person: 2, organization: 1 });
         expect(stats.uniqueByLabel).toEqual({ person: 1, organization: 1 });
         expect(stats.unused).toEqual([]);
     });
 
-    it("counts links like any other label", () => {
-        const stats = countLabels([
-            { label: "link", text: "https://example.com" },
-            { label: "link", text: "https://example.com" },
-        ]);
-        expect(stats.total).toBe(2);
-        expect(stats.byLabel).toEqual({ link: 2 });
-        expect(stats.uniqueByLabel).toEqual({ link: 1 });
+    it("passes through an empty aggregate", () => {
+        const stats = statsFromAggregate({
+            total: 0,
+            occurrences_by_label: {},
+            unique_by_label: {},
+        });
+        expect(stats.total).toBe(0);
+        expect(stats.byLabel).toEqual({});
+        expect(stats.uniqueByLabel).toEqual({});
     });
 });
 
@@ -48,12 +54,11 @@ describe("countKeysValues", () => {
 
 describe("statsBreakdown", () => {
     it("renders one line per label with unique counts", () => {
-        const stats = countLabels([
-            { label: "person", text: "Иван" },
-            { label: "person", text: "Пётр" },
-            { label: "person", text: "Иван" },
-            { label: "organization", text: "ООО Ромашка" },
-        ]);
+        const stats = statsFromAggregate({
+            total: 4,
+            occurrences_by_label: { person: 3, organization: 1 },
+            unique_by_label: { person: 2, organization: 1 },
+        });
         expect(statsBreakdown(stats)).toBe(
             "Физлица: 3 (2 уникальных)\nОрганизации: 1 (1 уникальный)",
         );
@@ -79,7 +84,11 @@ describe("statsBreakdown", () => {
 
 describe("totalText", () => {
     it("pluralises the total", () => {
-        const stats = countLabels([{ label: "person", text: "Иван" }]);
+        const stats = statsFromAggregate({
+            total: 1,
+            occurrences_by_label: { person: 1 },
+            unique_by_label: { person: 1 },
+        });
         expect(totalText(stats)).toBe("1 фрагмент");
         expect(totalText({ ...stats, total: 3 })).toBe("3 фрагмента");
         expect(totalText({ ...stats, total: 5 })).toBe("5 фрагментов");

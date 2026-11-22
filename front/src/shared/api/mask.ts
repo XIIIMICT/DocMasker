@@ -1,16 +1,16 @@
 import { getBackendInternalUrl } from "@/shared/config";
 
-export interface MaskedEntity {
-    label: string;
-    text: string;
-    start: number;
-    end: number;
-    score: number;
+/** Aggregate counts the backend sends instead of raw entity values. */
+export interface MaskStatsPayload {
+    total: number;
+    occurrences_by_label: Record<string, number>;
+    unique_by_label: Record<string, number>;
 }
 
 export interface MaskResponse {
     text: string;
-    masked_entities: MaskedEntity[];
+    /** Aggregate counts per label — the backend never sends raw entity values. */
+    stats: MaskStatsPayload;
     /** Demasking keys as YAML (empty string when nothing was masked). */
     keys: string;
 }

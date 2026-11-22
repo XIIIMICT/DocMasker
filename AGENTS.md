@@ -27,7 +27,7 @@ DocMasker masks sensitive information in text using a **deterministic rule-based
 ## API
 
 - `GET /health` — readiness probe; always `ok` (the backend starts instantly — no model to load).
-- `POST /api/mask` — body `{"text": "..."}` → `{"text": "<masked>", "masked_entities": [{label, text, start, end, score}], "keys": "<YAML>"}` (score is `1.0` for deterministic matches). Every entity gets a numbered placeholder `[LABEL_N]` and its value goes into `keys`; the same string repeated reuses one number/key.
+- `POST /api/mask` — body `{"text": "..."}` → `{"text": "<masked>", "stats": {"total", "occurrences_by_label", "unique_by_label"}, "keys": "<YAML>"}` (aggregates only — raw entity values/offsets never leave the API). Every entity gets a numbered placeholder `[LABEL_N]` and its value goes into `keys`; the same string repeated reuses one number/key.
 - `POST /api/mask-file` — multipart field `file` (.docx) → a **ZIP** holding `<base> (замаскированный).docx` + `<base> (ключи демаскировки).yaml` (`Content-Disposition: attachment`), count in `X-Masked-Count`, per-label JSON in `X-Masked-Breakdown`. The **front unpacks** the ZIP (jszip) and offers the two files as separate downloads — the user never sees the archive. `.txt` is **not** sent to the backend — the front reads it and puts its contents in the input text.
 - `POST /api/unmask` — body `{"text": "<masked>", "keys": "<YAML>"}` → `{"text": "<restored>"}`. Invalid keys → 422 with a Russian `detail` (from `validate_keys_yaml`). Unknown placeholders stay as-is.
 - `POST /api/unmask-file` — multipart `file` (masked .docx) + `keys` (YAML text field) → the restored `.docx` for download. Invalid keys → 422.

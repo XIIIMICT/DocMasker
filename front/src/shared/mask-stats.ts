@@ -1,4 +1,4 @@
-import { keyEntries } from "@/shared/api/mask";
+import { keyEntries, type MaskStatsPayload } from "@/shared/api/mask";
 
 /**
  * Masking / demasking totals for the result-label tooltip.
@@ -87,18 +87,12 @@ export function statsBreakdown(stats: MaskStats): string {
     return lines.join("\n");
 }
 
-/** Build masking stats from the detected entities. */
-export function countLabels(entities: { label: string; text: string }[]): MaskStats {
-    const byLabel: Record<string, number> = {};
-    const unique: Record<string, Set<string>> = {};
-    for (const entity of entities) {
-        byLabel[entity.label] = (byLabel[entity.label] ?? 0) + 1;
-        (unique[entity.label] ??= new Set()).add(entity.text);
-    }
+/** Build masking stats from the backend's aggregate response (no raw values). */
+export function statsFromAggregate(stats: MaskStatsPayload): MaskStats {
     return {
-        total: entities.length,
-        byLabel,
-        uniqueByLabel: uniqueCounts(unique),
+        total: stats.total,
+        byLabel: stats.occurrences_by_label,
+        uniqueByLabel: stats.unique_by_label,
         unused: [],
     };
 }

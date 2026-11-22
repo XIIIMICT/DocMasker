@@ -12,11 +12,12 @@ Unmasking is the inverse: replace every known placeholder with its original
 value.
 """
 
+from collections import Counter
 from collections.abc import Mapping
 
 from .mapping import MaskKeys, placeholders_from_document, validate_keys_yaml
 from .rule_based import Entity, RuleBasedMasker, get_masker
-from .schemas import MaskedEntity, MaskRequest, UnmaskRequest
+from .schemas import MaskedEntity, MaskRequest, MaskStats, UnmaskRequest
 
 
 def mask_text(text: str, entities: list[MaskedEntity], keys: MaskKeys) -> str:
@@ -60,6 +61,19 @@ def to_schema(entity: Entity) -> MaskedEntity:
         start=entity.start,
         end=entity.end,
         score=entity.score,
+    )
+
+
+def mask_stats(entities: list[MaskedEntity]) -> MaskStats:
+    """Aggregate per-label occurrence/unique counts (no raw values over the wire)."""
+    occurrences: Counter[str] = Counter(entity.label for entity in entities)
+    uniques: dict[str, set[str]] = {}
+    for entity in entities:
+        uniques.setdefault(entity.label, set()).add(entity.text)
+    return MaskStats(
+        total=len(entities),
+        occurrences_by_label=dict(occurrences),
+        unique_by_label={label: len(values) for label, values in uniques.items()},
     )
 
 
