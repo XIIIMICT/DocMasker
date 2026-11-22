@@ -17,15 +17,15 @@ import difflib
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Protocol
 
 import phonenumbers
 from natasha import AddrExtractor, MorphVocab, NamesExtractor
 
-from src.config import get_settings
-
-from .constants import ALWAYS_MASK_ORGANIZATIONS, resolve_labels
+from .constants import DEFAULT_LABELS  # noqa: F401  (kept for the API narrative)
+from .detectors import DETECTORS
+from .profiles import DEFAULT_PROFILE, MaskingProfile, ProfilesValidationError, get_profile
 
 # --- Label vocabulary (mask markers are the upper-cased label) ---------------
 PERSON = "person"
@@ -35,8 +35,8 @@ ADDRESS = "address"
 ORGANIZATION = "organization"
 LINK = "link"
 
-#: Entities detected by this pipeline, in the order they are reported.
-DETECTABLE_LABELS: tuple[str, ...] = (PERSON, PHONE, EMAIL, LINK, ADDRESS, ORGANIZATION)
+#: Labels the default profile reports; kept for the API-docs narrative.
+DETECTABLE_LABELS: tuple[str, ...] = DEFAULT_PROFILE.label_ids()
 
 # --- Regular expressions -----------------------------------------------------
 # Email: standard local part plus subdomain chains ("a.b+c@mail.corp.ru").
@@ -368,8 +368,7 @@ def _org_name_span(text: str, end: int) -> int:
     return end
 
 
-@lru_cache(maxsize=1)
-def _always_mask_re() -> re.Pattern[str] | None:
+def _always_mask_re(organizations: tuple[str, ...]) -> re.Pattern[str] | None:
     """
     Case-insensitive pattern for the always-mask organisation list.
 
@@ -377,10 +376,11 @@ def _always_mask_re() -> re.Pattern[str] | None:
     must never leak is masked even when no legal-form prefix or extractor
     matched it (bare "Росхим", lowercase "росхим", "АО Росхим", …). An optional
     Cyrillic tail covers inflected mentions ("Росхима", "Росхиме", "Росхимом").
+    The list is profile configuration (ADR-0001), not a constant of the algorithm.
     """
-    if not ALWAYS_MASK_ORGANIZATIONS:
+    if not organizations:
         return None
-    names = "|".join(re.escape(name) for name in sorted(ALWAYS_MASK_ORGANIZATIONS, key=len, reverse=True))
+    names = "|".join(re.escape(name) for name in sorted(organizations, key=len, reverse=True))
     return re.compile(rf"(?<![A-Za-zА-Яа-яЁё0-9])(?:{names})[а-яё]*(?![A-Za-zА-Яа-яЁё0-9])", re.IGNORECASE)
 
 
@@ -390,14 +390,43 @@ class RuleBasedMasker:
 
     Construct once per process (natasha extractors build an in-memory
     morphological dictionary and are expensive to create) and reuse; `mask` is
-    stateless and thread-safe for read-only use.
+    stateless and thread-safe for read-only use. The `profile` selects the
+    active labels/detectors and the always-mask list (ADR-0001) — `for_labels`
+    is the convenience constructor for tests that only need a label subset.
     """
 
-    def __init__(self, labels: Iterable[str] | None = None) -> None:
-        self.labels = resolve_labels(labels)
+    def __init__(self, profile: MaskingProfile | None = None) -> None:
+        self.profile = profile or DEFAULT_PROFILE
+        self.labels = self.profile.label_ids()
         self._morph = MorphVocab()
         self._names = NamesExtractor(self._morph)
         self._addresses = AddrExtractor(self._morph)
+        self._always_mask_pattern = _always_mask_re(self.profile.always_mask_organizations)
+
+    @classmethod
+    def for_labels(cls, labels: Iterable[str]) -> RuleBasedMasker:
+        """Build a masker over the default profile narrowed to `labels` (test helper)."""
+        wanted = tuple(label.strip() for label in labels if label.strip())
+        unknown = [label for label in wanted if label not in DEFAULT_PROFILE.label_ids()]
+        if unknown:
+            known = ", ".join(DEFAULT_PROFILE.label_ids())
+            msg = f"Неизвестный тип сущности: «{unknown[0]}». Допустимые значения: {known}."
+            raise ProfilesValidationError(msg)
+        if len(set(wanted)) != len(wanted):
+            msg = f"Тип сущности указан больше одного раза: {', '.join(wanted)}."
+            raise ProfilesValidationError(msg)
+        profile = MaskingProfile(
+            profile_id=DEFAULT_PROFILE.profile_id,
+            version=DEFAULT_PROFILE.version,
+            display_name=DEFAULT_PROFILE.display_name,
+            labels=tuple(meta for meta in DEFAULT_PROFILE.labels if meta.id in wanted) or DEFAULT_PROFILE.labels,
+            detectors=tuple(d for d in DEFAULT_PROFILE.detectors if DETECTORS[d].label in wanted)
+            or DEFAULT_PROFILE.detectors,
+            # The always-mask list targets organizations, so it only applies
+            # when the organization label is part of the subset.
+            always_mask_organizations=DEFAULT_PROFILE.always_mask_organizations if "organization" in wanted else (),
+        )
+        return cls(profile)
 
     # -- span providers -------------------------------------------------------
 
@@ -473,13 +502,13 @@ class RuleBasedMasker:
             yield Entity(ORGANIZATION, text[span_start:span_end], span_start, span_end)
 
     def _find_always_masked(self, text: str) -> Iterator[Entity]:
-        """Brands from ALWAYS_MASK_ORGANIZATIONS, regardless of context/case."""
+        """Profile-configured brands (see `always_mask_organizations`), any context/case."""
         if ORGANIZATION not in self.labels:
             return
-        regex = _always_mask_re()
-        if regex is None:
+        pattern = self._always_mask_pattern
+        if pattern is None:
             return
-        for match in regex.finditer(text):
+        for match in pattern.finditer(text):
             yield Entity(ORGANIZATION, match.group(0), match.start(), match.end())
 
     # -- public API -----------------------------------------------------------
@@ -487,12 +516,8 @@ class RuleBasedMasker:
     def detect(self, text: str) -> list[Entity]:
         """Return non-overlapping entities found in `text`, sorted by position."""
         raw: list[Entity] = []
-        raw.extend(self._find_emails(text))
-        raw.extend(self._find_links(text))
-        raw.extend(self._find_phones(text))
-        raw.extend(self._find_persons(text))
-        raw.extend(self._find_addresses(text))
-        raw.extend(self._find_organizations(text))
+        for detector_id in self.profile.detectors:
+            raw.extend(DETECTORS[detector_id].run(self, text))
         merged = _merge_spans(raw)
         # Last resort: brands that must never leak, even when no rule matched
         # them on their own (bare name, no legal-form prefix). Existing spans win.
@@ -587,12 +612,17 @@ def _looks_like_address(raw: str) -> bool:
 @lru_cache(maxsize=1)
 def get_masker() -> RuleBasedMasker:
     """
-    Process-wide masker singleton.
+    Process-wide masker for the default profile.
 
     Building the natasha extractors loads the morphological dictionary into
     memory (``MorphVocab``), which is why this must be cached rather than
-    re-created per request.
+    re-created per request. A non-default profile gets its own cached masker
+    via `get_masker_for`.
     """
-    raw = get_settings().mask_labels
-    labels = raw.split("|") if raw else None
-    return RuleBasedMasker(labels)
+    return get_masker_for(None)
+
+
+@cache
+def get_masker_for(profile_id: str | None) -> RuleBasedMasker:
+    """Masker singleton per profile id (`None` = the default profile)."""
+    return RuleBasedMasker(get_profile(profile_id))

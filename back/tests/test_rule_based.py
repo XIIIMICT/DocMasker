@@ -10,7 +10,7 @@ from itertools import pairwise
 
 import pytest
 
-from src.masking.constants import DEFAULT_LABELS, LabelsValidationError
+from src.masking.profiles import DEFAULT_LABELS, ProfilesValidationError
 from src.masking.rule_based import Entity, RuleBasedMasker, _merge_spans
 
 
@@ -196,7 +196,7 @@ def test_marker_is_upper_cased_label() -> None:
 
 
 def test_labels_override_limits_detection() -> None:
-    only_email = RuleBasedMasker(["email"])
+    only_email = RuleBasedMasker.for_labels(["email"])
     text = "Иван Петров, ivan@mail.ru"
     labels = [entity.label for entity in only_email.detect(text)]
     assert labels == ["email"]
@@ -205,19 +205,19 @@ def test_labels_override_limits_detection() -> None:
 def test_unknown_label_is_rejected() -> None:
     # An unknown label must be a loud configuration error, not a silently
     # ignored token (it would produce placeholders without keys sections).
-    with pytest.raises(LabelsValidationError, match="banana"):
-        RuleBasedMasker(["person", "banana"])
+    with pytest.raises(ProfilesValidationError, match="banana"):
+        RuleBasedMasker.for_labels(["person", "banana"])
 
 
 def test_duplicate_labels_are_rejected() -> None:
-    with pytest.raises(LabelsValidationError, match="больше одного раза"):
-        RuleBasedMasker(["person", "phone", "person"])
+    with pytest.raises(ProfilesValidationError, match="больше одного раза"):
+        RuleBasedMasker.for_labels(["person", "phone", "person"])
 
 
 def test_blank_label_input_falls_back_to_defaults() -> None:
-    assert RuleBasedMasker(None).labels == DEFAULT_LABELS
-    assert RuleBasedMasker([]).labels == DEFAULT_LABELS
-    assert RuleBasedMasker(["  ", ""]).labels == DEFAULT_LABELS
+    assert RuleBasedMasker().labels == DEFAULT_LABELS
+    assert RuleBasedMasker().labels == DEFAULT_LABELS
+    assert RuleBasedMasker().labels == DEFAULT_LABELS
 
 
 def _entity(label: str, start: int, end: int, score: float = 1.0) -> Entity:

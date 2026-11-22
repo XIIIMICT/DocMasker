@@ -8,8 +8,8 @@ from docx.oxml.ns import qn
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
 
-from src.masking.docx_service import mask_docx_in_memory
-from src.masking.mapping import parse_keys_yaml
+from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
+from src.masking.mapping import parse_keys_yaml, placeholders_from_document
 from src.masking.rule_based import RuleBasedMasker
 
 
@@ -146,6 +146,45 @@ def test_hyperlinked_email_collapses_to_plain_mask() -> None:
     assert [entity.label for entity in entities] == ["email"]
 
 
+def test_alternative_profile_masks_only_its_labels_and_keys_still_restore() -> None:
+    # ADR-0001 extensibility criterion: a profile with fewer detectors works
+    # without touching the orchestrator, and its keys v2 file restores via the
+    # default registered titles.
+    from src.masking.profiles import LabelMeta, MaskingProfile
+
+    profile = MaskingProfile(
+        profile_id="emails-only",
+        version=1,
+        display_name="Только email",
+        labels=(
+            LabelMeta(id="email", title="Email", order=0),
+            LabelMeta(id="person", title="Физлица", order=1),
+        ),
+        detectors=("email",),
+    )
+    doc = DocxDocument()
+    p = doc.add_paragraph()
+    p.add_run("Автор Иван Петров, почта ")
+    _add_hyperlink(p, "dksir@ruschem.ru", "mailto:dksir@ruschem.ru")
+    out = io.BytesIO()
+    doc.save(out)
+
+    masked_bytes, entities, keys = mask_docx_in_memory(out.getvalue(), RuleBasedMasker(profile))
+
+    # The person is untouched (no person detector); the email is masked.
+    assert [entity.label for entity in entities] == ["email"]
+    document = DocxDocument(io.BytesIO(masked_bytes))
+    assert "Иван Петров" in document.paragraphs[0].text
+    assert "[EMAIL_1]" in document.paragraphs[0].text
+    # The keys file records the producing profile (v2 envelope).
+    assert "профиль: emails-only" in keys.to_yaml()
+    # Restoring works through the default registered titles.
+    placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
+    restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)
+    assert unused == []
+    assert "dksir@ruschem.ru" in DocxDocument(io.BytesIO(restored)).paragraphs[0].text
+
+
 def test_repeated_entities_in_different_paragraphs_are_all_reported() -> None:
     # Regression: equal local (start, end, label) spans in different paragraphs
     # are distinct occurrences — none may be dropped from the reported entities.
@@ -206,7 +245,7 @@ def test_docx_empty_file_is_fine() -> None:
 
 
 def test_docx_accepts_explicit_masker() -> None:
-    only_email = RuleBasedMasker(["email"])
+    only_email = RuleBasedMasker.for_labels(["email"])
     doc = DocxDocument()
     doc.add_paragraph("Иван Петров, ivan@mail.ru")
     out = io.BytesIO()

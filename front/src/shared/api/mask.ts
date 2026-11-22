@@ -21,7 +21,7 @@ export interface UnmaskResponse {
 
 /**
  * Russian section titles accepted in a demasking keys file. Must match the
- * backend's `LABEL_TITLES` (see `docs/ARCHITECTURE.md`).
+ * backend's registered titles (see `docs/adr/0001-masking-profiles.md`).
  */
 export const KEYS_SECTION_TITLES = [
     "Физлица",
@@ -31,6 +31,10 @@ export const KEYS_SECTION_TITLES = [
     "Организации",
     "Адреса",
 ] as const;
+
+/** Envelope keys of a v2 keys file (ADR-0001): metadata, not sections. */
+const KEYS_ENVELOPE_KEYS = ["версия", "профиль", "версия_профиля"] as const;
+const KEYS_ENVELOPE_VERSION = 2;
 
 /** Russian keys section title → entity label (mirrors the backend `LABEL_TITLES`). */
 export const KEYS_TITLE_LABELS: Record<string, string> = {
@@ -107,6 +111,7 @@ export function validateKeysYaml(text: string): string | null {
         const match = line.match(/^([^\s#][^:]*):\s*$/);
         if (match === null) continue;
         const title = match[1].trim();
+        if ((KEYS_ENVELOPE_KEYS as readonly string[]).includes(title)) continue;
         if (seenSections.has(title)) {
             return `Раздел «${title}» встречается в файле больше одного раза.`;
         }
@@ -124,9 +129,22 @@ export function validateKeysYaml(text: string): string | null {
     if (typeof parsed !== "object" || Array.isArray(parsed)) {
         return "Файл ключей должен содержать словарь разделов.";
     }
-    const entries = Object.entries(parsed as Record<string, unknown>);
+    // A v2 keys file (ADR-0001) carries a metadata envelope before the sections.
+    let hasEnvelope = false;
+    const record = parsed as Record<string, unknown>;
+    if (KEYS_ENVELOPE_KEYS.some((key) => key in record)) {
+        hasEnvelope = true;
+        if (Number(record.версия) !== KEYS_ENVELOPE_VERSION) {
+            return `Неподдерживаемая версия файла ключей: ${String(record.версия)}. Ожидается ${KEYS_ENVELOPE_VERSION}.`;
+        }
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>).filter(
+        ([title]) => !(KEYS_ENVELOPE_KEYS as readonly string[]).includes(title),
+    );
     if (entries.length === 0) {
-        return "Файл ключей не содержит ни одного раздела.";
+        return hasEnvelope
+            ? "Файл ключей содержит метаданные, но не содержит ни одного раздела."
+            : "Файл ключей не содержит ни одного раздела.";
     }
     for (const [title, values] of entries) {
         if (!(KEYS_SECTION_TITLES as readonly string[]).includes(title)) {

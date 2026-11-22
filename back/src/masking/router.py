@@ -12,14 +12,40 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
 
 from src.config import get_settings
+from src.masking.profiles import ProfilesValidationError, get_profile, list_profiles
 
 from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from .docx_validation import DocxLimits, DocxValidationError, validate_docx_package
 from .mapping import KeysValidationError, placeholders_from_document, validate_keys_yaml
-from .schemas import MaskedEntity, MaskRequest, MaskResponse, UnmaskRequest, UnmaskResponse
+from .rule_based import get_masker_for
+from .schemas import (
+    MaskedEntity,
+    MaskRequest,
+    MaskResponse,
+    ProfilesResponse,
+    UnmaskRequest,
+    UnmaskResponse,
+)
 from .service import mask_document, mask_stats, unmask_document
 
 router = APIRouter(tags=["masking"])
+
+
+@router.get("/profiles", response_model=ProfilesResponse)
+async def profiles_endpoint() -> ProfilesResponse:
+    """List the registered masking profiles (read-only metadata)."""
+    return ProfilesResponse(
+        profiles=[
+            {
+                "profile_id": profile.profile_id,
+                "version": profile.version,
+                "display_name": profile.display_name,
+                "labels": [{"id": meta.id, "title": meta.title, "order": meta.order} for meta in profile.labels],
+            }
+            for profile in list_profiles()
+        ]
+    )
+
 
 _DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _ZIP_CONTENT_TYPE = "application/zip"
@@ -103,13 +129,17 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse:
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Текст больше допустимого ({limit} символов).",
         )
-    masked, entities, keys = mask_document(request)
+    try:
+        masked, entities, keys = mask_document(request)
+    except ProfilesValidationError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
     return MaskResponse(text=masked, stats=mask_stats(entities), keys=keys.to_yaml())
 
 
 @router.post("/mask-file")
 async def mask_file_endpoint(
     file: Annotated[UploadFile, File(description="DOCX file to mask")],
+    profile_id: Annotated[str | None, Form(description="Masking profile id (default profile when omitted)")] = None,
 ) -> Response:
     """Upload a .docx, mask PII in place (formatting preserved), return a ZIP of result + keys."""
     if not file.filename or not file.filename.lower().endswith(".docx"):
@@ -123,8 +153,12 @@ async def mask_file_endpoint(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
 
     try:
+        profile = get_profile(profile_id)
+    except ProfilesValidationError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+    try:
         validate_docx_package(source, upload_limits())
-        masked_bytes, entities, keys = mask_docx_in_memory(source)
+        masked_bytes, entities, keys = mask_docx_in_memory(source, get_masker_for(profile.profile_id))
     except DocxValidationError as error:
         raise HTTPException(status_code=error.http_status, detail=str(error)) from error
 
