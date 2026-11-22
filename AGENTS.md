@@ -39,7 +39,7 @@ Deterministic rules in `back/src/masking/rule_based.py` (`RuleBasedMasker`), in 
 
 ## Landmines (critical!)
 
-1. **`setuptools<81` is a hard runtime pin, not a lint convenience.** `natasha`→`pymorphy2` imports `pkg_resources` at runtime; on Python 3.14 setuptools is not a transitive dep, and setuptools ≥81 removed `pkg_resources`. Without the pin the first `MorphVocab()` raises `ModuleNotFoundError`. It also emits a `UserWarning`, so `filterwarnings=error` needs the scoped ignore in `back/pyproject.toml`.
+1. **`setuptools<81` is a hard runtime pin, not a lint convenience.** `natasha`→`pymorphy2` imports `pkg_resources` at runtime; on Python 3.15 setuptools is not a transitive dep (same since 3.12), and setuptools ≥81 removed `pkg_resources`. Without the pin the first `MorphVocab()` raises `ModuleNotFoundError`. It also emits a `UserWarning`, so `filterwarnings=error` needs the scoped ignore in `back/pyproject.toml`.
 2. **`natasha`'s morphological dictionary lives in memory and is expensive to build.** `MorphVocab()` + extractors load the pymorphy2 dictionary on first construction, so the masker is cached (`get_masker`, `lru_cache`) — never build a `RuleBasedMasker` per request. Tests construct one per test on purpose (isolated, still fast).
 3. **`natasha` extractors are not wired the way the docs imply.** In 1.6 the *multi-match* API is `extractor(text)` (calling the instance) — `extractor.find(text)` returns only the **first** `Match` (and `Match` is iterable, so a naive `for m in find(text)` silently unpacks into ints). There is no `natasha.OrganisationsExtractor`; `AddrExtractor` yields one match per component (`AddrPart`), not one whole address.
 4. **`NamesExtractor` over-fires on lone tokens and on two common words.** It matches prepositions, single letters, bare surnames (`fact.last` only) and any two adjacent words as a "given name + surname" (`из Сторон`, `Оператор ЭДО`). `RuleBasedMasker` keeps a match only when the fact has a given name **and** a surname/patronymic **and** both tokens are plausible proper names (`_is_name_token`: capitalised *and* a `Name`/`Surn`/`Patr` grammeme in natasha's dictionary) — don't drop either guard or false positives return.
@@ -81,5 +81,7 @@ Deterministic rules in `back/src/masking/rule_based.py` (`RuleBasedMasker`), in 
 - `front/AGENTS.md` — frontend-specific guide: commands, exact installed HeroUI version and the mandatory HeroUI docs source.
 - `docs/ARCHITECTURE.md` — system diagram, env vars, API, masking pipeline, canonical toolchain version table.
 - `docs/WORKFLOW.md` — environment, quality commands, languages, commits/branching, definition of done, working principles.
+- `docs/PRODUCTION_READINESS.md` — living findings matrix for the production-readiness effort (statuses, evidence, stage plan).
+- `back/benchmarks/` — reproducible perf probes and defect reproducers; run before/after perf-touching changes.
 
 **When behavior changes — update the matching section here and in `docs/` in the same change.** That's a requirement, not a wish: the docs are the only source of context for future agents. Record a new landmine here immediately; keep each fact in exactly one home (hot path in `AGENTS.md`, detail in `docs/`) so the two cannot drift.

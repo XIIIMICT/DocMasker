@@ -40,7 +40,7 @@ bugfix support until ~2028-10); the backend targets it explicitly.
 
 | Component | Manifest constraint | Resolved (lock/host) | CI | Docker / production runtime |
 |---|---|---|---|---|
-| Python | `==3.15.*` (`back/pyproject.toml`, `uv.lock`) | 3.15.0 (uv-managed) | **3.14 — mismatch, see below** | builder `uv:python3.15-alpine`, runtime `python:3.15-alpine` |
+| Python | `==3.15.*` (`back/pyproject.toml`, `uv.lock`) | 3.15.0 (uv-managed) | 3.15 (`setup-uv` python-version) | builder `uv:python3.15-alpine`, runtime `python:3.15-alpine` |
 | uv | — | 0.13.8 (host) | `astral-sh/setup-uv@v10.0.1` | `ghcr.io/astral-sh/uv:python3.15-alpine` (floating tag) |
 | Bun | `engines >=1.4` (`front/package.json`) | 1.4.4 (host) | `setup-bun@v2` bun-version `1.4` | `oven/bun:1.4-slim` (build) |
 | Node.js | — | 26.13.1 (host) | `setup-node@v7` version `26` | `node:26-alpine` (prod runtime, `node:26` in CI) |
@@ -71,11 +71,7 @@ bugfix support until ~2028-10); the backend targets it explicitly.
 
 Documented problems, not decisions — each one gets its own change when fixed:
 
-1. **CI Python is 3.14, the project requires `==3.15.*`.** The `back` job of
-   `.github/workflows/ci.yaml` sets `python-version: "3.14"`; `uv sync --locked`
-   against a lock that requires 3.15 cannot satisfy it. CI must use Python 3.15
-   (single minor, matching pyproject/Docker) — a runtime-consistency change.
-2. **TLS verification is bypassed for dependency installs.** `back/Dockerfile`
+1. **TLS verification is bypassed for dependency installs.** `back/Dockerfile`
    deps stage runs `uv sync --allow-insecure-host pypi.org --allow-insecure-host
    files.pythonhosted.org`; `front/Dockerfile` base stage sets
    `NODE_TLS_REJECT_UNAUTHORIZED=0` (inherited by the dev/build stages); the
