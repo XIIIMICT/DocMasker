@@ -9,22 +9,22 @@ follow when touching UI code.
 Manifest ranges in `package.json` are not the installed versions — always read
 `bun.lock` when you need the precise number. As of 2026-11-22:
 
-| Package | Manifest | Installed |
-|---|---|---|
-| next | `16.4.6` (pinned) | 16.4.6 |
-| react / react-dom | `19.3.1` (pinned) | 19.3.1 |
-| @heroui/react | `^3.2.7` | **3.2.7** |
-| @heroui/styles | `^3.2.7` | 3.2.7 |
-| docx-preview | `^0.4.1` | 0.4.1 |
-| jszip | `^3.10.2` | 3.10.2 |
-| undici | `^8.13.1` | 8.13.1 |
-| next-themes | `^0.4.6` | 0.4.6 |
-| iconoir-react | `^7.12.2` | 7.12.2 |
-| tailwindcss / @tailwindcss/postcss | `^4.3.5` | 4.3.5 |
-| typescript | `^7.0.2` | 7.0.2 |
-| oxlint / oxfmt | `^1.94.0` / `^0.79.0` | 1.94.0 / 0.79.0 |
-| @playwright/test | `^1.65.1` | 1.65.1 |
-| happy-dom | `^21.0.4` | 21.0.4 |
+| Package                            | Manifest              | Installed       |
+| ---------------------------------- | --------------------- | --------------- |
+| next                               | `16.4.6` (pinned)     | 16.4.6          |
+| react / react-dom                  | `19.3.1` (pinned)     | 19.3.1          |
+| @heroui/react                      | `^3.2.7`              | **3.2.7**       |
+| @heroui/styles                     | `^3.2.7`              | 3.2.7           |
+| docx-preview                       | `^0.4.1`              | 0.4.1           |
+| jszip                              | `^3.10.2`             | 3.10.2          |
+| undici                             | `^8.13.1`             | 8.13.1          |
+| next-themes                        | `^0.4.6`              | 0.4.6           |
+| iconoir-react                      | `^7.12.2`             | 7.12.2          |
+| tailwindcss / @tailwindcss/postcss | `^4.3.5`              | 4.3.5           |
+| typescript                         | `^7.0.2`              | 7.0.2           |
+| oxlint / oxfmt                     | `^1.94.0` / `^0.79.0` | 1.94.0 / 0.79.0 |
+| @playwright/test                   | `^1.65.1`             | 1.65.1          |
+| happy-dom                          | `^21.0.4`             | 21.0.4          |
 
 Runtime: Bun ≥ 1.4 (dev/typecheck — `bun check` needs ≥ 1.4.3); production
 container runs **Node 26** (`node:26-alpine`). HeroUI is **v3** — never mix in
@@ -96,16 +96,16 @@ Rules:
 
 ## Commands (from `front/`)
 
-| What | Command |
-|---|---|
-| Install | `bun install` |
-| Dev server | `bun run dev` |
-| Production build | `bun run build` |
-| Lint (fix) / lint check | `bun run lint` / `bun run lint:check` |
-| Format / format check | `bun run format` / `bun run format:check` |
-| Typecheck (`bun check`) | `bun run typecheck` |
-| Unit tests (bun test, happy-dom) | `bun run test` |
-| e2e (needs a running stack) | `bun run test:e2e --project=smoke` with `E2E_BASE_URL` |
+| What                             | Command                                                |
+| -------------------------------- | ------------------------------------------------------ |
+| Install                          | `bun install`                                          |
+| Dev server                       | `bun run dev`                                          |
+| Production build                 | `bun run build`                                        |
+| Lint (fix) / lint check          | `bun run lint` / `bun run lint:check`                  |
+| Format / format check            | `bun run format` / `bun run format:check`              |
+| Typecheck (`bun check`)          | `bun run typecheck`                                    |
+| Unit tests (bun test, happy-dom) | `bun run test`                                         |
+| e2e (needs a running stack)      | `bun run test:e2e --project=smoke` with `E2E_BASE_URL` |
 
 Notes:
 

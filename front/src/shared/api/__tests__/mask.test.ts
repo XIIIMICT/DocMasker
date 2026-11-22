@@ -29,7 +29,11 @@ describe("proxyMaskRequest", () => {
             expect(init?.method).toBe("POST");
             expect(JSON.parse(String(init?.body))).toEqual({ text: "Иван" });
             return new Response(
-                JSON.stringify({ text: "[PERSON_1]", masked_entities: [], keys: "" }),
+                JSON.stringify({
+                    text: "[PERSON_1]",
+                    stats: { total: 0, occurrences_by_label: {}, unique_by_label: {} },
+                    keys: "",
+                }),
                 { status: 200, headers: { "Content-Type": "application/json" } },
             );
         });
@@ -39,7 +43,7 @@ describe("proxyMaskRequest", () => {
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual({
             text: "[PERSON_1]",
-            masked_entities: [],
+            stats: { total: 0, occurrences_by_label: {}, unique_by_label: {} },
             keys: "",
         });
         expect(fetchMock).toHaveBeenCalledTimes(1);

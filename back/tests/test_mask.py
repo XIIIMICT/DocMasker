@@ -74,7 +74,13 @@ async def test_post_mask_endpoint() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["text"] == "[PERSON_1], [EMAIL_1]"
-    assert [entity["label"] for entity in body["masked_entities"]] == ["person", "email"]
+    # The response carries aggregates only - raw entity values never leave the API.
+    assert body["stats"] == {
+        "total": 2,
+        "occurrences_by_label": {"person": 1, "email": 1},
+        "unique_by_label": {"person": 1, "email": 1},
+    }
+    assert "masked_entities" not in body
     assert parse_keys_yaml(body["keys"]) == {
         "Физлица": ["Иван Петров"],
         "Email": ["ivan@mail.ru"],

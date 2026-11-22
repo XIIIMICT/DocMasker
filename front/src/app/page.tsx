@@ -15,9 +15,9 @@ import { unpackMaskArchive } from "@/shared/api/mask-archive";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import {
     countKeysValues,
-    countLabels,
     type MaskStats,
     statsBreakdown,
+    statsFromAggregate,
     totalText,
 } from "@/shared/mask-stats";
 import { Brand, type AppMode } from "@/shared/ui/brand";
@@ -911,7 +911,7 @@ export default function Home() {
             update({
                 result: data.text,
                 keys: data.keys,
-                stats: countLabels(data.masked_entities),
+                stats: statsFromAggregate(data.stats),
             });
         } catch (requestError) {
             update({

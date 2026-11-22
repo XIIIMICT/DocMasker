@@ -14,7 +14,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, 
 from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from .mapping import KeysValidationError, placeholders_from_document, validate_keys_yaml
 from .schemas import MaskedEntity, MaskRequest, MaskResponse, UnmaskRequest, UnmaskResponse
-from .service import mask_document, unmask_document
+from .service import mask_document, mask_stats, unmask_document
 
 router = APIRouter(tags=["masking"])
 
@@ -68,7 +68,7 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse:
     if not request.text.strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Текст пуст.")
     masked, entities, keys = mask_document(request)
-    return MaskResponse(text=masked, masked_entities=entities, keys=keys.to_yaml())
+    return MaskResponse(text=masked, stats=mask_stats(entities), keys=keys.to_yaml())
 
 
 @router.post("/mask-file")
