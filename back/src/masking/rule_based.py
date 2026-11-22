@@ -238,23 +238,32 @@ class Span(Protocol):
     stop: int
 
 
-def _spans_overlap(a: Entity, b: Entity) -> bool:
-    return a.start < b.end and b.start < a.end
-
-
 def _merge_spans(entities: Iterable[Entity]) -> list[Entity]:
     """
     Collapse raw detections into a non-overlapping, sorted set.
 
-    Rule: when two spans overlap, the earlier-longer span wins; a span fully
-    contained in another is dropped. Ties on position keep the longer span.
+    Overlap policy (formal): spans are considered by (start asc, length desc,
+    score desc, detector order); a span is kept when it does not overlap any
+    already-kept span. So among overlapping candidates the earliest-starting
+    span wins, ties on start go to the longest span, further ties to the higher
+    score — everything merely touching a kept span is dropped. Since `detect`
+    feeds providers in a fixed order and sorting is stable, an equal (start,
+    length, score) collision keeps the earlier detector's span.
+
+    Implementation is a sweep over the sorted candidates keeping only the
+    maximum end seen so far: O(n log n) instead of the quadratic overlap scan.
     """
-    ordered = sorted(entities, key=lambda entity: (entity.start, -(entity.end - entity.start)))
+    ordered = sorted(
+        enumerate(entities),
+        key=lambda item: (item[1].start, -(item[1].end - item[1].start), -item[1].score, item[0]),
+    )
     result: list[Entity] = []
-    for entity in ordered:
-        if any(_spans_overlap(entity, kept) for kept in result):
-            continue
+    kept_end = -1
+    for _index, entity in ordered:
+        if entity.start < kept_end:
+            continue  # overlaps a kept span (kept_end is the max end so far)
         result.append(entity)
+        kept_end = max(kept_end, entity.end)
     return sorted(result, key=lambda entity: entity.start)
 
 
