@@ -25,7 +25,7 @@ from natasha import AddrExtractor, MorphVocab, NamesExtractor
 
 from src.config import get_settings
 
-from .constants import ALWAYS_MASK_ORGANIZATIONS, DEFAULT_LABELS
+from .constants import ALWAYS_MASK_ORGANIZATIONS, resolve_labels
 
 # --- Label vocabulary (mask markers are the upper-cased label) ---------------
 PERSON = "person"
@@ -385,17 +385,10 @@ class RuleBasedMasker:
     """
 
     def __init__(self, labels: Iterable[str] | None = None) -> None:
-        self.labels = self._resolve_labels(labels)
+        self.labels = resolve_labels(labels)
         self._morph = MorphVocab()
         self._names = NamesExtractor(self._morph)
         self._addresses = AddrExtractor(self._morph)
-
-    @staticmethod
-    def _resolve_labels(configured: Iterable[str] | None) -> tuple[str, ...]:
-        if not configured:
-            return DEFAULT_LABELS
-        resolved = tuple(label.strip() for label in configured if label.strip())
-        return resolved or DEFAULT_LABELS
 
     # -- span providers -------------------------------------------------------
 

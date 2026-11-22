@@ -7,6 +7,41 @@ per-type sequence number (`[PERSON_1]`, `[PHONE_2]`, …). Users can override th
 active set via `MASK_LABELS` (pipe-separated).
 """
 
+from collections.abc import Iterable
+
+
+class LabelsValidationError(ValueError):
+    """The configured label set is not a valid label list."""
+
+
+def resolve_labels(configured: Iterable[str] | None) -> tuple[str, ...]:
+    """
+    Validate and resolve a configured label list against `DEFAULT_LABELS`.
+
+    `None` or an empty input keeps the defaults; blank tokens are skipped.
+    Duplicates and unknown labels are configuration errors (a silently accepted
+    unknown label would later produce placeholders without keys sections), so
+    they raise `LabelsValidationError` with a Russian message — the settings
+    validator calls this at startup, `RuleBasedMasker` on direct construction.
+    """
+    if not configured:
+        return DEFAULT_LABELS
+    resolved: list[str] = []
+    for raw in configured:
+        label = raw.strip()
+        if not label:
+            continue
+        if label not in DEFAULT_LABELS:
+            known = ", ".join(DEFAULT_LABELS)
+            msg = f"Неизвестный тип сущности: «{label}». Допустимые значения: {known}."
+            raise LabelsValidationError(msg)
+        if label in resolved:
+            msg = f"Тип сущности «{label}» указан больше одного раза."
+            raise LabelsValidationError(msg)
+        resolved.append(label)
+    return tuple(resolved) or DEFAULT_LABELS
+
+
 DEFAULT_LABELS: tuple[str, ...] = (
     "person",
     "phone",

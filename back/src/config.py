@@ -6,6 +6,8 @@ from functools import lru_cache
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.masking.constants import resolve_labels
+
 
 class Settings(BaseSettings):
     """Environment-driven configuration (single source: root .env)."""
@@ -42,7 +44,10 @@ class Settings(BaseSettings):
     def _split_labels(cls, value: str | None) -> str | None:
         if not value:
             return None
-        return "|".join(label.strip() for label in value.split("|") if label.strip())
+        # resolve_labels rejects duplicates/unknown labels at startup (fail fast)
+        # before the masker ever runs with a half-valid configuration.
+        resolved = resolve_labels(value.split("|"))
+        return "|".join(resolved)
 
 
 @lru_cache
