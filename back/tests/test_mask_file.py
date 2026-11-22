@@ -62,6 +62,33 @@ async def test_mask_file_returns_zip_of_docx_and_keys() -> None:
     assert keys["Номера телефонов"] == ["+7 900 123-45-67"]
 
 
+async def test_mask_file_counts_occurrences_across_paragraphs() -> None:
+    # Regression: identical local spans in different paragraphs used to collapse
+    # into one reported entity, undercounting X-Masked-Count / X-Masked-Breakdown.
+    doc = DocxDocument()
+    for index in range(4):
+        doc.add_paragraph(f"Сотрудник {index}: Смирнова Анна Павловна")
+    buffer = io.BytesIO()
+    doc.save(buffer)
+
+    async with _client() as client:
+        response = await client.post(
+            "/api/mask-file",
+            files={
+                "file": (
+                    "список.docx",
+                    buffer.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    assert int(response.headers["x-masked-count"]) == 4
+    breakdown = json.loads(response.headers["x-masked-breakdown"])
+    assert breakdown == {"person": 4}
+
+
 async def test_mask_file_rejects_non_docx() -> None:
     async with _client() as client:
         response = await client.post("/api/mask-file", files={"file": ("notes.txt", b"hello", "text/plain")})

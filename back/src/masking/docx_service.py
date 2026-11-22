@@ -9,8 +9,9 @@ several runs (e.g. a name split across bold/italic styles) is handled by
 replacing the covered part of each run, keeping the surrounding formatting
 intact.
 
-Coverage: body paragraphs, all table cells (recursively), and the default /
-first / even header & footer paragraphs of every section.
+Coverage: body paragraphs, all table cells (recursively), and the default
+header & footer of every section (python-docx does not surface first-page/even
+variants as separate properties; masking them needs explicit OOXML handling).
 """
 
 import io
@@ -217,7 +218,11 @@ def mask_docx_in_memory(
 
     out = io.BytesIO()
     document.save(out)
-    return out.getvalue(), _dedupe_entities(all_entities), keys
+    # No cross-paragraph dedupe: `iter_paragraphs` yields every paragraph exactly
+    # once and `detect()` already returns unique non-overlapping spans, so equal
+    # (start, end, label) pairs from different paragraphs are distinct occurrences
+    # that must all be reported (the occurrence counts in the headers/UI rely on it).
+    return out.getvalue(), all_entities, keys
 
 
 def unmask_docx_in_memory(source_bytes: bytes, placeholders: Mapping[str, str]) -> tuple[bytes, list[str]]:
@@ -305,13 +310,3 @@ def _paragraph_entity_map(text: str, entities: list[MaskedEntity]) -> dict[tuple
         result[(entity.start, entity.end)] = entity
         current_end = max(current_end, entity.end)
     return result
-
-
-def _dedupe_entities(entities: list[MaskedEntity]) -> list[MaskedEntity]:
-    seen: dict[tuple[int, int, str], MaskedEntity] = {}
-    for entity in entities:
-        key = (entity.start, entity.end, entity.label)
-        prev = seen.get(key)
-        if prev is None or entity.score > prev.score:
-            seen[key] = entity
-    return list(seen.values())

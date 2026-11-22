@@ -45,13 +45,11 @@ def _repro_finding(bug_present: bool, finding: str) -> None:
 
 
 def repro_dedupe_across_paragraphs() -> None:
-    """3.5: identical local spans in different paragraphs collapse into one entity."""
+    """3.5: identical local spans in different paragraphs must all be reported."""
+    import io  # noqa: PLC0415
     from io import BytesIO  # noqa: PLC0415
 
     from docx import Document  # noqa: PLC0415
-
-    from src.masking.docx_service import _dedupe_entities  # noqa: PLC0415
-    from src.masking.schemas import MaskedEntity  # noqa: PLC0415
 
     doc = Document()
     doc.add_paragraph("Первый: Иванов Иван Иванович подписал.")
@@ -61,19 +59,13 @@ def repro_dedupe_across_paragraphs() -> None:
     doc.save(buffer)
 
     masked, entities, _keys = mask_docx_in_memory(buffer.getvalue())
-    occurrences = masked.count(b"[PERSON_1]")
+    document = Document(io.BytesIO(masked))
+    occurrences = sum(paragraph.text.count("[PERSON_1]") for paragraph in document.paragraphs)
     print(
         f"3.5 dedupe e2e: 3 identical-name paragraphs -> masked_entities={len(entities)}, "
         f"placeholders in text={occurrences} (expected 3/3)"
     )
     _repro_finding(len(entities) != 3 or occurrences != 3, "3.5 dedupe e2e")
-
-    # Direct unit-level proof: identical (start, end, label) across paragraphs.
-    same = MaskedEntity(label="person", text="Иванов Иван Иванович", start=8, end=27, score=1.0)
-
-    deduped = _dedupe_entities([same, same, same])
-    print(f"3.5 dedupe unit: three identical local spans -> {len(deduped)} entity after _dedupe_entities")
-    _repro_finding(len(deduped) == 1, "3.5 dedupe unit")
 
 
 def repro_unknown_label() -> None:
