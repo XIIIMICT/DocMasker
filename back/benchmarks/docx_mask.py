@@ -1,7 +1,9 @@
 """DOCX masking benchmark plus reproducers for findings 3.5 and 3.15 (see benchmarks/README.md)."""
 
+import io
 import time
 
+from src.masking.constants import LabelsValidationError
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from src.masking.rule_based import RuleBasedMasker
 
@@ -36,7 +38,7 @@ def bench(masker) -> None:
         )
 
 
-def _repro_finding(bug_present: bool, finding: str) -> None:
+def _repro_finding(*, bug_present: bool, finding: str) -> None:
     """Report a finding repro; the benchmark must not crash while the bug exists."""
     if bug_present:
         print(f"{finding} -> CONFIRMED (bug present; the fixing stage must flip this to FIXED)")
@@ -46,16 +48,13 @@ def _repro_finding(bug_present: bool, finding: str) -> None:
 
 def repro_dedupe_across_paragraphs() -> None:
     """3.5: identical local spans in different paragraphs must all be reported."""
-    import io  # noqa: PLC0415
-    from io import BytesIO  # noqa: PLC0415
-
     from docx import Document  # noqa: PLC0415
 
     doc = Document()
     doc.add_paragraph("Первый: Иванов Иван Иванович подписал.")
     doc.add_paragraph("Второй: Иванов Иван Иванович тоже.")
     doc.add_paragraph("Третий: Иванов Иван Иванович снова.")
-    buffer = BytesIO()
+    buffer = io.BytesIO()
     doc.save(buffer)
 
     masked, entities, _keys = mask_docx_in_memory(buffer.getvalue())
@@ -65,14 +64,21 @@ def repro_dedupe_across_paragraphs() -> None:
         f"3.5 dedupe e2e: 3 identical-name paragraphs -> masked_entities={len(entities)}, "
         f"placeholders in text={occurrences} (expected 3/3)"
     )
-    _repro_finding(len(entities) != 3 or occurrences != 3, "3.5 dedupe e2e")
+    _repro_finding(bug_present=len(entities) != 3 or occurrences != 3, finding="3.5 dedupe e2e")
 
 
 def repro_unknown_label() -> None:
-    """3.15: arbitrary labels are accepted at construction with no validation."""
-    masker = RuleBasedMasker(labels=["person", "banana"])
-    bug_present = "banana" in masker.labels
-    _repro_finding(bug_present, f"3.15 unknown label: labels={masker.labels} accepted silently")
+    """3.15: unknown labels must be a loud configuration error, not silent."""
+    try:
+        RuleBasedMasker(labels=["person", "banana"])
+    except LabelsValidationError:
+        print("3.15 unknown label: rejected with LabelsValidationError as required")
+        _repro_finding(bug_present=False, finding="3.15 unknown label")
+        return
+    _repro_finding(
+        bug_present=True,
+        finding="3.15 unknown label: labels=('person', 'banana') accepted silently",
+    )
 
 
 def main() -> None:

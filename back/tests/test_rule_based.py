@@ -8,6 +8,9 @@ tolerance-based assertions.
 
 from itertools import pairwise
 
+import pytest
+
+from src.masking.constants import DEFAULT_LABELS, LabelsValidationError
 from src.masking.rule_based import RuleBasedMasker
 
 
@@ -197,6 +200,24 @@ def test_labels_override_limits_detection() -> None:
     text = "Иван Петров, ivan@mail.ru"
     labels = [entity.label for entity in only_email.detect(text)]
     assert labels == ["email"]
+
+
+def test_unknown_label_is_rejected() -> None:
+    # An unknown label must be a loud configuration error, not a silently
+    # ignored token (it would produce placeholders without keys sections).
+    with pytest.raises(LabelsValidationError, match="banana"):
+        RuleBasedMasker(["person", "banana"])
+
+
+def test_duplicate_labels_are_rejected() -> None:
+    with pytest.raises(LabelsValidationError, match="больше одного раза"):
+        RuleBasedMasker(["person", "phone", "person"])
+
+
+def test_blank_label_input_falls_back_to_defaults() -> None:
+    assert RuleBasedMasker(None).labels == DEFAULT_LABELS
+    assert RuleBasedMasker([]).labels == DEFAULT_LABELS
+    assert RuleBasedMasker(["  ", ""]).labels == DEFAULT_LABELS
 
 
 def test_empty_text_produces_no_entities() -> None:
