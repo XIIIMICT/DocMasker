@@ -21,7 +21,9 @@ services:
     environment:
       BACKEND_CORS_ORIGINS: '${BACKEND_CORS_ORIGINS:-["http://localhost:5001","http://127.0.0.1:5001","${AUTH_APP_ORIGIN:?}"]}'
     ports:
-      - "${BACKEND_PORT:?}:${BACKEND_PORT:?}"
+      # Loopback-only: the API stays reachable for local testing but never
+      # from the network — the browser must go through the front proxy.
+      - "127.0.0.1:${BACKEND_PORT:?}:${BACKEND_PORT:?}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${BACKEND_PORT:?}/health', timeout=5).read()"]
       interval: 10s
