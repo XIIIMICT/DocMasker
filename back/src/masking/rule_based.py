@@ -13,8 +13,6 @@ rewritten once, back-to-front, so replacements never shift the offsets of
 spans still to be applied.
 """
 
-from __future__ import annotations
-
 import difflib
 import re
 from collections.abc import Iterable, Iterator
@@ -35,15 +33,24 @@ PHONE = "phone"
 EMAIL = "email"
 ADDRESS = "address"
 ORGANIZATION = "organization"
+LINK = "link"
 
 #: Entities detected by this pipeline, in the order they are reported.
-DETECTABLE_LABELS: tuple[str, ...] = (PERSON, PHONE, EMAIL, ADDRESS, ORGANIZATION)
+DETECTABLE_LABELS: tuple[str, ...] = (PERSON, PHONE, EMAIL, LINK, ADDRESS, ORGANIZATION)
 
 # --- Regular expressions -----------------------------------------------------
 # Email: standard local part plus subdomain chains ("a.b+c@mail.corp.ru").
 _EMAIL_RE = re.compile(
     r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)+",
+)
+
+# URL: an explicit scheme (`http`, `https`, `ftp`, …) plus a host and optional
+# path/query/fragment. Trailing sentence punctuation is trimmed separately.
+_URL_RE = re.compile(
+    r"\b[a-z][a-z0-9+.\-]*://"  # scheme://
+    r"[^\s/$.?#].[^\s]*",
+    re.IGNORECASE,
 )
 
 # Legal-form prefixes for organisations. The name that follows is either a
@@ -122,6 +129,88 @@ _ORG_LEAD_RE = re.compile(
 
 # A Cyrillic-capable word (used to trim address spans to sane boundaries).
 _WORD_CHAR = re.compile(r"[A-Za-zА-Яа-яЁё0-9]")
+
+#: A line that introduces a full address ("Адрес:", "Юр. адрес:", "Юридический
+#: адрес:" …). The value after the colon is masked whole, because natasha's
+#: `AddrExtractor` misses parts of a long, comma-separated address.
+_ADDRESS_LINE_RE = re.compile(r"(?im)\bадрес\w*\s*:\s*(?P<value>[^\n]+)")
+
+#: Address abbreviations that end with a period but do not end the value
+#: ("г. Москва", "ул. Ленина", "вн. тер.", "д. 23А", "ком. 77").
+_ADDRESS_ABBREV = frozenset(
+    {
+        "г",
+        "ул",
+        "д",
+        "кв",
+        "вн",
+        "тер",
+        "наб",
+        "пер",
+        "просп",
+        "пр",
+        "обл",
+        "р",
+        "н",
+        "пом",
+        "помещ",
+        "ком",
+        "эт",
+        "этаж",
+        "оф",
+        "стр",
+        "корп",
+        "ш",
+        "б",
+    }
+)
+
+#: Characters that may trail a URL but belong to the sentence, not the link.
+_URL_TRIM_CHARS = ".,;:!?)]}»”’\"'"
+
+
+def _address_value_end(text: str, start: int, end: int) -> int:
+    """
+    Trim a captured address value at a real sentence boundary.
+
+    The value runs to the end of the line; a period followed by a space and a
+    capitalised word ends the sentence ("… д. 5. Звоните"), but the same shape
+    after an address abbreviation ("г. Москва", "вн. тер.") is part of the
+    address. Walk the periods and stop at the first real boundary, then drop
+    trailing separators.
+    """
+    result = end
+    for match in re.finditer(r"([^\s.]*)\.\s+(?=[А-ЯЁA-Z])", text[start:end]):
+        word = match.group(1).lower()
+        if word not in _ADDRESS_ABBREV:
+            # Keep everything up to (not including) the boundary period.
+            result = start + match.start() + len(match.group(1))
+            break
+    while result > start and text[result - 1] in _TRIM_CHARS + ".":
+        result -= 1
+    return result
+
+
+def _trim_url(text: str, start: int, end: int) -> tuple[int, int]:
+    """Drop sentence punctuation accidentally captured at the end of a URL."""
+    while end > start and text[end - 1] in _URL_TRIM_CHARS:
+        end -= 1
+    return start, end
+
+
+def _is_name_token(morph: MorphVocab, token: str) -> bool:
+    """
+    Whether `token` is a plausible Russian proper name.
+
+    `NamesExtractor` labels any two adjacent words as a person, so prepositions
+    and common nouns ("из Сторон", "Оператор ЭДО") slip through. A real name is
+    capitalised and, in natasha's dictionary, carries a `Name`/`Surn`/`Patr`
+    grammeme on at least one parse.
+    """
+    if not token or not token[0].isupper():
+        return False
+    return any(marker in str(parse.tag) for parse in morph(token) for marker in ("Name", "Surn", "Patr"))
+
 
 #: Minimum a bare `natasha` address part must contribute before we keep it.
 _MIN_ADDRESS_PART = 3
@@ -316,6 +405,14 @@ class RuleBasedMasker:
         for match in _EMAIL_RE.finditer(text):
             yield Entity(EMAIL, match.group(0), match.start(), match.end())
 
+    def _find_links(self, text: str) -> Iterator[Entity]:
+        if LINK not in self.labels:
+            return
+        for match in _URL_RE.finditer(text):
+            start, end = _trim_url(text, match.start(), match.end())
+            if end > start:
+                yield Entity(LINK, text[start:end], start, end)
+
     def _find_phones(self, text: str) -> Iterator[Entity]:
         if PHONE not in self.labels:
             return
@@ -329,8 +426,11 @@ class RuleBasedMasker:
             fact = match.fact
             # `NamesExtractor` also fires on lone tokens (prepositions, single
             # words, or a bare surname). Require a given name plus a surname or
-            # patronymic so only real full names are masked.
+            # patronymic, and that both are plausible proper names — otherwise
+            # phrases like "из Сторон" or "Оператор ЭДО" are masked as people.
             if not fact.first or not (fact.last or fact.middle):
+                continue
+            if not all(_is_name_token(self._morph, token) for token in (fact.first, fact.last or fact.middle)):
                 continue
             yield Entity(PERSON, text[match.start : match.stop], match.start, match.stop)
 
@@ -338,6 +438,16 @@ class RuleBasedMasker:
         if ADDRESS not in self.labels:
             return
         yield from _merge_address_parts(self._addresses(text), text)
+        # A line introduced by "Адрес:" is masked whole — natasha drops parts of
+        # a long, comma-separated address ("вн. тер. г. муниципальный округ …").
+        for match in _ADDRESS_LINE_RE.finditer(text):
+            start, end = match.start("value"), match.end("value")
+            # Stop at a real sentence boundary so trailing prose is not swallowed
+            # ("… д. 5. Звоните"). A period after an address abbreviation
+            # ("г. Москва") is not a boundary.
+            end = _address_value_end(text, start, end)
+            if end > start and _looks_like_address(text[start:end]):
+                yield Entity(ADDRESS, text[start:end], start, end)
 
     def _find_organizations(self, text: str) -> Iterator[Entity]:
         if ORGANIZATION not in self.labels:
@@ -376,6 +486,7 @@ class RuleBasedMasker:
         """Return non-overlapping entities found in `text`, sorted by position."""
         raw: list[Entity] = []
         raw.extend(self._find_emails(text))
+        raw.extend(self._find_links(text))
         raw.extend(self._find_phones(text))
         raw.extend(self._find_persons(text))
         raw.extend(self._find_addresses(text))
@@ -386,7 +497,13 @@ class RuleBasedMasker:
         return _merge_spans([*merged, *self._find_always_masked(text)])
 
     def mask(self, text: str, entities: list[Entity] | None = None) -> str:
-        """Replace detected spans with `[LABEL]`, working back-to-front."""
+        """
+        Replace detected spans with an unnumbered ``[LABEL]``, back-to-front.
+
+        Convenience for tests and debugging that only care *what* was detected:
+        production masking goes through `service.mask_text`, which numbers each
+        occurrence (``[PERSON_1]``) and records the demasking keys.
+        """
         if entities is None:
             entities = self.detect(text)
         masked = text

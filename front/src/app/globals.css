@@ -105,7 +105,10 @@ html {
     overflow: hidden;
 }
 
+/* Two slots: the brand (with the mode switcher inside it) on the left and the
+   theme switcher pushed to the right edge. */
 .app-header {
+    z-index: 20;
     display: flex;
     min-height: 4.2rem;
     max-height: 4.2rem;
@@ -117,15 +120,47 @@ html {
 }
 
 .app-header .brand {
+    min-width: 0;
     align-self: center;
 }
 
-/* Right-aligned header slot (theme switcher); the fixed-height header already
-   centres its items vertically. */
+/* Right-aligned header slot (theme switcher). */
 .app-header__end {
     display: flex;
+    min-width: 0;
     align-items: center;
     margin-left: auto;
+    gap: 0.85rem;
+}
+
+/* Mode dropdown trigger inside the brand: the mode name, styled like the app
+   name (`brand__name`) but muted, and the only part that is clickable. */
+.brand__edition {
+    color: var(--muted);
+    font-size: 1.65rem;
+    font-weight: 760;
+    line-height: 1;
+    letter-spacing: -0.04em;
+}
+
+.brand__edition--button {
+    height: auto;
+    min-width: 0;
+    padding: 0;
+    color: var(--muted);
+    font-size: 1.65rem;
+    font-weight: 760;
+    line-height: 1;
+    letter-spacing: -0.04em;
+}
+
+.brand__edition--button,
+.brand__edition--button:hover,
+.brand__edition--button[data-hover],
+.brand__edition--button[data-focus-visible],
+.brand__edition--button[data-pressed] {
+    background: transparent;
+    box-shadow: none;
 }
 
 /* Theme switcher: icon-only HeroUI Tabs (see `theme-switcher.tsx`). */
@@ -287,17 +322,34 @@ html {
     padding: 0.75rem;
 }
 
-/* Small file-name label above a DOCX preview. */
+/* Preview-only highlight of mask placeholders / restored values. Never written
+   to the document itself — the downloaded file stays plain. */
+.docx-marker {
+    background: #fff36b;
+    color: inherit;
+    padding: 0;
+    border-radius: 0;
+}
+
+/* Small file-name label above a DOCX preview. The fixed min-height matches the
+   in-pane tabs' row height (40px), so a pane with tabs and a pane with a plain
+   label end up with TextAreas of exactly the same height. */
 .editor-pane__label {
     display: flex;
+    min-height: 2.5rem;
     min-width: 0;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
-    font-size: 0.85rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-secondary);
     word-break: break-word;
+}
+
+/* The tabs must keep their natural width; only the stats may be pushed right. */
+.editor-pane__label > .result-tabs {
+    flex: none;
 }
 
 /* Pane-sized document preview card (same area as the TextArea it replaces). */
@@ -337,10 +389,52 @@ html {
     font-size: 0.85rem;
 }
 
+/* Result tabs inside the pane label. Standard HeroUI pill tabs (the pill
+   background lives on `Tabs.ListContainer`), sized to their content so the
+   stats stay on the same row, right-aligned, on either tab. */
+.result-tabs {
+    min-width: 0;
+}
+
+.result-tabs .tabs__list-container {
+    width: fit-content;
+}
+
+/* Keep each tab on a single line. */
+.result-tabs .tabs__tab {
+    white-space: nowrap;
+}
+
+/* "Nothing was masked" notice, shown muted so it does not read as an error. */
+textarea.result-area--empty {
+    color: var(--muted) !important;
+}
+
+/* Demasking keys editor: fills the pane so its TextArea matches the text one. */
+.keys-editor {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* Inline keys-validation message, shown in the pane label row beside the tabs. */
+.editor-pane__keys-error {
+    flex: none;
+    color: var(--danger);
+    font-size: 0.8rem;
+}
+
+/* Highlight an invalid keys TextArea like HeroUI marks invalid fields. */
+.keys-editor textarea[data-invalid="true"] {
+    border-color: var(--danger) !important;
+}
+
 /* Masking summary shown inside the result pane label; the breakdown lives in
    a Tooltip. It is the Tooltip.Trigger, so it must look like plain text. */
 .editor-pane__stats {
-    min-width: 0;
+    flex: none;
     color: var(--muted);
     font-weight: 500;
     text-align: right;
@@ -351,6 +445,13 @@ html {
    the HeroUI TextArea lands directly on the underlying <textarea>. */
 textarea.result-area--error {
     color: var(--danger) !important;
+}
+
+/* Stats tooltip body: one line per label plus an optional "Не применено"
+   block; the text carries real newlines, so keep them. */
+.stats-breakdown {
+    display: block;
+    white-space: pre-line;
 }
 
 @media (width < 64rem) {

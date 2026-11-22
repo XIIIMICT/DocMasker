@@ -19,7 +19,7 @@ CI prerequisites (once, in GitHub repo settings): push the repo, create the `mai
 | Side | Lint | Format | Typecheck | Tests |
 |---|---|---|---|---|
 | back | `uv run --directory back ruff check --fix` | `uv run --directory back ruff format` | `uv run --directory back ty check` | `uv run --directory back pytest -q` |
-| front | `bun run --cwd front lint` (oxlint --fix) | `bun run --cwd front format` (oxfmt) | `bun run --cwd front typecheck` (tsc --noEmit) | `bun run --cwd front test` (bun test, happy-dom) |
+| front | `bun run --cwd front lint` (oxlint --fix) | `bun run --cwd front format` (oxfmt) | `bun run --cwd front typecheck` (bun check) | `bun run --cwd front test` (bun test, happy-dom) |
 | e2e | — | — | — | `bun run --cwd front test:e2e` (Playwright, chromium, workers=1) |
 
 Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
@@ -34,7 +34,7 @@ Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
 
 ### Front
 
-- `oxlint --fix`, `oxfmt` (oxc formatter), `tsc --noEmit`.
+- `oxlint --fix`, `oxfmt` (oxc formatter), `bun check` (Bun's built-in type checker — needs **bun ≥ 1.4.3**).
 - **Attention:** `bun format` (oxfmt) may rewrite line breaks in untouched files. After format, check `git status`/`git diff`; restore foreign files with `git checkout -- <file>`.
 - Unit tests — `bun test` with happy-dom (`front/src/test-setup.ts`, wired via `bunfig.toml`); they live in `__tests__` next to the code and run from `src` only.
 - e2e — Playwright (`front/playwright.config.ts`, `front/e2e/`). The `smoke` project hits a running stack; see below.
@@ -45,7 +45,7 @@ The `smoke` project needs a running stack (no auto-start): start it with `just p
 
 ## Pre-commit (prek)
 
-Root `prek.toml` — builtin hooks (check-added-large-files, check-merge-conflict, check-yaml, end-of-file-fixer, trailing-whitespace, mixed-line-ending `--fix=lf`, fix-byte-order-marker). `back/prek.toml` — ruff format, ruff check --fix, ty check, uv lock. `front/prek.toml` — oxfmt, oxlint, tsc, bun lock. Run on `git commit` (`prek install`). If a hook fixes something itself, re-check the diff and commit again.
+Root `prek.toml` — builtin hooks (check-added-large-files, check-merge-conflict, check-yaml, end-of-file-fixer, trailing-whitespace, mixed-line-ending `--fix=lf`, fix-byte-order-marker). `back/prek.toml` — ruff format, ruff check --fix, ty check, uv lock. `front/prek.toml` — oxfmt, oxlint, bun check, bun lock. Run on `git commit` (`prek install`). If a hook fixes something itself, re-check the diff and commit again.
 
 ### Line endings & encoding (LF, UTF-8, no BOM)
 

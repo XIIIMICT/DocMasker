@@ -13,11 +13,9 @@ Coverage: body paragraphs, all table cells (recursively), and the default /
 first / even header & footer paragraphs of every section.
 """
 
-from __future__ import annotations
-
 import io
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from docx import Document
 from docx.document import Document as DocumentObject
@@ -27,12 +25,12 @@ from docx.text.hyperlink import Hyperlink
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .constants import mask_marker
+from .mapping import MaskKeys
 from .rule_based import RuleBasedMasker, get_masker
 from .schemas import MaskedEntity
 
-#: A hyperlink whose visible text is nothing but mask markers (``[EMAIL]``, …).
-_MASK_ONLY_RE = re.compile(r"(?:\[[A-Z ]+\]\s*)+")
+#: A hyperlink whose visible text is nothing but mask markers (``[EMAIL_1]``, …).
+_MASK_ONLY_RE = re.compile(r"(?:\[[A-Z]+_\d+\]\s*)+")
 
 
 def _paragraph_runs(paragraph: Paragraph) -> list[Run]:
@@ -115,32 +113,39 @@ def iter_paragraphs(doc: DocumentObject) -> Iterable[Paragraph]:
                     yield paragraph
 
 
-def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], MaskedEntity]) -> int:
+def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], str]) -> int:
     """
     Mask the runs of one paragraph in place; returns the entity count masked.
 
-    Entities are keyed by absolute offsets in the paragraph text. An entity may
-    span several runs (e.g. ``АО «Росхим»`` split as ``АО «`` | ``Росхим`` |
-    ``»``); it must still collapse to a **single** ``[LABEL]``. So we process
-    entities back-to-front and, for each one, write the marker into the run
-    that contains its start and blank out the covered slices of the following
-    runs. Working back-to-front keeps the absolute offsets of earlier entities
-    valid, since edits only ever shorten text to the right of the cursor.
+    `entity_map` maps an entity's absolute offsets in the paragraph text to its
+    placeholder (``[LABEL_N]``). An entity may span several runs (e.g.
+    ``АО «Росхим»`` split as ``АО «`` | ``Росхим`` | ``»``); it must still
+    collapse to a **single** marker. So we process entities back-to-front and,
+    for each one, write the marker into the run that contains its start and
+    blank out the covered slices of the following runs. Working back-to-front
+    keeps the absolute offsets of earlier entities valid, since edits only ever
+    shorten text to the right of the cursor.
+
+    No highlight is applied here: the yellow tint is a **preview-only** effect
+    (`DocxViewer`), so the downloaded file stays plain.
 
     Hyperlinks covered by an entity are unwrapped (their runs are lifted out of
     the ``w:hyperlink`` element) so a masked email/URL is no longer clickable.
     """
     runs = _paragraph_runs(paragraph)
-    bounds: list[tuple[int, int]] = []
-    cursor = 0
-    for run in runs:
-        length = len(run.text)
-        bounds.append((cursor, cursor + length))
-        cursor += length
 
     covered = 0
-    for (entity_start, entity_end), entity in sorted(entity_map.items(), reverse=True):
-        marker = mask_marker(entity.label)
+    # Work back-to-front so earlier offsets stay valid, and recompute the run
+    # bounds each iteration: a later (further-right) entity shortens runs, so a
+    # cached `bounds` list would be stale and could emit a marker per run.
+    for (entity_start, entity_end), marker in sorted(entity_map.items(), reverse=True):
+        bounds: list[tuple[int, int]] = []
+        cursor = 0
+        for run in runs:
+            length = len(run.text)
+            bounds.append((cursor, cursor + length))
+            cursor += length
+
         for index, (run_start, run_end) in enumerate(bounds):
             if entity_start >= run_end or entity_end <= run_start:
                 continue
@@ -175,11 +180,20 @@ def _unwrap_covered_hyperlinks(paragraph: Paragraph) -> None:
 def mask_docx_in_memory(
     source_bytes: bytes,
     masker: RuleBasedMasker | None = None,
-) -> tuple[bytes, list[MaskedEntity]]:
-    """Mask PII in a .docx (bytes) and return the new .docx bytes + entities."""
+) -> tuple[bytes, list[MaskedEntity], MaskKeys]:
+    """
+    Mask PII in a .docx (bytes) and return the new bytes, entities and keys.
+
+    Two passes: the first detects entities in every paragraph and assigns
+    placeholders from one document-wide `MaskKeys`, so the per-label numbering
+    is continuous across the whole document; the second rewrites the runs with
+    the already-assigned markers.
+    """
     active = masker or get_masker()
     document = Document(io.BytesIO(source_bytes))
+    keys = MaskKeys()
 
+    paragraphs: list[tuple[Paragraph, str, list[MaskedEntity], dict[tuple[int, int], str]]] = []
     all_entities: list[MaskedEntity] = []
     for paragraph in iter_paragraphs(document):
         text = paragraph.text
@@ -191,14 +205,83 @@ def mask_docx_in_memory(
         ]
         if not entities:
             continue
-        # Build an offset map and mask the representative spans.
         entity_map = _paragraph_entity_map(text, entities)
-        mask_paragraph(paragraph, entity_map)
+        placeholders = {
+            (entity.start, entity.end): keys.placeholder(entity.label, entity.text) for entity in entity_map.values()
+        }
+        paragraphs.append((paragraph, text, entities, placeholders))
         all_entities.extend(entities)
+
+    for paragraph, _text, _entities, placeholders in paragraphs:
+        mask_paragraph(paragraph, placeholders)
 
     out = io.BytesIO()
     document.save(out)
-    return out.getvalue(), _dedupe_entities(all_entities)
+    return out.getvalue(), _dedupe_entities(all_entities), keys
+
+
+def unmask_docx_in_memory(source_bytes: bytes, placeholders: Mapping[str, str]) -> tuple[bytes, list[str]]:
+    """
+    Restore a masked .docx (bytes) by replacing every placeholder with its value.
+
+    Masking writes each ``[LABEL_N]`` marker into a single run, so a run-level
+    substitution is enough for the common case. A marker split across runs is
+    handled too: the whole paragraph text is scanned, and when a placeholder
+    spans several runs the replacement is written into the run that holds its
+    start and the covered slices of the following runs are blanked — the same
+    collapse rule `mask_paragraph` uses, so the restored value keeps the
+    formatting of the run where the marker began.
+
+    Returns the restored bytes plus the values whose placeholder never appeared
+    in the document (the keys the caller should report as "не применено").
+    """
+    document = Document(io.BytesIO(source_bytes))
+    full_text = "\n".join(paragraph.text for paragraph in iter_paragraphs(document))
+    for paragraph in iter_paragraphs(document):
+        text = paragraph.text
+        if not text:
+            continue
+        spans = _placeholder_spans(text, placeholders)
+        if spans:
+            _replace_spans(paragraph, spans)
+    out = io.BytesIO()
+    document.save(out)
+    unused = [value for placeholder, value in placeholders.items() if placeholder not in full_text]
+    return out.getvalue(), unused
+
+
+def _placeholder_spans(text: str, placeholders: Mapping[str, str]) -> list[tuple[int, int, str]]:
+    """Find every known placeholder in `text` as (start, end, replacement)."""
+    spans: list[tuple[int, int, str]] = []
+    for placeholder, value in placeholders.items():
+        start = text.find(placeholder)
+        while start != -1:
+            spans.append((start, start + len(placeholder), value))
+            start = text.find(placeholder, start + len(placeholder))
+    return sorted(spans, key=lambda span: span[0])
+
+
+def _replace_spans(paragraph: Paragraph, spans: list[tuple[int, int, str]]) -> None:
+    """Rewrite runs so each (start, end) span becomes its replacement text."""
+    runs = _paragraph_runs(paragraph)
+    bounds: list[tuple[int, int]] = []
+    cursor = 0
+    for run in runs:
+        length = len(run.text)
+        bounds.append((cursor, cursor + length))
+        cursor += length
+
+    for span_start, span_end, replacement in sorted(spans, key=lambda span: span[0], reverse=True):
+        for index, (run_start, run_end) in enumerate(bounds):
+            if span_start >= run_end or span_end <= run_start:
+                continue
+            left = max(span_start, run_start) - run_start
+            right = min(span_end, run_end) - run_start
+            run = runs[index]
+            if span_start < run_end and span_start >= run_start:
+                run.text = run.text[:left] + replacement + run.text[right:]
+            else:
+                run.text = run.text[:left] + run.text[right:]
 
 
 def _paragraph_entity_map(text: str, entities: list[MaskedEntity]) -> dict[tuple[int, int], MaskedEntity]:
