@@ -1,8 +1,6 @@
 """Tests for the masking service and the /api/mask endpoint."""
 
-from __future__ import annotations
-
-import httpx
+from httpx2 import ASGITransport, AsyncClient
 
 from src.main import app
 from src.masking.mapping import MaskKeys, parse_keys_yaml
@@ -69,8 +67,8 @@ def test_entity_offsets_point_at_original_text() -> None:
 
 
 async def test_post_mask_endpoint() -> None:
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/mask", json={"text": "Иван Петров, ivan@mail.ru"})
 
     assert response.status_code == 200
@@ -84,8 +82,8 @@ async def test_post_mask_endpoint() -> None:
 
 
 async def test_post_mask_endpoint_rejects_blank_text() -> None:
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/mask", json={"text": "   "})
 
     assert response.status_code == 422

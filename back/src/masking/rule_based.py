@@ -13,8 +13,6 @@ rewritten once, back-to-front, so replacements never shift the offsets of
 spans still to be applied.
 """
 
-from __future__ import annotations
-
 import difflib
 import re
 from collections.abc import Iterable, Iterator

@@ -1,13 +1,11 @@
 """Tests for the demasking pipeline (keys round-trip, text and DOCX)."""
 
-from __future__ import annotations
-
 import io
 import json
 from urllib.parse import unquote
 
-import httpx
 from docx import Document as DocxDocument
+from httpx2 import ASGITransport, AsyncClient
 
 from src.main import app
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
@@ -16,9 +14,9 @@ from src.masking.rule_based import RuleBasedMasker
 from src.masking.service import mask_with, unmask_text
 
 
-def _client() -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+def _client() -> AsyncClient:
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url="http://test")
 
 
 def test_mask_then_unmask_restores_the_text() -> None:

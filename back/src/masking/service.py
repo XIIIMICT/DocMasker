@@ -12,8 +12,6 @@ Unmasking is the inverse: replace every known placeholder with its original
 value.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 
 from .mapping import MaskKeys, placeholders_from_document, validate_keys_yaml

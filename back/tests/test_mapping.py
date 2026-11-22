@@ -1,7 +1,5 @@
 """Tests for the demasking keys (placeholders, numbering and the YAML format)."""
 
-from __future__ import annotations
-
 import pytest
 
 from src.masking.mapping import (

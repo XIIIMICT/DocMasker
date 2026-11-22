@@ -13,8 +13,6 @@ Coverage: body paragraphs, all table cells (recursively), and the default /
 first / even header & footer paragraphs of every section.
 """
 
-from __future__ import annotations
-
 import io
 import re
 from collections.abc import Iterable, Mapping

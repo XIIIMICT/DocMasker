@@ -20,8 +20,6 @@ The keys file is YAML keyed by the Russian section titles (`LABEL_TITLES`), e.g.
 Sections with no entities are omitted.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Iterable, Mapping
 

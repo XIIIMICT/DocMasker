@@ -6,8 +6,6 @@ pipeline is deterministic, so these are exact expectations rather than
 tolerance-based assertions.
 """
 
-from __future__ import annotations
-
 from itertools import pairwise
 
 from src.masking.rule_based import RuleBasedMasker

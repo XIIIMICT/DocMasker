@@ -1,12 +1,9 @@
-# DocMasker backend. The masking pipeline is deterministic (natasha +
-# phonenumbers + regex), so there is no PyTorch/glibc constraint: the image
-# follows the project's Alpine convention.
-FROM ghcr.io/astral-sh/uv:python3.14-alpine AS base
+ARG PYTHON_VERSION=3.15
+FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-alpine AS base
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=0 \
-    UV_LINK_MODE=copy \
-    UV_SYSTEM_CERTS=1
+    UV_LINK_MODE=copy
 
 FROM base AS deps
 COPY pyproject.toml uv.lock ./
@@ -15,15 +12,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --allow-insecure-host pypi.org \
     --allow-insecure-host files.pythonhosted.org
 
-FROM python:3.14-alpine AS pre-prod
+FROM python:${PYTHON_VERSION}-alpine AS pre-prod
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH" \
-    # Corporate proxies may need SSL verification disabled when downloading deps.
-    UV_INSECURE_HOST=pypi.org
+    PATH="/app/.venv/bin:$PATH"
 
-# Port that uvicorn listens on. Set once here: the build arg comes from
-# compose.yaml, which takes BACKEND_PORT from .env.
 ARG BACKEND_PORT=8000
 ENV BACKEND_PORT=${BACKEND_PORT}
 
@@ -36,7 +29,7 @@ COPY --chown=appuser:appgroup --from=deps /app/.venv/ ./.venv/
 USER appuser
 
 FROM pre-prod AS dev
-ENTRYPOINT ["sh", "-c", "exec uvicorn src.main:app --reload --host 0.0.0.0 --port \"$BACKEND_PORT\""]
+CMD ["sh", "-c", "exec granian --interface asgi --reload --reload-ignore-dirs logs src.main:app --host 0.0.0.0 --port \"$BACKEND_PORT\""]
 
 FROM pre-prod AS prod
-ENTRYPOINT ["sh", "-c", "exec uvicorn src.main:app --host 0.0.0.0 --port \"$BACKEND_PORT\""]
+CMD ["sh", "-c", "exec granian --interface asgi src.main:app --host 0.0.0.0 --port \"$BACKEND_PORT\""]

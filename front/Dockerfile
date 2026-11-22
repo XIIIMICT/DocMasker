@@ -1,4 +1,3 @@
-# DocMasker frontend (Next.js standalone). Mirrors the ReportCollector front.
 FROM oven/bun:1.4-slim AS base
 # Порт фронтенда. Единственная точка в Dockerfile: значение задаёт
 # compose.yaml из FRONT_PORT в .env.

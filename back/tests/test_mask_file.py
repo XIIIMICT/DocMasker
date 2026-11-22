@@ -1,23 +1,21 @@
 """Tests for the /api/mask-file endpoint (multipart upload -> ZIP of masked .docx + keys)."""
 
-from __future__ import annotations
-
 import io
 import json
 import zipfile
 from urllib.parse import unquote
 
-import httpx
 from docx import Document as DocxDocument
+from httpx2 import ASGITransport, AsyncClient
 from test_docx import _build_docx
 
 from src.main import app
 from src.masking.mapping import parse_keys_yaml
 
 
-def _client() -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+def _client() -> AsyncClient:
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url="http://test")
 
 
 async def test_mask_file_returns_zip_of_docx_and_keys() -> None:

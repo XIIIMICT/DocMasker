@@ -1,7 +1,5 @@
 """Tests for DOCX masking (formatting preservation) with the rule-based masker."""
 
-from __future__ import annotations
-
 import io
 
 from docx import Document as DocxDocument

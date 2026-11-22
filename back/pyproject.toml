@@ -1,31 +1,30 @@
 [project]
 name = "docmasker-back"
 version = "0.0.1"
-requires-python = ">=3.14"
+requires-python = "==3.15.*"
 dependencies = [
-    "fastapi>=0.143.0",
+    "fastapi>=0.165.0",
     "natasha>=1.6.0",
-    "phonenumbers>=9.0.41",
+    "phonenumbers>=9.0.44",
     "python-docx>=1.2.0",
-    "python-multipart>=0.0.32",
-    "pydantic-settings>=2.15.0",
-    # YAML 1.2 (spec-faithful, unlike PyYAML's 1.1) — used for the demasking keys.
-    "py-yaml12>=0.2.0",
+    "python-multipart>=0.0.34",
+    "pydantic-settings>=2.16.3",
+    "py-yaml12>=0.2.1",
     # natasha -> pymorphy2 imports `pkg_resources` at runtime; on Python 3.14
     # setuptools is no longer pulled in transitively, and setuptools>=81 dropped
     # `pkg_resources`, so it must be explicit AND pinned below 81.
+    "granian[reload]>=2.8.9",
     "setuptools>=80.0.0,<81",
-    "uvicorn[standard]>=0.54.0",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
-    "pytest>=9.1.1",
+    "httpx2>=2.16.0",
+    "pytest>=9.2.0",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.17.0",
-    "ty>=0.0.87",
+    "ruff>=0.17.6",
+    "ty>=0.0.107",
 ]
 
 [tool.pytest.ini_options]
@@ -52,7 +51,7 @@ show_missing = true
 
 [tool.ruff]
 extend-exclude = []
-target-version = "py314"
+target-version = "py315"
 line-length = 120
 indent-width = 4
 
