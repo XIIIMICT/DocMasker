@@ -146,6 +146,45 @@ def test_hyperlinked_email_collapses_to_plain_mask() -> None:
     assert [entity.label for entity in entities] == ["email"]
 
 
+def test_repeated_entities_in_different_paragraphs_are_all_reported() -> None:
+    # Regression: equal local (start, end, label) spans in different paragraphs
+    # are distinct occurrences — none may be dropped from the reported entities.
+    doc = DocxDocument()
+    for index in range(3):
+        doc.add_paragraph(f"Подписант {index}: Иванов Иван Иванович, далее — текст.")
+    out = io.BytesIO()
+    doc.save(out)
+
+    masked_bytes, entities, keys = mask_docx_in_memory(out.getvalue())
+
+    persons = [entity for entity in entities if entity.label == "person"]
+    assert len(persons) == 3
+    # The collision that used to trigger the loss: identical local offsets.
+    assert len({(entity.start, entity.end) for entity in persons}) == 1
+    document = DocxDocument(io.BytesIO(masked_bytes))
+    assert sum(paragraph.text.count("[PERSON_1]") for paragraph in document.paragraphs) == 3
+    # Placeholders stay shared for the same value, but the occurrence count is 3.
+    assert parse_keys_yaml(keys.to_yaml()) == {"Физлица": ["Иванов Иван Иванович"]}
+
+
+def test_repeated_entities_across_table_and_header_are_all_reported() -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("Контакт: +7 900 123-45-67")
+    table = doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).paragraphs[0].add_run("Телефон: +7 900 123-45-67")
+    header = doc.sections[0].header
+    header.paragraphs[0].add_run("Звонить: +7 900 123-45-67")
+    out = io.BytesIO()
+    doc.save(out)
+
+    _masked_bytes, entities, _keys = mask_docx_in_memory(out.getvalue())
+
+    phones = [entity for entity in entities if entity.label == "phone"]
+    assert len(phones) == 3
+    # Same prefix length -> identical local offsets; all three must survive.
+    assert len({(entity.start, entity.end) for entity in phones}) == 1
+
+
 def test_repeated_masking_keeps_all_paragraphs() -> None:
     # Regression: python-docx hands out fresh proxy objects, so deduplicating by
     # `id(paragraph._p)` without holding a reference dropped header paragraphs
