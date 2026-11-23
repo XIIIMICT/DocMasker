@@ -188,6 +188,25 @@ html {
     outline-offset: 2px;
 }
 
+/* Narrow header: the label never expands — the HeroUI Tooltip carries it
+   instead (see SupportButton). The Tooltip.Trigger is a div, so let it size to
+   the link instead of stretching across the header slot. */
+.support-link--compact:hover,
+.support-link--compact:focus-visible {
+    gap: 0;
+}
+
+.support-link--compact:hover .support-link__label,
+.support-link--compact:focus-visible .support-link__label {
+    max-width: 0;
+    opacity: 0;
+}
+
+[data-slot="tooltip-trigger"]:has(.support-link--compact) {
+    display: inline-flex;
+    width: fit-content;
+}
+
 .support-link,
 .support-link:hover,
 .support-link:focus,
@@ -522,5 +541,20 @@ textarea.result-area--error {
     .editor-grid {
         grid-template-columns: 1fr;
         overflow-y: auto;
+    }
+}
+
+/* sm tier (40rem), as in ReportCollector: hide the app name from the header —
+   the icon and the mode switcher remain, so the content is not crowded. At the
+   same width the support button stops expanding its label and shows a Tooltip
+   instead (see SupportButton / COMPACT_HEADER_QUERY). */
+@media (width < 40rem) {
+    .brand__name {
+        display: none;
+    }
+
+    .app-header {
+        gap: 0.5rem;
+        padding: 0 1rem;
     }
 }
