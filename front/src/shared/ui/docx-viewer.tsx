@@ -33,22 +33,32 @@ export function DocxViewer({
     highlightRef.current = highlight;
     // Whether a document has finished rendering (so highlights can be applied).
     const renderedRef = useRef(false);
+    // Generation guard: renderAsync() is async and can resolve after the Blob
+    // changed or the component unmounted. Each render/cleanup bumps the
+    // generation; a stale render must not write its DOM or apply highlights.
+    const generationRef = useRef(0);
+    const lastAppliedRef = useRef(0);
 
     // Render once per document, then apply the current highlight. A change to
     // the highlight list alone re-applies it without re-parsing the document.
     const render = useCallback(async () => {
         const container = surfaceRef.current;
         if (!container) return;
+        const generation = ++generationRef.current;
         container.innerHTML = "";
         setLocalError(null);
         renderedRef.current = false;
         try {
             await renderAsync(blob, container);
+            // Ignore a stale render: a newer Blob was selected, or cleanup ran.
+            if (generation !== generationRef.current) return;
             renderedRef.current = true;
+            lastAppliedRef.current = generation;
             if (highlightRef.current.length > 0) {
                 highlightTexts(container, highlightRef.current);
             }
         } catch {
+            if (generation !== generationRef.current) return;
             setLocalError("Не удалось отобразить предпросмотр документа.");
         }
     }, [blob, surfaceRef]);
@@ -56,16 +66,21 @@ export function DocxViewer({
     useEffect(() => {
         void render();
         return () => {
+            // Invalidate any in-flight renderAsync() before clearing the DOM.
+            generationRef.current += 1;
+            renderedRef.current = false;
             if (surfaceRef.current) {
                 surfaceRef.current.innerHTML = "";
             }
         };
     }, [render, surfaceRef]);
 
-    // Re-apply highlights when the list changes, but only once a render exists.
+    // Re-apply highlights when the list changes, but only once a render exists
+    // and only for the generation currently on screen.
     useEffect(() => {
         const container = surfaceRef.current;
         if (!container || !renderedRef.current) return;
+        if (lastAppliedRef.current !== generationRef.current) return;
         highlightTexts(container, highlight);
     }, [highlight, surfaceRef]);
 
