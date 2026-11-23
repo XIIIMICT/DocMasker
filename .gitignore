@@ -11,6 +11,8 @@
 !/compose.yaml
 !/justfile
 !/AGENTS.md
+!/.mcp.json
+!/opencode.json
 
 # Directories: restore the dirs so git can enter them.
 # back/ and front/ contents are whitelisted by their own .gitignore files.
