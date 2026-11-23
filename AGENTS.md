@@ -86,6 +86,7 @@ Deterministic rules in `back/src/masking/rule_based.py` (`RuleBasedMasker`), in 
 
 ## Documentation
 
+- `TODO.md` — живой список оставшихся работ по production-readiness (обновлять при каждом этапе).
 - `front/AGENTS.md` — frontend-specific guide: commands, exact installed HeroUI version and the mandatory HeroUI docs source.
 - `docs/ARCHITECTURE.md` — system diagram, env vars, API, masking pipeline, canonical toolchain version table.
 - `docs/WORKFLOW.md` — environment, quality commands, languages, commits/branching, definition of done, working principles.

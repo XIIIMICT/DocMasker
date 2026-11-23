@@ -11,6 +11,7 @@
 !/compose.yaml
 !/justfile
 !/AGENTS.md
+!/TODO.md
 !/.mcp.json
 !/opencode.json
 
