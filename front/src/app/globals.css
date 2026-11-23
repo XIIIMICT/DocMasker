@@ -548,6 +548,14 @@ textarea.result-area--error {
 }
 
 @media (width < 64rem) {
+    /* The masking input label used a fixed 2.5rem height to vertically centre
+       it against the result Tabs on the same row (desktop grid). On narrow
+       screens the Tabs move below, so that min-height only adds dead space
+       above/below the label — drop it for this pane only. */
+    .editor-pane__label--mask-input {
+        min-height: 0;
+    }
+
     .editor-grid {
         grid-template-columns: 1fr;
         /* Stacked panes must size to their content: with the default 1fr rows

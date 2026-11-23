@@ -386,7 +386,7 @@ export function MaskInputPane({
     const { dragging, ...dragHandlers } = drag;
     return (
         <div className={`editor-pane${dragging ? " editor-pane--dragging" : ""}`} {...dragHandlers}>
-            <div className="editor-pane__label">
+            <div className="editor-pane__label editor-pane__label--mask-input">
                 <span>
                     {inFileMode && selectedFile ? selectedFile.name : "Данные для маскировки"}
                 </span>

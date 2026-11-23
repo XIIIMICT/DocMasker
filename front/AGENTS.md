@@ -140,7 +140,11 @@ Rules:
    the panes stack in one column: `.editor-grid` uses
    `grid-auto-rows: min-content; align-content: start` so each pane grows to
    its textarea + buttons — with `1fr` rows the first pane's buttons spill over
-   the next pane's tab row/label. The grid keeps `overflow-y: auto` for tall
+   the next pane's tab row/label. **Only the masking input label**
+   (`.editor-pane__label--mask-input`) drops its desktop `min-height: 2.5rem`
+   under this breakpoint: that height existed solely to centre the label
+   against the result `Tabs` on the same row, and the Tabs move below on
+   mobile. The grid keeps `overflow-y: auto` for tall
    documents but hides the bar (`scrollbar-width: none` +
    `::-webkit-scrollbar { display: none }`) — the page itself must not show a
    vertical scrollbar.
