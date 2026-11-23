@@ -1,8 +1,6 @@
 import { proxyMaskRequest } from "@/shared/api/mask";
 
 export const dynamic = "force-dynamic";
-// No serverless-style execution ceiling: large inputs must be allowed to finish.
-export const maxDuration = 3600;
 
 export async function POST(request: Request) {
     let body: { text?: unknown };

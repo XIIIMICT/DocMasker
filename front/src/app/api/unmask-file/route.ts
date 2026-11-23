@@ -1,14 +1,11 @@
-import { getBackendInternalUrl } from "@/shared/config";
+import { FILE_TIMEOUT_MS, passThrough, postToBackend } from "@/shared/api/proxy";
 
 export const dynamic = "force-dynamic";
-// No serverless-style execution ceiling: a large DOCX must be allowed to finish.
-export const maxDuration = 3600;
 
 /**
  * Forward a DOCX unmask request to the backend. The browser sends a multipart
  * form with the masked file and the keys (YAML text); we replay it server-side
- * to the back and return the resulting ZIP (restored .docx + report manifest)
- * verbatim.
+ * and stream the resulting ZIP (restored .docx + report manifest) back.
  */
 export async function POST(request: Request) {
     const formData = await request.formData();
@@ -28,20 +25,11 @@ export async function POST(request: Request) {
     upload.append("file", file, file.name);
     upload.append("keys", keys);
 
-    const response = await fetch(new URL("/api/unmask-file", getBackendInternalUrl()), {
-        cache: "no-store",
-        method: "POST",
-        body: upload,
-    });
+    const response = await postToBackend(
+        "/api/unmask-file",
+        { method: "POST", body: upload },
+        FILE_TIMEOUT_MS,
+    );
 
-    const forwarded = new Headers({
-        "Content-Type": response.headers.get("Content-Type") ?? "application/zip",
-    });
-    const disposition = response.headers.get("Content-Disposition");
-    if (disposition) forwarded.set("Content-Disposition", disposition);
-
-    return new Response(await response.arrayBuffer(), {
-        headers: forwarded,
-        status: response.status,
-    });
+    return passThrough(response, ["Content-Disposition"]);
 }

@@ -224,9 +224,15 @@ function unquote(value: string): string {
     return value;
 }
 
+/** Short timeout for JSON job/status requests (polling must fail fast). */
+export const PROXY_JSON_TIMEOUT_MS = 15_000;
+/** Generous but bounded timeout for the synchronous file endpoints. */
+export const PROXY_FILE_TIMEOUT_MS = 600_000;
+
 /**
- * Forward an unmask request to the backend (server-side, no CORS).
- * Used by the Next.js API route `/api/unmask`.
+ * Forward a text unmask request to the backend (server-side, no CORS).
+ * Used by the Next.js API route `/api/unmask`. The response body is streamed
+ * through (no full arrayBuffer copy) so large payloads are not buffered twice.
  */
 export async function proxyUnmaskRequest(text: string, keys: string): Promise<Response> {
     const targetUrl = new URL("/api/unmask", getBackendInternalUrl());
@@ -236,18 +242,18 @@ export async function proxyUnmaskRequest(text: string, keys: string): Promise<Re
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ text, keys }),
+        signal: AbortSignal.timeout(PROXY_FILE_TIMEOUT_MS),
     });
 
     const responseContentType = response.headers.get("Content-Type") ?? "application/json";
-    const responseBody = await response.arrayBuffer();
     const headers = new Headers({ "Content-Type": responseContentType });
-    return new Response(responseBody, { headers, status: response.status });
+    return new Response(response.body, { headers, status: response.status });
 }
 
 /**
  * Forward a mask request to the backend (server-side, no CORS).
  * Used by the Next.js API route `/api/mask`. Returns the backend's HTTP
- * response verbatim so status codes and the body pass through.
+ * response verbatim (status + streamed body).
  */
 export async function proxyMaskRequest(text: string): Promise<Response> {
     const targetUrl = new URL("/api/mask", getBackendInternalUrl());
@@ -257,10 +263,10 @@ export async function proxyMaskRequest(text: string): Promise<Response> {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(PROXY_FILE_TIMEOUT_MS),
     });
 
     const responseContentType = response.headers.get("Content-Type") ?? "application/json";
-    const responseBody = await response.arrayBuffer();
     const headers = new Headers({ "Content-Type": responseContentType });
-    return new Response(responseBody, { headers, status: response.status });
+    return new Response(response.body, { headers, status: response.status });
 }
