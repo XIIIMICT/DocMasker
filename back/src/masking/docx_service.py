@@ -9,9 +9,12 @@ several runs (e.g. a name split across bold/italic styles) is handled by
 replacing the covered part of each run, keeping the surrounding formatting
 intact.
 
-Coverage: body paragraphs, all table cells (recursively), and the default
-header & footer of every section (python-docx does not surface first-page/even
-variants as separate properties; masking them needs explicit OOXML handling).
+Coverage: body paragraphs, all table cells (recursively), and every
+header/footer variant of each section — default, first-page and even-page —
+including tables inside them. python-docx 1.2 exposes all variants as
+properties (`first_page_header` / `even_page_header` / …); it resolves the
+OOXML `w:headerReference` / `w:footerReference` parts for us. Variants linked
+to the previous section are skipped (their content belongs to that section).
 """
 
 import io
@@ -104,14 +107,27 @@ def iter_paragraphs(doc: DocumentObject) -> Iterable[Paragraph]:
         yield from _iter_table_paragraphs(table, seen, keep_alive)
 
     for section in doc.sections:
-        # python-docx exposes the default header/footer (first-page/even variants
-        # live in the OOXML and are not surfaced as separate properties here).
-        for header_footer in (section.header, section.footer):
+        # All variants python-docx resolves from the OOXML references. A
+        # variant linked to the previous section has no content of its own —
+        # masking it would double-count the previous section's paragraphs.
+        header_footers = (
+            section.header,
+            section.footer,
+            section.first_page_header,
+            section.first_page_footer,
+            section.even_page_header,
+            section.even_page_footer,
+        )
+        for header_footer in header_footers:
+            if header_footer.is_linked_to_previous:
+                continue
             for paragraph in header_footer.paragraphs:
                 if id(paragraph._p) not in seen:
                     seen.add(id(paragraph._p))
                     keep_alive.append(paragraph._p)
                     yield paragraph
+            for table in header_footer.tables:
+                yield from _iter_table_paragraphs(table, seen, keep_alive)
 
 
 def mask_paragraph(paragraph: Paragraph, entity_map: dict[tuple[int, int], str]) -> int:

@@ -17,7 +17,12 @@ from src.masking.profiles import ProfilesValidationError, get_profile, list_prof
 
 from .archives import mask_archive, restore_archive
 from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
-from .docx_validation import DocxValidationError, upload_limits, validate_docx_package
+from .docx_validation import (
+    DocxValidationError,
+    unsupported_docx_parts,
+    upload_limits,
+    validate_docx_package,
+)
 from .executor import ExecutorBusyError, run_cpu
 from .mapping import KeysValidationError, MaskKeys, placeholders_from_document, validate_keys_yaml
 from .rule_based import get_masker_for
@@ -80,6 +85,12 @@ def _attachment_headers(download_name: str, entities: list[MaskedEntity]) -> dic
         "X-Masked-Count": str(len(entities)),
         "X-Masked-Breakdown": _label_breakdown(entities),
     }
+
+
+def _unsupported_header(data: bytes) -> str | None:
+    """Build a short, safe warning code list (no values, no filenames)."""
+    codes = unsupported_docx_parts(data)
+    return ",".join(codes) if codes else None
 
 
 def _busy() -> HTTPException:
@@ -181,6 +192,9 @@ async def mask_file_endpoint(
     archive = mask_archive(masked_bytes, keys.to_yaml(), base)
     headers = _attachment_headers(f"{base} (замаскированный).zip", entities)
     headers["Content-Type"] = _ZIP_CONTENT_TYPE
+    unsupported = _unsupported_header(source)
+    if unsupported:
+        headers["X-Docx-Unsupported-Parts"] = unsupported
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
 
 
@@ -274,4 +288,7 @@ async def unmask_file_endpoint(
     archive = restore_archive(restored, unused, base)
     download_name = f"{base} (демаскированный).zip"
     headers = {"Content-Disposition": _content_disposition(download_name), "Content-Type": _ZIP_CONTENT_TYPE}
+    unsupported = _unsupported_header(source)
+    if unsupported:
+        headers["X-Docx-Unsupported-Parts"] = unsupported
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)

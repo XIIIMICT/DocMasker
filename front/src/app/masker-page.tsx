@@ -69,6 +69,8 @@ interface ModeState {
     // Keys the backend reported as unused after a file demasking (a `.docx`
     // text is only known server-side). `null` → derive live from the input.
     demaskUnused: string[] | null;
+    // Safe backend codes for OOXML parts that were NOT masked (stage 5).
+    docxWarning: string[] | null;
     // Shared UI state.
     busy: boolean;
     dragging: boolean;
@@ -90,6 +92,7 @@ function emptyModeState(): ModeState {
         restored: "",
         restoredFile: null,
         demaskUnused: null,
+        docxWarning: null,
         busy: false,
         dragging: false,
         error: null,
@@ -173,6 +176,33 @@ async function jobRestoreBundle(accepted: JobAccepted) {
     };
 }
 
+/** Human-readable names for the safe unsupported-part codes. */
+const UNSUPPORTED_PART_LABELS: Record<string, string> = {
+    footnotes: "сноски",
+    endnotes: "концевые сноски",
+    comments: "комментарии",
+    "text-boxes": "текстовые блоки",
+    "tracked-changes": "исправления",
+    "hidden-text": "скрытый текст",
+    "content-controls": "элементы управления содержимым",
+    "doc-properties": "свойства документа",
+};
+
+/** Parse the safe `X-Docx-Unsupported-Parts` code list from the response. */
+function parseDocxWarning(header: string | null): string[] | null {
+    if (!header) return null;
+    const codes = header
+        .split(",")
+        .map((code) => code.trim())
+        .filter(Boolean);
+    return codes.length > 0 ? codes : null;
+}
+
+function docxWarningText(codes: string[]): string {
+    const names = codes.map((code) => UNSUPPORTED_PART_LABELS[code] ?? code);
+    return `Внимание: документ содержит части, которые не маскируются (${names.join(", ")}). Скачанный файл не является полной анонимизацией.`;
+}
+
 /** Parse the backend's `X-Masked-Breakdown` header (a JSON label→count map). */
 function parseBreakdown(header: string | null): Record<string, number> {
     if (!header) return {};
@@ -249,6 +279,7 @@ function MaskResultPane({
     resultTab,
     onResultTabChange,
     stats,
+    docxWarning,
     keys,
     maskedNothing,
     showResultPreview,
@@ -274,6 +305,7 @@ function MaskResultPane({
     result: string;
     resultTextRef: RefObject<HTMLTextAreaElement | null>;
     maskedDocRef: RefObject<HTMLDivElement | null>;
+    docxWarning: string[] | null;
     canDownloadResult: boolean;
     canDownloadKeys: boolean;
     onDownloadResult: () => void;
@@ -300,6 +332,21 @@ function MaskResultPane({
                         </Tabs.List>
                     </Tabs.ListContainer>
                 </Tabs>
+                {docxWarning && error === null ? (
+                    <Tooltip delay={150}>
+                        <Tooltip.Trigger
+                            className="editor-pane__docx-warning"
+                            role="note"
+                            aria-label="Предупреждение о покрытии DOCX"
+                        >
+                            ⚠ Не все части обработаны
+                        </Tooltip.Trigger>
+                        <Tooltip.Content showArrow placement="bottom">
+                            <Tooltip.Arrow />
+                            <span className="stats-breakdown">{docxWarningText(docxWarning)}</span>
+                        </Tooltip.Content>
+                    </Tooltip>
+                ) : null}
                 {stats !== null && error === null && stats.total > 0 ? (
                     <Tooltip delay={150}>
                         <Tooltip.Trigger className="editor-pane__stats">
@@ -790,6 +837,7 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
         restored,
         restoredFile,
         demaskUnused,
+        docxWarning,
         inputTab,
         resultTab,
         busy,
@@ -1012,6 +1060,7 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
             let total: number;
             let byLabel: Record<string, number>;
             if (response.status === 202) {
+                update({ docxWarning: null });
                 const jobResult = await waitForJob((await response.json()) as JobAccepted);
                 bundle = await jobBundle(jobResult, ".docx", ".yaml");
                 const keysText = await bundle.keys.text();
@@ -1025,6 +1074,9 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
             } else {
                 total = Number(response.headers.get("X-Masked-Count") ?? "0");
                 byLabel = parseBreakdown(response.headers.get("X-Masked-Breakdown"));
+                update({
+                    docxWarning: parseDocxWarning(response.headers.get("X-Docx-Unsupported-Parts")),
+                });
                 // The backend returns one ZIP holding the masked .docx and its keys;
                 // unpack it so each half can be downloaded on its own.
                 bundle = await unpackMaskArchive(await response.blob());
@@ -1320,6 +1372,7 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
                                 maskedFile={maskedFile}
                                 inFileMode={inFileMode}
                                 result={result}
+                                docxWarning={docxWarning}
                                 resultTextRef={resultTextRef}
                                 maskedDocRef={maskedDocRef}
                                 canDownloadResult={canDownloadResult}

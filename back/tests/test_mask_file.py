@@ -288,3 +288,45 @@ async def _mask_archive() -> bytes:
         )
     assert response.status_code == 200
     return response.content
+
+
+async def test_mask_file_warns_about_unsupported_ooxml_parts() -> None:
+    # A package with a comments part cannot be fully anonymized: the response
+    # must carry a short, safe code list (no values, no filenames).
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as outer:
+        inner = io.BytesIO(_build_docx())
+        with zipfile.ZipFile(inner) as source:
+            for info in source.infolist():
+                outer.writestr(info, source.read(info.filename))
+        outer.writestr("word/comments.xml", "<w:comments/>")
+
+    async with _client() as client:
+        response = await client.post(
+            "/api/mask-file",
+            files={
+                "file": (
+                    "doc.docx",
+                    buffer.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+    assert response.status_code == 200
+    assert response.headers["x-docx-unsupported-parts"] == "comments"
+
+
+async def test_mask_file_has_no_warning_for_a_plain_docx() -> None:
+    async with _client() as client:
+        response = await client.post(
+            "/api/mask-file",
+            files={
+                "file": (
+                    "doc.docx",
+                    _build_docx(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+    assert response.status_code == 200
+    assert "x-docx-unsupported-parts" not in response.headers

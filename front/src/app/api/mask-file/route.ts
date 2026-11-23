@@ -29,5 +29,10 @@ export async function POST(request: Request) {
         FILE_TIMEOUT_MS,
     );
 
-    return passThrough(response, ["X-Masked-Count", "X-Masked-Breakdown", "Content-Disposition"]);
+    return passThrough(response, [
+        "X-Masked-Count",
+        "X-Masked-Breakdown",
+        "X-Docx-Unsupported-Parts",
+        "Content-Disposition",
+    ]);
 }
