@@ -75,9 +75,16 @@ Option 3, with the following concrete shape.
 - `RuleBasedMasker` remains the facade (constructor and `detect()` API
   unchanged) so tests, DOCX service, and the benchmark suite keep working.
 
-### Keys schema v2 (`back/src/masking/mapping.py`)
+### Keys schema (`back/src/masking/mapping.py`)
 
-- v2 file = one YAML mapping with an explicit envelope:
+> **Update (2026-11-23):** the versioned envelope below never shipped to prod
+> and was simplified. Writers now emit **only** `Профиль: <id>` (default
+> `russian-default` when no profile is supplied); readers accept that shape and
+> the envelope-less one. **No `версия` / `версия_профиля` keys** are written or
+> read — they are now unknown sections. We always act on the latest format.
+> The rest of this section records the original decision for context.
+
+- v2 file = one YAML mapping with an explicit envelope (pre-prod, retired):
 
   ```yaml
   версия: 2

@@ -90,7 +90,7 @@ optional). Response (`MaskResponse`, 200):
     "occurrences_by_label": {"person": 1, "phone": 1},
     "unique_by_label": {"person": 1, "phone": 1}
   },
-  "keys": "версия: 2\nпрофиль: russian-default\n…"
+  "keys": "Профиль: russian-default\n…"
 }
 ```
 

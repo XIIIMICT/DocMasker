@@ -105,19 +105,23 @@ describe("validateKeysYaml", () => {
         ).toBeNull();
     });
 
-    it("accepts a v2 file with the metadata envelope", () => {
-        const v2 =
+    it("accepts a file with the Профиль marker", () => {
+        const keys = "Профиль: russian-default\nФизлица:\n  - Иван Петров";
+        expect(validateKeysYaml(keys)).toBeNull();
+    });
+
+    it("accepts a legacy envelope-less file (default profile)", () => {
+        expect(validateKeysYaml("Физлица:\n  - Иван Петров")).toBeNull();
+    });
+
+    it("rejects version keys (never shipped, not part of the format)", () => {
+        const old =
             "версия: 2\nпрофиль: russian-default\nверсия_профиля: 1\nФизлица:\n  - Иван Петров";
-        expect(validateKeysYaml(v2)).toBeNull();
+        expect(validateKeysYaml(old)).toMatch(/Неизвестный раздел/);
     });
 
-    it("rejects an envelope with an unsupported version", () => {
-        const v3 = "версия: 3\nпрофиль: russian-default\nФизлица:\n  - Иван Петров";
-        expect(validateKeysYaml(v3)).toContain("Неподдерживаемая версия файла ключей");
-    });
-
-    it("rejects an envelope without sections", () => {
-        expect(validateKeysYaml("версия: 2\nпрофиль: russian-default")).toContain(
+    it("rejects a file with the marker but without sections", () => {
+        expect(validateKeysYaml("Профиль: russian-default")).toContain(
             "не содержит ни одного раздела",
         );
     });

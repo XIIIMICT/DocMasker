@@ -20,12 +20,10 @@ Serialization uses **`yaml12` (`py-yaml12`, YAML 1.2)**, not PyYAML 1.1 — the
 latter would mangle quoting (`АО "Росхим"` must stay quoted). Implementation:
 `back/src/masking/mapping.py`.
 
-### v2 (current, written by every mask)
+### Current (written by every mask)
 
 ```yaml
-версия: 2
-профиль: russian-default
-версия_профиля: 1
+Профиль: russian-default
 Физлица:
   - Иван Петров
   - Мария Сидорова
@@ -41,21 +39,25 @@ Email:
   - г. Москва, ул. Ленина, д. 1
 ```
 
-- The **envelope** (`версия`, `профиль`, `версия_профиля`) is metadata that
-  records provenance; it is **never** the restore authority. Only the listed
-  version `2` is accepted; a foreign version fails loudly.
-- Section titles are the profile's Russian `LabelMeta.title` values. Titles
-  resolve against the profile-independent `registered_titles()` union, so
-  restoring never needs the producing profile to be loaded.
+- `Профиль` (capital `П`) is a **metadata marker** recording the producing
+  profile. **No `версия` / `версия_профиля` keys** are written or read: the
+  format has one current shape and we always act on the latest. Those version
+  keys existed only in a pre-prod build and are now unknown sections (they
+  fail validation) — see `docs/adr/0001-masking-profiles.md`.
+- When no profile is supplied, `russian-default` is written (and a file
+  **without** the marker also restores as the default profile).
+- Restoring never depends on the marker: section titles resolve against the
+  profile-independent `registered_titles()` union, so a file from another
+  profile still restores.
 - **Empty sections are omitted.** `keys` is an empty string when nothing was
   masked.
 - Numbers restart at 1 within each section: the n-th value of section `Физлица`
   is `[PERSON_n]`, of `Номера телефонов` → `[PHONE_n]`, etc.
 
-### v1 (legacy, read-only)
+### Legacy (envelope-less, read-only)
 
-A file without the envelope (sections only) is treated as legacy v1 and parsed
-exactly as before, so existing keys files keep restoring:
+A file with only sections (no `Профиль`) is parsed exactly as before and treated
+as produced by the default profile:
 
 ```yaml
 Физлица:
@@ -64,17 +66,16 @@ exactly as before, so existing keys files keep restoring:
   - АО «Росхим»
 ```
 
-Writers emit v2 only. Both formats coexist indefinitely by design (the reader
-keeps v1). `docs/adr/0001` records the cost.
+Writers emit the current format only. Both shapes coexist by design (the reader
+keeps the envelope-less one).
 
 ### Validation (both sides, mirrored)
 
 `validate_keys_yaml` (`back/src/masking/mapping.py`) rejects: empty/malformed
-YAML, unknown sections, non-list sections, empty values, **duplicate values
-within a section**, and a **duplicated section name** (YAML keeps only the last
-of repeated keys, so duplicates are detected from the raw lines). It raises
-`KeysValidationError` → 422 with a Russian `detail`. Envelope keys are accepted
-and stripped before section checks.
+YAML, unknown sections (including the retired version keys), non-list sections,
+empty values, **duplicate values within a section**, and a **duplicated section
+name**. It raises `KeysValidationError` → 422 with a Russian `detail`. The
+`Профиль` marker is accepted and stripped before section checks.
 
 The frontend mirrors all of it in
 `front/src/shared/api/mask.ts::validateKeysYaml`, run **on every keystroke**
@@ -82,7 +83,7 @@ The frontend mirrors all of it in
 the shared `KEYS_SECTION_TITLES` list; an invalid editor gets `aria-invalid` and
 a red inline message, and the request is never sent. The client constants must
 stay in sync with the backend's `profiles.py::registered_titles` union and with
-the v2 envelope keys — cross-language agreement is enforced by tests
+the `Профиль` marker — cross-language agreement is enforced by tests
 (`test_keys_v2.py`, `test_profiles.py`, front `__tests__/mask.test.ts`).
 
 File extension: `.yaml` on **both** load and download; `.yml` is also accepted
@@ -142,11 +143,12 @@ restoring side needs no change (keys are profile-independent). Verify with the
 alternative-profile integration test (mask with profile A, restore on the
 default). `GET /api/profiles` will list it automatically.
 
-### Add a keys envelope key
+### Add a keys metadata key
 
 Teach **both** `validate_keys_yaml` (backend) and `validateKeysYaml` (frontend)
-the new envelope key, bump `версия` with a reader branch for the old version,
-and add a v2→v3 round-trip test. Restoring must never depend on the envelope.
+the new marker and add a round-trip test. Restoring must never depend on
+metadata. (Adding `версия`/`версия_профиля` back would need an ADR — they were
+removed deliberately.)
 
 ### Deferred (do not implement without an ADR / maintainer decision)
 

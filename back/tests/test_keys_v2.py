@@ -1,4 +1,4 @@
-"""Tests for the keys v2 envelope and the legacy v1 reader (ADR-0001)."""
+"""Tests for the keys `Профиль` marker and the legacy envelope-less reader."""
 
 import pytest
 
@@ -6,7 +6,7 @@ from src.masking.mapping import (
     KeysValidationError,
     MaskKeys,
     format_keys_yaml,
-    format_keys_yaml_v2,
+    format_keys_yaml_with_profile,
     parse_keys_yaml,
     placeholders_from_document,
     validate_keys_yaml,
@@ -14,7 +14,7 @@ from src.masking.mapping import (
 from src.masking.profiles import DEFAULT_PROFILE
 
 
-def test_mask_keys_with_profile_writes_the_v2_envelope() -> None:
+def test_mask_keys_with_profile_writes_the_profile_marker() -> None:
     keys = MaskKeys(DEFAULT_PROFILE)
     keys.placeholder("person", "Иван Петров")
     keys.placeholder("phone", "+7 900 123-45-67")
@@ -25,12 +25,13 @@ def test_mask_keys_with_profile_writes_the_v2_envelope() -> None:
         "Физлица": ["Иван Петров"],
         "Номера телефонов": ["+7 900 123-45-67"],
     }
-    assert "версия: 2" in text
-    assert "профиль: russian-default" in text
-    assert "версия_профиля: 1" in text
+    assert "Профиль: russian-default" in text
+    # No version keys are written.
+    assert "версия" not in text
+    assert "версия_профиля" not in text
 
 
-def test_v2_round_trip_restores_the_document() -> None:
+def test_round_trip_restores_the_document() -> None:
     keys = MaskKeys(DEFAULT_PROFILE)
     marker = keys.placeholder("person", "Иван Петров")
     masked = f"{marker} подписал."
@@ -40,45 +41,49 @@ def test_v2_round_trip_restores_the_document() -> None:
     assert restored == "Иван Петров подписал."
 
 
-def test_legacy_v1_file_is_still_accepted() -> None:
-    v1 = format_keys_yaml({"Физлица": ["Иван Петров"], "Номера телефонов": ["+7 900 123-45-67"]})
-    assert "версия" not in v1  # sanity: the helper still writes the legacy shape
-    placeholders = placeholders_from_document(validate_keys_yaml(v1))
+def test_legacy_envelope_less_file_is_still_accepted() -> None:
+    legacy = format_keys_yaml({"Физлица": ["Иван Петров"], "Номера телефонов": ["+7 900 123-45-67"]})
+    assert "Профиль" not in legacy  # sanity: the helper still writes the legacy shape
+    placeholders = placeholders_from_document(validate_keys_yaml(legacy))
     assert placeholders == {"[PERSON_1]": "Иван Петров", "[PHONE_1]": "+7 900 123-45-67"}
 
 
-def test_future_envelope_version_is_rejected() -> None:
-    text = format_keys_yaml_v2({"Физлица": ["Иван Петров"]}, "russian-default", 1)
-    tampered = text.replace("версия: 2", "версия: 3")
-    with pytest.raises(KeysValidationError, match="Неподдерживаемая версия"):
-        validate_keys_yaml(tampered)
+def test_version_keys_are_not_read_anymore() -> None:
+    # The v2 shape never shipped to prod; a file carrying version keys is
+    # rejected as an unknown section rather than half-parsed.
+    text = "версия: 2\nпрофиль: russian-default\nверсия_профиля: 1\nФизлица:\n  - Иван Петров"
+    with pytest.raises(KeysValidationError, match="Неизвестный раздел"):
+        validate_keys_yaml(text)
 
 
-def test_envelope_keys_do_not_count_as_sections() -> None:
-    text = format_keys_yaml_v2({"Физлица": ["Иван Петров"]}, "russian-default", 1)
-    # Validation must succeed with only one real section, not treat the
-    # envelope keys as unknown/empty sections.
+def test_profile_marker_does_not_count_as_a_section() -> None:
+    text = format_keys_yaml_with_profile({"Физлица": ["Иван Петров"]}, "russian-default")
     assert validate_keys_yaml(text) == {"Физлица": ["Иван Петров"]}
 
 
-def test_duplicate_section_still_detected_with_envelope() -> None:
-    text = format_keys_yaml_v2({"Физлица": ["Иван Петров"]}, "russian-default", 1)
-    # Append a bare duplicate of the same section: the raw-line detector must
-    # still catch it (the envelope must not hide duplicate sections).
+def test_duplicate_section_still_detected_with_marker() -> None:
+    text = format_keys_yaml_with_profile({"Физлица": ["Иван Петров"]}, "russian-default")
     tampered = text + "\nФизлица:\n  - Дублёр"
     with pytest.raises(KeysValidationError, match="больше одного раза"):
         validate_keys_yaml(tampered)
 
 
-def test_v2_from_an_unknown_profile_still_restores() -> None:
-    # Restoring never depends on the producing profile: the envelope is metadata.
-    text = format_keys_yaml_v2({"Организации": ['АО "Росхим"']}, "future-profile", 7)
+def test_unknown_profile_still_restores() -> None:
+    # Restoring never depends on the producing profile: the marker is metadata.
+    text = format_keys_yaml_with_profile({"Организации": ['АО "Росхим"']}, "future-profile")
     placeholders = placeholders_from_document(validate_keys_yaml(text))
     assert placeholders == {"[ORGANIZATION_1]": 'АО "Росхим"'}
 
 
+def test_no_profile_defaults_to_the_default_profile() -> None:
+    # `None` means the default profile; the marker is still written explicitly.
+    text = format_keys_yaml_with_profile({"Физлица": ["Иван Петров"]}, None)
+    assert "Профиль: russian-default" in text
+    assert validate_keys_yaml(text) == {"Физлица": ["Иван Петров"]}
+
+
 def test_empty_keys_serialize_to_an_empty_string() -> None:
-    assert format_keys_yaml_v2({}, None, None) == ""
+    assert format_keys_yaml_with_profile({}, None) == ""
     assert MaskKeys(DEFAULT_PROFILE).to_yaml() == ""
 
 

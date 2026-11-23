@@ -8,24 +8,26 @@ placeholder→value substitution, so declension forms are preserved exactly —
 which is why two spellings of the same organisation are **two** entries, not
 one.
 
-Two file formats (ADR-0001):
+Two file formats:
 
-- **v2 (current)** — a small envelope followed by the Russian sections:
+- **current** — one profile marker followed by the Russian sections:
 
   ```yaml
-  версия: 2
-  профиль: russian-default
-  версия_профиля: 1
+  Профиль: russian-default
   Физлица:
     - Иван Петров
   ```
 
-- **v1 (legacy, read-only)** — sections only, no envelope; parsed exactly as
-  before so existing keys files keep restoring.
+- **legacy (envelope-less)** — sections only; parsed exactly as before, and
+  treated as produced by the default profile.
+
+The profile marker is metadata only: restoring resolves section titles against
+the profile-independent `registered_titles()` union, so a file without the
+marker (or from a different profile) still restores. Version/profile-version
+keys are intentionally not written or read (the format never shipped to prod).
 
 Sections with no entities are omitted. Restoring never needs the producing
-profile: section titles resolve against the profile-independent
-`registered_titles()` union.
+profile.
 """
 
 import re
@@ -35,7 +37,10 @@ from typing import TYPE_CHECKING
 import yaml12
 
 from .constants import mask_marker
-from .profiles import registered_titles
+from .profiles import DEFAULT_PROFILE, registered_titles
+
+#: Id written into the `Профиль` marker when no profile was supplied.
+DEFAULT_PROFILE_ID = DEFAULT_PROFILE.profile_id
 
 if TYPE_CHECKING:
     from .profiles import MaskingProfile
@@ -43,12 +48,11 @@ if TYPE_CHECKING:
 #: A top-level section header line (`Физлица:`), used to spot duplicate sections.
 _SECTION_RE = re.compile(r"^([^\s#][^:]*):\s*$")
 
-#: The v2 envelope keys, and the only envelope version the writer emits.
-_ENVELOPE_VERSION_KEY = "версия"
-_ENVELOPE_PROFILE_KEY = "профиль"
-_ENVELOPE_PROFILE_VERSION_KEY = "версия_профиля"
-_ENVELOPE_KEYS = (_ENVELOPE_VERSION_KEY, _ENVELOPE_PROFILE_KEY, _ENVELOPE_PROFILE_VERSION_KEY)
-_ENVELOPE_VERSION = 2
+#: The single metadata key written into a keys file. A file without it is
+#: legacy/envelope-less and restores as the default profile. Version and
+#: profile-version keys are deliberately unsupported (never shipped).
+_ENVELOPE_PROFILE_KEY = "Профиль"
+_ENVELOPE_KEYS = (_ENVELOPE_PROFILE_KEY,)
 
 #: Value of a single keys section (a list of original strings).
 KeysSection = list[str]
@@ -69,8 +73,8 @@ class MaskKeys:
     wordings stay separate — `АО «Росхим»` and `Акционерного общества «Росхим»`
     are two keys, which is what preserves the original case forms on restoring.
 
-    The YAML writer emits the v2 envelope (`версия`/`профиль`/`версия_профиля`)
-    from the profile the masker ran with (ADR-0001).
+    The YAML writer emits one `Профиль` marker from the profile the masker ran
+    with (default `russian-default` when no profile is supplied; ADR-0001).
     """
 
     def __init__(self, profile: MaskingProfile | None = None) -> None:
@@ -114,11 +118,10 @@ class MaskKeys:
         return document
 
     def to_yaml(self) -> str:
-        """Render the keys as a v2 YAML document (empty string when there are none)."""
-        return format_keys_yaml_v2(
+        """Render the keys with a `Профиль` marker (empty string when there are none)."""
+        return format_keys_yaml_with_profile(
             self.document(),
             profile_id=self._profile.profile_id if self._profile is not None else None,
-            profile_version=self._profile.version if self._profile is not None else None,
         )
 
     def placeholders(self) -> dict[str, str]:
@@ -138,28 +141,24 @@ def format_keys_yaml(document: Mapping[str, Iterable[str]]) -> str:
     return yaml12.format_yaml(sections)
 
 
-def format_keys_yaml_v2(
+def format_keys_yaml_with_profile(
     document: Mapping[str, Iterable[str]],
     profile_id: str | None,
-    profile_version: int | None,
 ) -> str:
     """
-    Serialize a keys document with the v2 envelope, or return `""` when empty.
+    Serialize a keys document with a `Профиль` marker, or `""` when empty.
 
-    The envelope records the file-format version and the producing profile so
-    an export can be interpreted unambiguously; restoring still works from the
-    sections alone (the envelope is metadata, never authority).
+    `None` means the default profile (restore never needs the producing
+    profile, so an omitted marker is equivalent). No version keys are written
+    or read: the format defines one current shape and acting on the latest is
+    the rule. The marker is metadata, never the restore authority.
     """
     sections = format_keys_yaml(document)
     if not sections:
         return ""
-    envelope: dict[str, object] = {_ENVELOPE_VERSION_KEY: _ENVELOPE_VERSION}
-    if profile_id is not None:
-        envelope[_ENVELOPE_PROFILE_KEY] = profile_id
-    if profile_version is not None:
-        envelope[_ENVELOPE_PROFILE_VERSION_KEY] = profile_version
+    marker: dict[str, object] = {_ENVELOPE_PROFILE_KEY: profile_id or DEFAULT_PROFILE_ID}
     parsed_sections = yaml12.parse_yaml(sections)
-    merged: dict[str, object] = dict(envelope)
+    merged: dict[str, object] = dict(marker)
     if isinstance(parsed_sections, dict):
         for key, value in parsed_sections.items():
             merged[str(key)] = value
@@ -168,11 +167,11 @@ def format_keys_yaml_v2(
 
 def parse_keys_yaml(text: str) -> KeysDocument:
     """
-    Parse a keys document of either format (v1 sections-only or v2 envelope).
+    Parse a keys document with a `Профиль` marker or sections only.
 
-    Raises `TypeError`/`ValueError` on malformed input. The envelope keys are
-    stripped before section parsing; an envelope claiming a version other than
-    2 is rejected so a future format fails loudly instead of half-parsing.
+    Raises `TypeError`/`ValueError` on malformed input. The marker is stripped
+    before section parsing; any other unknown top-level key is rejected by
+    `validate_keys_yaml`.
     """
     parsed = yaml12.parse_yaml(text)
     if parsed is None:
@@ -182,13 +181,8 @@ def parse_keys_yaml(text: str) -> KeysDocument:
         raise TypeError(msg)
 
     working = dict(parsed)
-    if _ENVELOPE_VERSION_KEY in working:
-        version = working[_ENVELOPE_VERSION_KEY]
-        if version != _ENVELOPE_VERSION:
-            msg = f"Неподдерживаемая версия файла ключей: {version!r}. Ожидается {_ENVELOPE_VERSION}."
-            raise TypeError(msg)
-        for key in _ENVELOPE_KEYS:
-            working.pop(key, None)
+    for key in _ENVELOPE_KEYS:
+        working.pop(key, None)
 
     document: KeysDocument = {}
     for title, values in working.items():
@@ -227,8 +221,8 @@ def validate_keys_yaml(text: str) -> KeysDocument:
     Parse and validate a demasking keys file, with a Russian error message.
 
     A valid file is a mapping whose keys are known Russian section titles and
-    whose values are non-empty lists of non-empty strings; the v2 envelope
-    keys are accepted and stripped before section checks. Anything else raises
+    whose values are non-empty lists of non-empty strings; the `Профиль` marker
+    is accepted and stripped before section checks. Anything else raises
     `KeysValidationError` — the API turns that into a 422 for the user.
     """
     if not text.strip():
@@ -247,13 +241,8 @@ def validate_keys_yaml(text: str) -> KeysDocument:
         raise KeysValidationError(msg)
 
     working = dict(parsed)
-    if _ENVELOPE_VERSION_KEY in working:
-        version = working[_ENVELOPE_VERSION_KEY]
-        if version != _ENVELOPE_VERSION:
-            msg = f"Неподдерживаемая версия файла ключей: {version!r}. Ожидается {_ENVELOPE_VERSION}."
-            raise KeysValidationError(msg)
-        for key in _ENVELOPE_KEYS:
-            working.pop(key, None)
+    for key in _ENVELOPE_KEYS:
+        working.pop(key, None)
 
     # YAML keeps only the last of repeated mapping keys, so a duplicated section
     # is invisible after parsing — detect it from the raw text first.

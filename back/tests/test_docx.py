@@ -176,8 +176,8 @@ def test_alternative_profile_masks_only_its_labels_and_keys_still_restore() -> N
     document = DocxDocument(io.BytesIO(masked_bytes))
     assert "Иван Петров" in document.paragraphs[0].text
     assert "[EMAIL_1]" in document.paragraphs[0].text
-    # The keys file records the producing profile (v2 envelope).
-    assert "профиль: emails-only" in keys.to_yaml()
+    # The keys file records the producing profile.
+    assert "Профиль: emails-only" in keys.to_yaml()
     # Restoring works through the default registered titles.
     placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
     restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)
