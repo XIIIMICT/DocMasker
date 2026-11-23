@@ -43,6 +43,30 @@ test("последний режим восстанавливается посл�
     await expect(page.getByRole("tab", { name: "Ключи демаскировки" })).toBeVisible();
 });
 
+test("на мобильной ширине панели не накладываются друг на друга", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    // Regression: with 1fr rows the first pane's buttons spilled below its box
+    // and landed on the second pane's tab row / «Результат …» label.
+    const geometry = await page.evaluate(() => {
+        const actions = [...document.querySelectorAll(".editor-pane__actions")].map((x) =>
+            x.getBoundingClientRect(),
+        );
+        const labels = [...document.querySelectorAll(".editor-pane__label")].map((x) =>
+            x.getBoundingClientRect(),
+        );
+        const panes = [...document.querySelectorAll(".editor-pane")].map((x) =>
+            x.getBoundingClientRect(),
+        );
+        return {
+            buttonsInsideFirstPane: actions[0].bottom <= panes[0].bottom + 1,
+            buttonsBeforeNextLabel: actions[0].bottom <= labels[1].top + 1,
+        };
+    });
+    expect(geometry.buttonsInsideFirstPane).toBe(true);
+    expect(geometry.buttonsBeforeNextLabel).toBe(true);
+});
+
 test("вкладки и кнопки видны сразу, ключи недоступны без маскировки", async ({ page }) => {
     await page.goto("/");
     const keysTab = page.getByRole("tab", { name: "Ключи демаскировки" });
