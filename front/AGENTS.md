@@ -66,8 +66,9 @@ Rules:
 
 ## Layout map
 
-- `app/page.tsx` — the single page, two top-level modes («Маскировка» /
-  «Демаскировка»). Mode state is `Record<AppMode, ModeState>` with an
+- `app/page.tsx` — thin server component: reads `SUPPORT_MAIL` and renders the
+  client `MaskerPage` (`app/masker-page.tsx`). The single page has two top-level
+  modes («Маскировка» / «Демаскировка»). Mode state is `Record<AppMode, ModeState>` with an
   `update(patch)` helper: **switching modes keeps both drafts** — never
   reintroduce a reset-on-switch. The mode switcher is a hover dropdown inside
   the brand (`shared/ui/brand.tsx` + `shared/ui/hover-dropdown.tsx`,
