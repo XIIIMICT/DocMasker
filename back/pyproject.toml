@@ -86,6 +86,11 @@ ignore = [
     "BLE001",  # Degraded windowing fallback may catch any prepare_batch error
     "SLF001",  # python-docx lxml element access (paragraph._p) for stable identity
 ]
+"src/jobs/*" = [
+    "EM101",  # Russian user-facing 4xx messages (same style as the masking router)
+    "PLC0415",  # Local imports keep the web/worker dependency direction explicit
+    "TC001",  # Pydantic schemas need runtime model imports for field resolution
+]
 "benchmarks/*" = [
     "ANN001",  # Benchmark helpers take the shared masker; typing it imports src internals
     "ANN201",  # Probe entry points return None implicitly
