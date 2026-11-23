@@ -423,25 +423,41 @@ _PERSON_ROLES: frozenset[str] = frozenset(
         "работник",
         "глава",
         "генеральный директор",
+        # Greetings / addresses that natasha parses as an animate noun and
+        # would otherwise pass as a surname in "Дорогой Иван", "Привет Иван".
+        "оператор",
+        "привет",
+        "здравствуйте",
+        "уважаемый",
+        "дорогой",
+        "дорога",
+        "новый",
     }
 )
 
 
 def _surname_accepted(morph: MorphVocab, token: str) -> bool:
     """
-    Whether `token` qualifies as a surname inside a **three-part FIO**.
+    Whether `token` qualifies as a surname in a FIO.
 
     `_is_name_token` rejects out-of-vocabulary Russian surnames ("Поповцев",
     "Старухин" parse as ordinary nouns/adjectives with no `Surn` grammeme).
-    A verified given name + patronymic is already strong evidence, so the
-    surname only has to be a capitalised surname-shaped word — *unless* it is a
-    role word ("Секретарь"), which natasha likes to glue onto a name.
+    A verified given name (and, for three-part FIOs, a patronymic) is strong
+    evidence, so the surname only has to be a capitalised surname-shaped word
+    that is not a role / greeting / toponym / common inanimate noun.
     """
     if _is_name_token(morph, token):
         return True
     if not re.fullmatch(r"[А-ЯЁ][а-яё]+", token):
         return False
-    return _lemmatize(morph, token).lower() not in _PERSON_ROLES
+    if _lemmatize(morph, token).lower() in _PERSON_ROLES:
+        return False
+    tags = [str(parse.tag) for parse in morph(token)]
+    if any("Geox" in tag for tag in tags):
+        return False
+    if all(tag.startswith(("INTJ", "VERB", "PREP", "ADJF,Qual")) for tag in tags):
+        return False
+    return not all("inan" in tag and "anim" not in tag for tag in tags)
 
 
 class RuleBasedMasker:
@@ -518,15 +534,16 @@ class RuleBasedMasker:
             fact = match.fact
             # `NamesExtractor` also fires on lone tokens (prepositions, single
             # words, or a bare surname), so require a given name plus a surname
-            # or patronymic. For a *three-part* FIO the verified given name +
-            # patronymic are strong enough evidence on their own: the surname
-            # may be out of natasha's dictionary ("Поповцев", "Старухин" have
-            # no `Surn` grammeme). Two-part names keep the strict guard — that
-            # is what rejects "из Сторон" and "Оператор ЭДО".
-            if not fact.first:
+            # or patronymic. The given name must be a verified `Name`/`Surn`/
+            # `Patr` token; the surname uses `_surname_accepted`, which admits
+            # out-of-dictionary Russian surnames ("Поповцев", "Старухин") but
+            # rejects roles, greetings, toponyms and common inanimate nouns —
+            # that is what keeps "из Сторон", "Оператор ЭДО", "Привет Иван"
+            # out. For a three-part FIO the patronymic is verified too.
+            if not fact.first or not _is_name_token(morph, fact.first):
                 continue
             if fact.middle and fact.last:
-                if not _is_name_token(morph, fact.first) or not _is_name_token(morph, fact.middle):
+                if not _is_name_token(morph, fact.middle):
                     continue
                 if not _surname_accepted(morph, fact.last):
                     continue
@@ -534,7 +551,8 @@ class RuleBasedMasker:
                 continue
             if not (fact.last or fact.middle):
                 continue
-            if not all(_is_name_token(morph, token) for token in (fact.first, fact.last or fact.middle)):
+            other = fact.last or fact.middle
+            if not _surname_accepted(morph, other):
                 continue
             yield Entity(PERSON, text[match.start : match.stop], match.start, match.stop)
         # A role word before a FIO makes natasha split the name (it attaches the

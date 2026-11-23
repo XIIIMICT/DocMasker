@@ -41,12 +41,15 @@ def test_does_not_mask_lone_words_or_prepositions() -> None:
 
 def test_masks_full_fio_with_out_of_vocabulary_surname() -> None:
     # natasha has no `Surn` grammeme for these surnames (they parse as ordinary
-    # nouns / possessive adjectives), but a verified given name + patronymic is
-    # strong enough evidence for a three-part FIO.
+    # nouns / possessive adjectives), but a verified given name is enough
+    # evidence alongside a surname-shaped word — with or without a patronymic.
     for text in (
         "Поповцев Алексей Владимирович",
         "Старухин Всеволод Анатольевич",
         "Алексей Владимирович Поповцев",
+        "Старухин Александр",
+        "Александр Старухин",
+        "Поповцев Алексей",
     ):
         assert _masker().mask(text) == "[PERSON]", text
 
@@ -73,6 +76,18 @@ def test_fio_recovery_does_not_create_false_positives() -> None:
         "Оператор ЭДО",
         "Г. Москва",
         "Директор ООО Ромашка",
+        "Привет Иван",
+        "Здравствуйте Иван",
+        "Уважаемый Иван",
+        "Дорогой Иван",
+        "Новый Иван",
+        "Письмо Ивану",
+        "Отчёт Иванов",
+        "Приказ Иван",
+        "Договор Иван",
+        "Работа Алексей",
+        "Россия Иван",
+        "Город Москва",
     ):
         assert all(entity.label != "person" for entity in _masker().detect(text)), text
     # A trailing role word must not be swallowed into the person span.

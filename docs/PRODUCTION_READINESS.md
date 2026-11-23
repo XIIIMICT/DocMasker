@@ -67,7 +67,7 @@ shape. Latency probes for the processing steps are in `back/benchmarks/README.md
 | F-15 | 3.13 rerender-smoke.spec.ts not in smoke project | low | not reproduced | `playwright test --project=smoke --list` → **21 tests in 3 files**, `rerender-smoke.spec.ts`, `smoke.spec.ts`, `health.spec.ts` all included (unanchored `testMatch` matches the substring); CI's `--list` step now asserts all three files are discovered so a rename cannot silently drop out | none; keep the listing check in CI | 7 |
 | F-16 | 3.1 Python version mismatch | — | already fixed | maintainer decision (2026-11-22): Python **3.15** everywhere; CI `python-version` fixed to 3.15; `uv sync --locked` verified green on 3.15 (and proven failing under `UV_PYTHON=3.14` before the fix) | — | done |
 
-| F-16 | 3.x FIO false negatives | medium | already fixed | `NamesExtractor` fails on out-of-vocabulary surnames (`Поповцев`, `Старухин` have no `Surn` grammeme) and on role-prefixed names (`Секретарь Т.Ф. Гилязов` → role glued as surname); detector now relaxes the surname guard for three-part FIOs, recovers initials+surname / strict name pairs from the text, and excludes role words. Live `/api/mask` round-trip + 3 regression tests | — | done |
+| F-16 | 3.x FIO false negatives | medium | already fixed | `NamesExtractor` fails on out-of-vocabulary surnames (`Поповцев`, `Старухин`, incl. two-part `Старухин Александр`) and on role-prefixed names (`Секретарь Т.Ф. Гилязов` → role glued as surname); detector relaxes the surname guard for verified-given-name FIOs, recovers initials+surname / strict name pairs from the text, and excludes roles/greetings/toponyms/common nouns. Live `/api/mask` round-trip + regression tests | — | done |
 
 ## Stage plan (mapping to the request's §13)
 
