@@ -114,19 +114,19 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 
 ## CI (GitHub Actions)
 
-`.github/workflows/ci.yaml` is the single CI entry point (PRs and pushes to `main`/`dev`, manual runs, reusable release checks). Configure **`CI required`** as the required branch-protection check — it aggregates every job and there are no path filters that could leave it pending.
+`.github/workflows/ci.yaml` is the single CI entry point (PRs and pushes to `main`/`dev`, manual runs, reusable release checks). Configure **`CI required`** as the required branch-protection check — it aggregates every job and there are no path filters that could leave it pending. Setting up rulesets/required checks is a GitHub-side action; the repo only documents the checklist, it cannot enable protection itself.
 
 | Job | What |
 |---|---|
 | `config` | actionlint + `docker compose config` for `prod`/`dev` and `infra/compose.ci.yaml` |
 | `back` | locked uv sync, ruff check/format, ty, pytest with branch coverage (artifact: coverage + JUnit) |
-| `front` | Bun 1.4 + Node 26, `next typegen`, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` |
-| `production` | builds the prod images once, boots them via `infra/compose.ci.yaml`, runs the Playwright `smoke` project, exports tested images on a `v*` tag |
+| `front` | Bun 1.4 + Node 26, `next typegen`, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
+| `production` | needs `config`+`back`+`front`; builds the prod images once, boots `back`+`worker`+`front` via `infra/compose.ci.yaml`, lists the smoke tests explicitly, runs Playwright `smoke`, exports images on a `v*` tag |
 | `required` | `jq -e 'all(...result == "success")'` over `needs` — the branch-protection gate |
 
 Notes:
-- The backend job enforces **80% branch coverage** (`--cov-fail-under=80`); it fails below that.
-- `production` builds the **backend image once** and starts it through compose; the deterministic masker means `/health` answers immediately, so the stack `--wait-timeout` is 120s.
+- The backend job enforces **80% branch coverage** (`--cov-fail-under=80`); the frontend enforces **65% line coverage** via `front/scripts/check-coverage.mjs` reading bun's lcov (measured baseline 71%, threshold chosen with headroom).
+- `production` builds the **backend image once** and starts it through compose together with the worker (the private `jobs-data` volume is shared); `/health` answers immediately, so the stack `--wait-timeout` is 180s. The smoke `--list` step asserts `health.spec.ts`, `smoke.spec.ts` and `rerender-smoke.spec.ts` are actually discovered — a renamed file must not silently drop out of CI.
 - CI ports are isolated: front **15001**, back **18001** (`infra/compose.ci.yaml` never loads the developer's `.env` or volumes).
 - `.github/workflows/codeql.yaml` runs CodeQL for `javascript-typescript`, `python` and `actions` (build-mode `none`). Enable code scanning in repo settings; use advanced setup, not default setup. CodeQL ≠ `CI required`.
 - `.github/dependabot.yaml` — weekly updates for actions, docker, uv and npm (patch bumps ignored for deps).
