@@ -26,6 +26,21 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(default=25, validation_alias="UPLOAD_MAX_MB")
     max_text_chars: int = Field(default=200_000, validation_alias="MAX_TEXT_CHARS")
     max_keys_chars: int = Field(default=1_000_000, validation_alias="MAX_KEYS_CHARS")
+    # --- Durable jobs (ADR-0002) --------------------------------------------
+    #: SQLite WAL database + private spool directory; both on one mounted volume.
+    jobs_db_path: str = Field(default="/app/jobs/jobs.sqlite3", validation_alias="JOBS_DB_PATH")
+    jobs_dir: str = Field(default="/app/jobs", validation_alias="JOBS_DIR")
+    #: Inputs at or below these thresholds stay synchronous (baseline-anchored).
+    sync_max_text_chars: int = Field(default=20_000, validation_alias="SYNC_MAX_TEXT_CHARS")
+    sync_max_docx_bytes: int = Field(default=1024 * 1024, validation_alias="SYNC_MAX_DOCX_BYTES")
+    sync_max_docx_paragraphs: int = Field(default=200, validation_alias="SYNC_MAX_DOCX_PARAGRAPHS")
+    #: Bounded queue / worker (one warm masker per thread).
+    jobs_max_active: int = Field(default=16, validation_alias="JOBS_MAX_ACTIVE")
+    jobs_concurrency: int = Field(default=2, validation_alias="JOBS_CONCURRENCY")
+    jobs_max_attempts: int = Field(default=3, validation_alias="JOBS_MAX_ATTEMPTS")
+    jobs_lease_seconds: float = Field(default=30.0, validation_alias="JOBS_LEASE_SECONDS")
+    jobs_poll_seconds: float = Field(default=1.0, validation_alias="JOBS_POLL_SECONDS")
+    jobs_ttl_seconds: float = Field(default=3600.0, validation_alias="JOBS_TTL_SECONDS")
     # Defaults to local dev origins. Only relevant when the browser talks to
     # the backend directly (the Next frontend proxies /api/* server-side).
     backend_cors_origins: list[str] = Field(
