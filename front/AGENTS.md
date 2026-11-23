@@ -86,7 +86,11 @@ Rules:
   `back/src/masking/constants.py::LABEL_TITLES` — add a title in both places or
   neither.
 - `shared/api/mask-archive.ts` — unpacks the `/api/mask-file` ZIP (jszip) into
-  the masked document + keys; the user never sees the archive itself.
+  the masked document and its demasking keys.
+- `shared/api/jobs.ts` / `jobs-types.ts` — client for the durable job API:
+  `waitForJob` polls status with backoff and unpacks the flat result ZIP;
+  all four mask/unmask handlers accept a 202 and show the same result.
+  `app/api/jobs/[...path]/route.ts` proxies `/api/jobs/*` to the backend.
 - `shared/mask-stats.ts` — result-label text and the stats tooltip body.
 - `app/api/{mask,mask-file,unmask,unmask-file,health}/route.ts` — server-side
   proxies; the browser talks only to its own origin.
