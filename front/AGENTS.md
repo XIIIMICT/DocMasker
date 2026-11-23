@@ -202,17 +202,17 @@ Rules:
 
 ## Commands (from `front/`)
 
-| What                             | Command                                                |
-| -------------------------------- | ------------------------------------------------------ |
-| Install                          | `bun install`                                          |
-| Dev server                       | `bun run dev`                                          |
-| Production build                 | `bun run build`                                        |
-| Lint (fix) / lint check          | `bun run lint` / `bun run lint:check`                  |
-| Format / format check            | `bun run format` / `bun run format:check`              |
-| Typecheck (`bun check`)          | `bun run typecheck`                                    |
-| Unit tests (bun test, happy-dom) | `bun run test`                                         |
+| What                             | Command                                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------------------- |
+| Install                          | `bun install`                                                                           |
+| Dev server                       | `bun run dev`                                                                           |
+| Production build                 | `bun run build`                                                                         |
+| Lint (fix) / lint check          | `bun run lint` / `bun run lint:check`                                                   |
+| Format / format check            | `bun run format` / `bun run format:check`                                               |
+| Typecheck (`bun check`)          | `bun run typecheck`                                                                     |
+| Unit tests (bun test, happy-dom) | `bun run test`                                                                          |
 | Coverage + threshold gate        | `bun test --coverage --coverage-reporter=lcov` then `bun scripts/check-coverage.mjs 65` |
-| e2e (needs a running stack)      | `bun run test:e2e --project=smoke` with `E2E_BASE_URL` |
+| e2e (needs a running stack)      | `bun run test:e2e --project=smoke` with `E2E_BASE_URL`                                  |
 
 Notes:
 
