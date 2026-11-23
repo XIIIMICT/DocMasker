@@ -137,12 +137,13 @@ transformer; job throttle values are estimates until re-benchmarked.
 3. **Sync/job threshold:** text ≤ 20 KB, DOCX ≤ 1 MB or ≤ 200 paragraphs stay
    synchronous; larger inputs become jobs. All three numbers configurable
    (`.env`), to be re-anchored by benchmarks later.
-4. **Frontend scope:** no full job UI. The only UI requirement is a **percent
-   progress indicator** covering upload, reading/parsing and
-   masking/unmasking. Implementation: the synchronous flow reports upload
-   progress via `XMLHttpRequest` (fetch cannot report uploads) and the backend
-   reports job phases as percentages for large inputs; the existing result
-   panes stay as they are.
+4. **Frontend scope:** no custom percent-progress widget in this stage
+   (maintainer decision, 2026-11-23). Implement the job flow as originally
+   planned in the request (§6/§13): the API + worker, polling with backoff,
+   status/progress/error display, retry/cancel/resume where they naturally
+   belong, and the existing result panes/download UX unchanged. Progress is
+   carried as job phases in the status payload; a dedicated percentage
+   indicator for upload/parse/mask steps is explicitly out of scope.
 
 ## Verification plan
 
