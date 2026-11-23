@@ -39,6 +39,46 @@ def test_does_not_mask_lone_words_or_prepositions() -> None:
     assert _masker().detect(text) == []
 
 
+def test_masks_full_fio_with_out_of_vocabulary_surname() -> None:
+    # natasha has no `Surn` grammeme for these surnames (they parse as ordinary
+    # nouns / possessive adjectives), but a verified given name + patronymic is
+    # strong enough evidence for a three-part FIO.
+    for text in (
+        "Поповцев Алексей Владимирович",
+        "Старухин Всеволод Анатольевич",
+        "Алексей Владимирович Поповцев",
+    ):
+        assert _masker().mask(text) == "[PERSON]", text
+
+
+def test_masks_initials_with_surname_including_after_a_role() -> None:
+    # natasha glues a role word onto the initials and drops the real surname,
+    # so the FIO core is recovered from the original text.
+    cases = {
+        "Т.Ф. Гилязов": "[PERSON]",
+        "Гилязов Т. Ф.": "[PERSON]",
+        "Секретарь Т.Ф. Гилязов": "Секретарь [PERSON]",
+        "Секретарь Т. Ф. Гилязов": "Секретарь [PERSON]",
+        "Секретарь Иван Петров": "Секретарь [PERSON]",
+    }
+    for text, expected in cases.items():
+        assert _masker().mask(text) == expected, text
+
+
+def test_fio_recovery_does_not_create_false_positives() -> None:
+    # The initials/pair fallback must not swallow role words, common nouns,
+    # address abbreviations or a bare city name.
+    for text in (
+        "из Сторон",
+        "Оператор ЭДО",
+        "Г. Москва",
+        "Директор ООО Ромашка",
+    ):
+        assert all(entity.label != "person" for entity in _masker().detect(text)), text
+    # A trailing role word must not be swallowed into the person span.
+    assert _masker().mask("Секретарь Т.Ф. Гилязов: секретарь") == "Секретарь [PERSON]: секретарь"
+
+
 def test_masks_phone_with_country_code() -> None:
     masked = _masker().mask("Тел +7 900 123-45-67, звоните.")
     assert masked == "Тел [PHONE], звоните."

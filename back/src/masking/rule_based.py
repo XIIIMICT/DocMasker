@@ -212,6 +212,24 @@ def _is_name_token(morph: MorphVocab, token: str) -> bool:
     return any(marker in str(parse.tag) for parse in morph(token) for marker in ("Name", "Surn", "Patr"))
 
 
+#: Exactly two Cyrillic initials plus a capitalised surname, in either order.
+#: natasha splits a role-prefixed FIO ("Секретарь Т.Ф. Гилязов") into a useless
+#: "Секретарь Т.Ф." match plus a lone "Гилязов"; this regex recovers the
+#: "Т.Ф. Гилязов" / "Гилязов Т. Ф." span straight from the original text.
+#: Two initials are required so address abbreviations ("Г. Москва") and the
+#: many one-letter omonyms in natasha's dictionary are not treated as people.
+_INITIAL = r"[А-ЯЁ]\.\s*"
+#: Two initials followed by a surname ("Т.Ф. Гилязов"), including inside a
+#: role-prefixed phrase — the lookbehind must not reject a preceding space.
+_INITIALS_SURNAME_RE = re.compile(rf"(?<!\w){_INITIAL}{_INITIAL}(?P<surname>[А-ЯЁ][а-яё]+)")
+#: Surname followed by two initials ("Гилязов Т. Ф.").
+_SURNAME_INITIALS_RE = re.compile(rf"(?<!\w)(?P<surname>[А-ЯЁ][а-яё]+)\s+{_INITIAL}{_INITIAL}")
+#: Zero-width pairs of capitalised words. A role word in front of a plain FIO
+#: ("Секретарь Иван Петров") makes natasha attach the role as the surname and
+#: drop the real "Иван Петров" pair; the strict name guard below rejects pairs
+#: containing a role or a common noun, so "из Сторон"/"Оператор ЭДО" stay out.
+_NAME_PAIR_RE = re.compile(r"(?=(?P<first>[А-ЯЁ][а-яё]+)[ \t]+(?P<last>[А-ЯЁ][а-яё]+))")
+
 #: Minimum a bare `natasha` address part must contribute before we keep it.
 _MIN_ADDRESS_PART = 3
 
@@ -384,6 +402,48 @@ def _always_mask_re(organizations: tuple[str, ...]) -> re.Pattern[str] | None:
     return re.compile(rf"(?<![A-Za-zА-Яа-яЁё0-9])(?:{names})[а-яё]*(?![A-Za-zА-Яа-яЁё0-9])", re.IGNORECASE)
 
 
+#: Role words that can precede a full name; used to skip the morphological
+#: surname guard when the surname itself is out of natasha's dictionary.
+_PERSON_ROLES: frozenset[str] = frozenset(
+    {
+        "секретарь",
+        "директор",
+        "начальник",
+        "руководитель",
+        "заместитель",
+        "председатель",
+        "бухгалтер",
+        "менеджер",
+        "инженер",
+        "исполнитель",
+        "подписант",
+        "заявитель",
+        "представитель",
+        "сотрудник",
+        "работник",
+        "глава",
+        "генеральный директор",
+    }
+)
+
+
+def _surname_accepted(morph: MorphVocab, token: str) -> bool:
+    """
+    Whether `token` qualifies as a surname inside a **three-part FIO**.
+
+    `_is_name_token` rejects out-of-vocabulary Russian surnames ("Поповцев",
+    "Старухин" parse as ordinary nouns/adjectives with no `Surn` grammeme).
+    A verified given name + patronymic is already strong evidence, so the
+    surname only has to be a capitalised surname-shaped word — *unless* it is a
+    role word ("Секретарь"), which natasha likes to glue onto a name.
+    """
+    if _is_name_token(morph, token):
+        return True
+    if not re.fullmatch(r"[А-ЯЁ][а-яё]+", token):
+        return False
+    return _lemmatize(morph, token).lower() not in _PERSON_ROLES
+
+
 class RuleBasedMasker:
     """
     Deterministic Russian PII masker.
@@ -453,17 +513,48 @@ class RuleBasedMasker:
     def _find_persons(self, text: str) -> Iterator[Entity]:
         if PERSON not in self.labels:
             return
+        morph = self._morph
         for match in self._names(text):
             fact = match.fact
             # `NamesExtractor` also fires on lone tokens (prepositions, single
-            # words, or a bare surname). Require a given name plus a surname or
-            # patronymic, and that both are plausible proper names — otherwise
-            # phrases like "из Сторон" or "Оператор ЭДО" are masked as people.
-            if not fact.first or not (fact.last or fact.middle):
+            # words, or a bare surname), so require a given name plus a surname
+            # or patronymic. For a *three-part* FIO the verified given name +
+            # patronymic are strong enough evidence on their own: the surname
+            # may be out of natasha's dictionary ("Поповцев", "Старухин" have
+            # no `Surn` grammeme). Two-part names keep the strict guard — that
+            # is what rejects "из Сторон" and "Оператор ЭДО".
+            if not fact.first:
                 continue
-            if not all(_is_name_token(self._morph, token) for token in (fact.first, fact.last or fact.middle)):
+            if fact.middle and fact.last:
+                if not _is_name_token(morph, fact.first) or not _is_name_token(morph, fact.middle):
+                    continue
+                if not _surname_accepted(morph, fact.last):
+                    continue
+                yield Entity(PERSON, text[match.start : match.stop], match.start, match.stop)
+                continue
+            if not (fact.last or fact.middle):
+                continue
+            if not all(_is_name_token(morph, token) for token in (fact.first, fact.last or fact.middle)):
                 continue
             yield Entity(PERSON, text[match.start : match.stop], match.start, match.stop)
+        # A role word before a FIO makes natasha split the name (it attaches the
+        # role as the surname). Recover the "Т.Ф. Гилязов" / "Гилязов Т. Ф."
+        # core straight from the text; `_merge_spans` keeps the earliest span.
+        for pattern in (_INITIALS_SURNAME_RE, _SURNAME_INITIALS_RE):
+            for match in pattern.finditer(text):
+                span = text[match.start() : match.end()].rstrip()
+                end = match.start() + len(span)
+                if not _surname_accepted(morph, match.group("surname")):
+                    continue
+                yield Entity(PERSON, text[match.start() : end], match.start(), end)
+        # Last resort for a role-glued plain FIO: both words must carry
+        # Name/Surn/Patr grammemes (initials never reach this path).
+        for match in _NAME_PAIR_RE.finditer(text):
+            first, last = match.group("first"), match.group("last")
+            if not _is_name_token(morph, first) or not _is_name_token(morph, last):
+                continue
+            end = match.start("last") + len(last)
+            yield Entity(PERSON, text[match.start() : end], match.start(), end)
 
     def _find_addresses(self, text: str) -> Iterator[Entity]:
         if ADDRESS not in self.labels:

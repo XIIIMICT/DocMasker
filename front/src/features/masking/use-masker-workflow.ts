@@ -147,6 +147,7 @@ export function useMaskerWorkflow() {
             restored: "",
             restoredFile: null,
             demaskUnused: null,
+            docxWarning: null,
             error: null,
             resultTab: "result",
             inputTab: "data",
@@ -336,6 +337,7 @@ export function useMaskerWorkflow() {
                 maskedFile: null,
                 keys: "",
                 stats: null,
+                docxWarning: null,
                 error:
                     requestError instanceof Error
                         ? requestError.message

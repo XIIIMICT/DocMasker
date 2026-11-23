@@ -395,4 +395,9 @@ test("предупреждение о неподдерживаемых част�
     await warning.hover();
     await expect(page.getByRole("tooltip")).toContainText("комментарии");
     await expect(page.getByRole("tooltip")).toContainText("не является полной анонимизацией");
+
+    // Removing the file clears the whole result, including the coverage
+    // warning — it must not survive into the next run.
+    await page.getByRole("button", { name: "Удалить файл" }).click();
+    await expect(warning).toHaveCount(0);
 });
