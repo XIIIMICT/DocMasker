@@ -540,6 +540,14 @@ textarea.result-area--error {
 @media (width < 64rem) {
     .editor-grid {
         grid-template-columns: 1fr;
+        /* Stacked panes must size to their content: with the default 1fr rows
+           each pane is only ~half the viewport high, while its textarea
+           (min-height 18rem) + buttons are taller — the buttons then spill
+           out of the pane and overlap the next pane's tab row (or its
+           «Результат …» label). min-content + start lets each pane grow and
+           the grid scroll as one document. */
+        grid-auto-rows: min-content;
+        align-content: start;
         overflow-y: auto;
     }
 }
