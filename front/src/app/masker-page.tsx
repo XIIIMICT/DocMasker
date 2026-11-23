@@ -42,6 +42,8 @@ interface DocxResult {
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const TEXT_MIME = "text/plain";
 const ACCEPTED_EXTENSIONS = [".docx", ".txt"];
+/** localStorage key for the last active mode (persisted across reloads). */
+export const MODE_STORAGE_KEY = "docmasker.mode";
 
 /**
  * All editable/renderable state of one mode. Keeping every field under its mode
@@ -678,10 +680,21 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
     const [mode, setMode] = useState<AppMode>("mask");
     const inMaskMode = mode === "mask";
 
-    // The tab title follows the active mode (the metadata title is static).
+    // Restore the last mode after hydration (localStorage is client-only; an
+    // SSR read would disagree with the server and break hydration). The title
+    // is derived from the *effective* mode in the same pass, so a restored
+    // demasking session can never be paired with the mask-mode title.
     useEffect(() => {
-        document.title = inMaskMode ? "ДокМаскер — Маскировка" : "ДокМаскер — Демаскировка";
-    }, [inMaskMode]);
+        let effective: AppMode = mode;
+        try {
+            const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
+            if (stored === "unmask") effective = "unmask";
+        } catch {
+            /* private mode / storage blocked: keep the default */
+        }
+        if (effective !== mode) setMode(effective);
+        document.title = `ДокМаскер / ${effective === "mask" ? "Маскировка" : "Демаскировка"}`;
+    }, [mode]);
 
     // --- Per-mode state -------------------------------------------------------
     // Every editable/renderable field lives under the mode that owns it, so
@@ -786,9 +799,15 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
         });
     }
 
-    // Switching flows keeps both drafts; nothing is cleared here.
+    // Switching flows keeps both drafts; nothing is cleared here. Remember the
+    // choice so a reload reopens the mode the user was working in.
     function onModeChange(next: AppMode) {
         setMode(next);
+        try {
+            window.localStorage.setItem(MODE_STORAGE_KEY, next);
+        } catch {
+            /* private mode / storage blocked: the mode still switches this session */
+        }
     }
 
     function onTextChange(value: string) {

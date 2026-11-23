@@ -25,9 +25,22 @@ test("страница маскирования загружается с обо
 
 test("заголовок вкладки следует за режимом", async ({ page }) => {
     await page.goto("/");
-    await expect(page).toHaveTitle("ДокМаскер — Маскировка");
+    await expect(page).toHaveTitle("ДокМаскер / Маскировка");
     await switchMode(page, "Демаскировка");
-    await expect(page).toHaveTitle("ДокМаскер — Демаскировка");
+    await expect(page).toHaveTitle("ДокМаскер / Демаскировка");
+    await switchMode(page, "Маскировка");
+    await expect(page).toHaveTitle("ДокМаскер / Маскировка");
+});
+
+test("последний режим восстанавливается после перезагрузки", async ({ page }) => {
+    await page.goto("/");
+    await switchMode(page, "Демаскировка");
+    await expect(page).toHaveTitle("ДокМаскер / Демаскировка");
+    await page.reload();
+    // The mode is restored after hydration; its controls belong to demasking.
+    await expect(page).toHaveTitle("ДокМаскер / Демаскировка");
+    await expect(page.getByRole("button", { name: "Демаскировать" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Ключи демаскировки" })).toBeVisible();
 });
 
 test("вкладки и кнопки видны сразу, ключи недоступны без маскировки", async ({ page }) => {
