@@ -73,6 +73,16 @@ Rules:
   reintroduce a reset-on-switch. The mode switcher is a hover dropdown inside
   the brand (`shared/ui/brand.tsx` + `shared/ui/hover-dropdown.tsx`,
   `menuitemradio` items), not `Tabs`.
+- `app/masker-page.tsx` — thin view (header + editor grid + hidden file inputs);
+  it calls `features/masking/use-masker-workflow.ts` for all state/handlers and
+  renders `shared/ui/panes.tsx`; it owns no business logic.
+- `features/masking/` — `types.ts` (ModeState, value types, constants,
+  `emptyModeState`, `fileKind`), `use-masker-workflow.ts` (state, derived values,
+  drag/drop, text/file/job handlers, downloads, scroll-sync refs).
+  `shared/api/mask-helpers.ts` holds the pure backend/job response adapters,
+  `shared/ui/panes.tsx` the four input/result panes + shared bits. Keep handlers
+  in the hook and presentation in panes — a new feature adds a module here, not
+  lines to `masker-page.tsx` again.
 - `shared/ui/docx-viewer.tsx` — client-only `docx-preview` renderer
   (`"use client"` + `useEffect`; never call `renderAsync` on the server). The
   `highlight` prop wraps substrings in `<mark>` **after** render —
