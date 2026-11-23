@@ -1,0 +1,81 @@
+# infra/ — deployment agent guide
+
+Compose, ports, volumes and CI invariants. Root `AGENTS.md` is the short
+index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
+`docs/WORKFLOW.md`.
+
+## Compose layout
+
+- `compose.yaml` (name `docmasker`) has profiles `prod` and `dev`:
+  - prod: `back`, `worker`, `front` (`dm-back`, `dm-worker`, `dm-front`).
+  - dev: `back-dev`, `worker-dev`, `front-dev` (`dm-*-dev`), built with
+    `develop.watch` (`--watch`) syncing `back/src` and `front/src`.
+- `just dev` / `just prod` start **all three services** (the worker is not
+  optional — large jobs need it). `just prod` = `up -d back worker front`;
+  `just dev` = `up --build --watch back-dev worker-dev front-dev`.
+- `infra/compose.ci.yaml` is the isolated CI stack: back **18001**, front
+  **15001** (loopback-only), never loads the developer's `.env`, and mounts the
+  private `jobs-data` volume into `back` and `worker`. CI boots
+  `back worker front` with `--wait --wait-timeout 180`.
+- A private volume `jobs-data` (`dm-jobs-data`) holds the SQLite WAL database
+  (`JOBS_DB_PATH=/app/jobs/jobs.sqlite3`) and id-keyed input/result artifacts
+  (`JOBS_DIR=/app/jobs`). It is **never published** and must stay shared by
+  `back` and `worker` only. `back/Dockerfile` creates `/app/jobs` owned by
+  `appuser` — without it the worker exits with `unable to open database file`.
+
+## Ports & env
+
+- Ports come from the root `.env`, single source: `FRONT_PORT=5001`,
+  `BACKEND_PORT=8001` — mandatory (`:?`), spread into Dockerfile ARGs, port
+  publishing and healthchecks. 5000/8000 are occupied by ReportCollector —
+  do not reuse.
+- Prod `back` publishes `127.0.0.1:${BACKEND_PORT}:${BACKEND_PORT}`
+  (loopback-only; the browser must go through the front proxy).
+  `BACKEND_INTERNAL_URL` is derived from the compose service name +
+  `BACKEND_PORT`; the browser calls only its own origin (no CORS).
+- Job thresholds/limits in `.env.example`: `SYNC_MAX_TEXT_CHARS`,
+  `SYNC_MAX_DOCX_BYTES`, `SYNC_MAX_DOCX_PARAGRAPHS`, `JOBS_MAX_ACTIVE`,
+  `JOBS_CONCURRENCY`, `JOBS_MAX_ATTEMPTS`, `JOBS_LEASE_SECONDS`,
+  `JOBS_POLL_SECONDS`, `JOBS_TTL_SECONDS`, `UPLOAD_MAX_MB`,
+  `MAX_TEXT_CHARS`, `MAX_KEYS_CHARS`.
+
+## Health & lifecycle
+
+- Backend `GET /health` is a simple liveness probe (`{"status":"ok"}`, no
+  model to load); front `/api/health` is a Next route. **Splitting liveness
+  and readiness is deferred to stage 6** — do not claim readiness checks
+  exist. Worker drains its pool on SIGTERM (see `jobs/worker.py`).
+- `--reload-ignore-dirs logs,jobs` in the dev Dockerfile is required: Granian
+  watches `/app/jobs`, and every SQLite WAL write used to trigger an endless
+  reload loop. Restart the dev stack with `just dev` (compose `--watch`),
+  never `docker cp`.
+
+## Containers & TLS (current state, stage 6 deferred)
+
+- Back image is Alpine, runs as `appuser` (non-root). Front prod image runs as
+  the image's `node` user with `--chown=node:node` copies.
+- TLS verification is **bypassed at build time on purpose** (maintainer
+  decision, mirrors ReportCollector): `back/Dockerfile` uses
+  `uv sync --allow-insecure-host pypi.org --allow-insecure-host
+  files.pythonhosted.org`; `front/Dockerfile` base stage sets
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` (build/dev only — the Node prod runtime
+  does not inherit it). Replacing with a trusted corporate CA
+  (`NODE_EXTRA_CA_CERTS` / system trust store) belongs to stage 6.
+- Container hardening (`read_only`, `tmpfs`, `cap_drop`, `no-new-privileges`,
+  `pids_limit`, resource limits), reverse-proxy/TLS/auth guidance and
+  observability are **deferred** — see `TODO.md`.
+
+## CI
+
+- `.github/workflows/ci.yaml` triggers on push/PR to `main`/`dev`. Jobs:
+  `config` (actionlint + compose config), `back` (ruff/ty/pytest ≥80%
+  branch coverage), `front` (typecheck/lint/format/unit + 65% line-coverage
+  gate via `front/scripts/check-coverage.mjs`), `production` (needs
+  config+back+front, builds prod images, boots back+worker+front, asserts the
+  smoke test list, runs Playwright `smoke`), `required` (aggregate gate).
+- Branch protection / required check `CI required` is configured in **GitHub
+  repository settings** — the repo cannot enable it; keep the checklist in
+  `TODO.md`, never claim it is active.
+- `docker compose --profile prod --profile dev config --quiet` and
+  `docker compose -f infra/compose.ci.yaml config --quiet` must stay green;
+  actionlint via `rhysd/actionlint:1.7.7` must pass after workflow edits.

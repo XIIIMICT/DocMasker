@@ -1,20 +1,21 @@
 # front/ — frontend agent guide
 
-Hot-path landmines live in the root `AGENTS.md`; this file is the frontend
-detail: exact stack versions, commands, and the HeroUI rules every agent must
-follow when touching UI code.
+This file owns the frontend landmines: exact stack versions, commands, the
+HeroUI rules every agent must follow when touching UI code, and the state/UI
+invariants. The root `AGENTS.md` is a short index; deployment facts live in
+`infra/AGENTS.md`, backend facts in `back/AGENTS.md`.
 
 ## Stack (exact installed versions, resolved from `bun.lock`)
 
 Manifest ranges in `package.json` are not the installed versions — always read
-`bun.lock` when you need the precise number. As of 2026-11-22:
+`bun.lock` when you need the precise number. As of 2026-11-23:
 
 | Package                            | Manifest              | Installed       |
 | ---------------------------------- | --------------------- | --------------- |
 | next                               | `16.4.6` (pinned)     | 16.4.6          |
 | react / react-dom                  | `19.3.1` (pinned)     | 19.3.1          |
-| @heroui/react                      | `^3.2.7`              | **3.2.7**       |
-| @heroui/styles                     | `^3.2.7`              | 3.2.7           |
+| @heroui/react                      | `^3.2.8`              | **3.2.8**       |
+| @heroui/styles                     | `^3.2.8`              | 3.2.8           |
 | docx-preview                       | `^0.4.1`              | 0.4.1           |
 | jszip                              | `^3.10.2`             | 3.10.2          |
 | undici                             | `^8.13.1`             | 8.13.1          |
@@ -48,7 +49,7 @@ Rules:
 4. After changing HeroUI components, run the checks below (typecheck, lint,
    unit tests, and the relevant Playwright scenarios when UI behavior changed).
 
-### HeroUI v3 facts (verified against 3.2.7)
+### HeroUI v3 facts (verified against 3.2.8)
 
 - **Slot-based compound components, not v2.** `Button` has no `color` or
   `isLoading` — use `variant="primary"` and `isDisabled`.
@@ -91,10 +92,12 @@ Rules:
 - `shared/hooks/use-synced-scroll.ts` — pairs the two panes by scroll **ratio**
   (masked text is shorter than the original).
 - `shared/api/mask.ts` — backend proxy helpers, the client-side keys validator
-  (`validateKeysYaml`, runs on every keystroke) and `KEYS_SECTION_TITLES`. The
-  section titles must stay in sync with the backend's
-  `back/src/masking/constants.py::LABEL_TITLES` — add a title in both places or
-  neither.
+  (`validateKeysYaml`, runs on every keystroke), `KEYS_SECTION_TITLES` and the
+  v2 envelope keys. The section titles must stay in sync with the backend's
+  profile-independent `profiles.py::registered_titles` union (and the two
+  validators — backend `mapping.py::validate_keys_yaml` and this module — must
+  learn any new envelope key together); add a title only when it exists in the
+  registry too. Cross-language agreement is enforced by tests.
 - `shared/api/mask-archive.ts` — unpacks the `/api/mask-file` ZIP (jszip) into
   the masked document and its demasking keys.
 - `shared/api/jobs.ts` / `jobs-types.ts` — client for the durable job API:
@@ -108,7 +111,94 @@ Rules:
   (`headersTimeout: 60_000` / `bodyTimeout: 600_000`); `shared/api/proxy.ts`
   streams responses through `new Response(response.body)` and adds
   `AbortSignal.timeout` per route (15 s JSON / 10 min files). Long work goes
-  through the job API, never a held-open connection (root `AGENTS.md` landmine 15).
+  through the job API, never a held-open connection.
+
+## Frontend landmines (moved from the root cheat sheet)
+
+1. **HeroUI v3 is Slot-based, not v2** — see the HeroUI section above. `Tabs`
+   renders no pill background and no selected indicator unless composed
+   (`Tabs.ListContainer` + a `<Tabs.Indicator />` per `Tabs.Tab`); `Tabs.Tab`
+   renders a `<button>`, so never nest another button inside it. The in-pane
+   result tabs are a separate `Tabs` from the mode switcher and still need both.
+2. **`docx-preview` is a client-only renderer.** `DocxViewer`
+   (`shared/ui/docx-viewer.tsx`) renders a Blob into a scrollable pane inside a
+   `"use client"` component via `useEffect` — never call `renderAsync` in an
+   RSC/server context. The rendered DOM is thrown away on unmount
+   (`container.innerHTML = ""`). Its `highlight` prop wraps listed substrings in
+   `<mark>` **after** render — preview-only (mask placeholders for a masked
+   preview, restored values for a demasked one); never write a highlight into
+   the document on the backend. A generation guard (`generationRef` bumped on
+   every render/cleanup) prevents a stale `renderAsync()` from writing the
+   previous Blob's DOM after a fast file switch or unmount; re-applying
+   highlights is idempotent (no nested `<mark>`).
+3. **The two panes scroll in lock-step.** `useSyncedScroll`
+   (`shared/hooks/use-synced-scroll.ts`) pairs the input/result surfaces (both
+   text areas, or both DOCX previews) mapping the **scroll ratio**, not pixels —
+   masked text is shorter. `DocxViewer` takes a `surfaceRef` so the parent can
+   observe its scrollable element. It is disabled while the result pane shows an
+   error (there is no document to align with). On narrow screens (`< 64rem`)
+   the panes stack in one column: `.editor-grid` uses
+   `grid-auto-rows: min-content; align-content: start` so each pane grows to
+   its textarea + buttons — with `1fr` rows the first pane's buttons spill over
+   the next pane's tab row/label. The grid keeps `overflow-y: auto` for tall
+   documents but hides the bar (`scrollbar-width: none` +
+   `::-webkit-scrollbar { display: none }`) — the page itself must not show a
+   vertical scrollbar.
+4. **A `.txt` is input text, not a document.** The front reads an uploaded
+   `.txt` client-side into the input `TextArea` (its name is never shown) and
+   never posts it to `/api/mask-file`; only `.docx` goes to the backend.
+   Masked text is always downloadable as `.txt`. The result label reads
+   `N фрагментов`; the `Tooltip` body (`shared/mask-stats.ts::statsBreakdown`)
+   lists `Тип: occurrences (uniques уникальных)` per label, and on demasking
+   appends a `Не применено N:` block of key values whose placeholder was absent
+   from the masked input (no tooltip when `N = 0`).
+5. **The theme switcher is icon-only `Tabs` with `Tooltip`, and theme state
+   lives in `next-themes`.** `shared/ui/theme-switcher.tsx` uses `Tabs` with
+   **no `Tabs.Panel`** (the selection is a `setTheme` side-effect) and one icon
+   per `Tabs.Tab`; the name is shown only in the hover `Tooltip`. `next-themes`
+   already persists the choice to `localStorage` (default `storageKey: "theme"`)
+   — per browser, not per account; there is no server-side/user DB storage and
+   none is planned. Render `"system"` until mounted (`useEffect`), or the
+   server-rendered selected tab mismatches the client.
+6. **The two top-level modes are switched by a hover dropdown inside the
+   brand, not `Tabs`.** `shared/ui/brand.tsx` renders «ДокМаскер» + a ghost
+   button with the active mode, opening a `Dropdown.Menu` on hover via
+   `shared/ui/hover-dropdown.tsx` (the mode items are `menuitemradio`). Mode
+   state is per-mode: `features/masking/use-masker-workflow.ts` keeps
+   `Record<AppMode, ModeState>` and an `update(patch)` helper, so **switching
+   modes keeps both drafts** — never reintroduce a reset-on-switch.
+7. **Tab title and mode persistence.** `document.title` is always
+   `ДокМаскер / Маскировка` or `ДокМаскер / Демаскировка` (never the old
+   em-dash form); the static `<title>` in `app/layout.tsx` is only the
+   pre-hydration label — there is deliberately **no `metadata.title`**, because
+   Next 16/React 19 re-applies a metadata title after hydration and would
+   overwrite the client-set per-mode title. The last mode is stored in
+   `localStorage["docmasker.mode"]` and restored on load; the restore and the
+   title write live in one `useEffect([mode])` so they cannot disagree.
+8. **Keys are validated on both sides.** Backend `validate_keys_yaml`
+   (`back/src/masking/mapping.py`) rejects empty/malformed YAML, unknown
+   sections, non-list sections, empty values, duplicate values within a
+   section and a duplicated section name, raising `KeysValidationError` → 422
+   with a Russian `detail`. The front mirrors all of it in
+   `shared/api/mask.ts::validateKeysYaml` — run **on every keystroke** (derived
+   from `demaskKeys`, not on submit) — and both the module and the page import
+   the shared `KEYS_SECTION_TITLES` list and the v2 envelope keys
+   (`версия`/`профиль`/`версия_профиля`). An invalid keys editor gets
+   `aria-invalid` and a red inline message, and the request is never sent. The
+   keys file is `.yaml` on **both** load and download (`.yml` also accepted on
+   read). Unused-keys metadata rides in the restore ZIP's JSON manifest, never
+   headers — see `back/AGENTS.md`.
+9. **Proxy timeouts are bounded; jobs carry long work.**
+   `src/instrumentation.ts` sets a global undici Agent with
+   `headersTimeout: 60_000` / `bodyTimeout: 600_000` (the old `0`/`0`
+   unbounded dispatcher and `maxDuration = 3600` are gone).
+   `shared/api/proxy.ts` streams backend responses through
+   `new Response(response.body)` (no `arrayBuffer` copy), with
+   `AbortSignal.timeout` per route: 15 s for JSON/job polling, 10 min for the
+   synchronous file endpoints. `app/api/jobs/[...path]/route.ts` proxies the
+   job API. Long operations never depend on a held-open HTTP connection — they
+   go through `/api/jobs`; `waitForJob` polls `status_url` with backoff
+   (bounded attempts, AbortSignal) and unpacks the flat result ZIP.
 
 ## Commands (from `front/`)
 
@@ -121,6 +211,7 @@ Rules:
 | Format / format check            | `bun run format` / `bun run format:check`              |
 | Typecheck (`bun check`)          | `bun run typecheck`                                    |
 | Unit tests (bun test, happy-dom) | `bun run test`                                         |
+| Coverage + threshold gate        | `bun test --coverage --coverage-reporter=lcov` then `bun scripts/check-coverage.mjs 65` |
 | e2e (needs a running stack)      | `bun run test:e2e --project=smoke` with `E2E_BASE_URL` |
 
 Notes:
@@ -129,6 +220,8 @@ Notes:
   `git status`/`git diff` afterwards and restore foreign files.
 - Unit tests live in `__tests__/` next to the code and run via `bunfig.toml`
   with happy-dom (`src/test-setup.ts`).
-- The Playwright `smoke` project (`playwright.config.ts`) targets a running
-  stack; `local.playwright.config.ts` is a local-only helper (not committed).
-  Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git.
+- The Playwright `smoke` project (`playwright.config.ts`, 21 tests in 3 files)
+  targets a running stack; `local.playwright.config.ts` is a local-only helper
+  (not committed). Probe files (`*-probe*`, `probe/`) are excluded from
+  discovery and Git. CI lists the spec files explicitly so a renamed
+  `rerender-smoke.spec.ts` cannot silently drop out of the suite.
