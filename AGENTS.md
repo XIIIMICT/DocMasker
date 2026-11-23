@@ -1,97 +1,137 @@
 # AGENTS.md — DocMasker
 
-Cheat sheet for agents. Entry point: read only the section you need; details — in `docs/*`.
+Short index for agents. **Read only the section you need, then follow the
+per-area guide** — each fact has exactly one home so the docs cannot drift:
+
+| Area | Guide | Detail docs |
+|---|---|---|
+| Backend (`back/`) | `back/AGENTS.md` — stack, commands, natasha/DOCX/keys/jobs landmines | `docs/ARCHITECTURE.md`, `docs/DOCX_SUPPORT.md`, `docs/API.md` |
+| Frontend (`front/`) | `front/AGENTS.md` — exact versions, HeroUI v3 rules, UI landmines | `docs/ARCHITECTURE.md` (front section) |
+| Deploy / CI (`infra/`, `.github/`) | `infra/AGENTS.md` — compose, ports, volumes, TLS, CI jobs | `docs/WORKFLOW.md` (CI section) |
+| Profiles / keys / jobs (decisions) | `docs/adr/0001-masking-profiles.md`, `docs/adr/0002-durable-job-execution.md` | `docs/TEMPLATES.md`, `docs/PERFORMANCE.md` |
+| Process, quality, branching | `docs/WORKFLOW.md` | `TODO.md` (living status), `docs/PRODUCTION_READINESS.md` (findings matrix) |
 
 ## What it is
 
-DocMasker masks sensitive information in text using a **deterministic rule-based pipeline** (natasha + phonenumbers + regex; no ML), and **restores** it from the generated keys. Two modes on one page, switched by header tabs: *Маскировка* (text or `.docx` → masked output + demasking keys) and *Демаскировка* (masked input + keys → the original). Masking always emits keys: each entity becomes `[LABEL_N]` and the originals are written as a Russian-section YAML file. A `.docx` (picked or drag-and-dropped) is previewed in-page and returned masked with formatting preserved; a `.txt` upload is read client-side into the input text. Drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
+DocMasker masks sensitive information in text and `.docx` with a **deterministic
+rule-based pipeline** (natasha + phonenumbers + regex; no ML) and **restores** it
+from the generated keys. One page, two top-level modes switched by a hover
+dropdown in the brand: *Маскировка* (text or `.docx` → masked output + demasking
+keys) and *Демаскировка* (masked input + keys → original). Every entity becomes
+`[LABEL_N]` and its original goes into a Russian-section YAML keys file; the
+same string repeated reuses one number/key. `.docx` is previewed in-page and
+returned with formatting preserved; `.txt` is read client-side into the input
+text; drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
 
-- Durable jobs (ADR-0002): `just dev`/`just prod` start the worker too; the private `jobs-data` volume holds SQLite WAL + id-keyed artifacts, shared by `back` and `worker`. The worker is a long-lived warm thread pool (`JOBS_CONCURRENCY`), claims with leases, heartbeats, retries ≤ `JOBS_MAX_ATTEMPTS`, sweeps by `JOBS_TTL_SECONDS`, drains on SIGTERM. Never log inputs/keys; `/api/jobs/{id}/result` is one flat ZIP (text jobs: `result.json`).
-- `front/` — Next.js 16 (App Router, React 19, HeroUI v3 `@heroui/react` — see `front/AGENTS.md` for the docs source, Tailwind 4, `docx-preview` for in-browser docx rendering, `jszip` for unpacking the mask archive), package manager **bun**.
-- `back/` — FastAPI on **Granian** (Python 3.15, **uv**) + `natasha` (Russian morphology: names/addresses) + `phonenumbers` + `python-docx` + `python-multipart` + `py-yaml12` (keys), plus a separate **worker** container (`python -m src.jobs.worker`). `setuptools<81` is pinned because `natasha`→`pymorphy2` imports the removed `pkg_resources` at runtime.
-- Ports: front **5001**, back **8001** — from the root `.env` (`FRONT_PORT`/`BACKEND_PORT`). (5000/8000 are used by ReportCollector — do not reuse them.)
-- Docker: `compose.yaml` (profiles `prod`/`dev`). The front proxies `/api/mask`, `/api/mask-file`, `/api/unmask`, `/api/unmask-file` server-side to the back via `BACKEND_INTERNAL_URL` (no CORS for the browser). The back image is **Alpine** (no PyTorch, no glibc constraint).
-- CI: GitHub Actions (push/PR triggers fire only for `main`/`dev`; `main`/`dev` must exist on origin — see `docs/ARCHITECTURE.md` "Known configuration mismatches" for the current topology). `.github/workflows/ci.yaml` = lint/type/test + prod image build + Playwright smoke; the job named `CI required` becomes the branch-protection gate only via GitHub branch rulesets (external setup). Details — `docs/WORKFLOW.md`.
+- `front/` — Next.js 16 (App Router, React 19, HeroUI v3, Tailwind 4,
+  `docx-preview`, `jszip`), package manager **bun**.
+- `back/` — FastAPI on **Granian** (Python 3.15, **uv**) + natasha +
+  phonenumbers + python-docx + `py-yaml12`, plus a separate **worker** container
+  (`python -m src.jobs.worker`). The back image is Alpine.
+- Ports from the root `.env`: front **5001**, back **8001** (5000/8000 belong
+  to ReportCollector — do not reuse). `compose.yaml` profiles `prod`/`dev`.
+- The browser calls only its own origin; the front proxies `/api/*` to the back
+  server-side via `BACKEND_INTERNAL_URL` (no CORS for the browser).
+- Durable jobs (ADR-0002): `just dev`/`just prod` start the worker too; the
+  private `jobs-data` volume holds SQLite WAL + id-keyed artifacts, shared by
+  `back` and `worker`. Large inputs become `202` jobs; the four sync endpoints
+  stay for small ones. Never log inputs/keys.
 
 ## Commands (from the repo root)
 
 | What | Command |
 |---|---|
-| Stack dev (hot-reload) | `just dev` |
+| Stack dev (hot-reload, compose `--watch`) | `just dev` |
 | Stack prod | `just prod` |
 | Back lint/format/type/test | `uv run --directory back ruff check --fix` · `ruff format` · `ty check` · `pytest -q` |
 | Front lint/format/type/test | `bun run --cwd front lint` · `format` · `typecheck` · `test` |
 | Everything at once | `just lint` · `just typecheck` · `just test` |
 | e2e smoke (needs a running stack) | `just e2e` (or `bun run --cwd front test:e2e --project=smoke`, `E2E_BASE_URL`) |
-| Manual mask test | curl against `/api/mask` (see `docs/ARCHITECTURE.md`); there is no `just mask` recipe |
+| Manual mask test | curl against `/api/mask` (see `docs/API.md`); there is no `just mask` recipe |
 
-## API
+## API (one-line index; full contract — `docs/API.md`)
 
-- `GET /health` — readiness probe; always `ok` (the backend starts instantly — no model to load).
-- `GET /api/profiles` — the registered masking profiles (ADR-0001); mask endpoints accept an optional `profile_id` (omitted = `russian-default`). Setting `MASK_LABELS` now fails backend startup.
-- Front job flow: `shared/api/jobs.ts::waitForJob` polls `status_url` with backoff (bounded attempts, AbortSignal), then downloads/unpacks the flat result ZIP (`result.json` for text jobs, `.docx` + `.yaml`/manifest for files). All four sync handlers transparently accept `202` — the same result panes/download UX. `app/api/jobs/[...path]/route.ts` proxies the job API.
-- `POST /api/jobs` (202 + `job_id`) / `GET /api/jobs/{id}` (status/phase/progress) / `GET /api/jobs/{id}/result` (ZIP, `no-store`, 409 until ready) / `DELETE /api/jobs/{id}` (cancel) — durable jobs (ADR-0002). The four sync endpoints **transparently return 202 + JobAccepted** when input exceeds `SYNC_MAX_TEXT_CHARS` / `SYNC_MAX_DOCX_BYTES` / `SYNC_MAX_DOCX_PARAGRAPHS`; state lives in SQLite WAL (`JOBS_DB_PATH`), inputs/results as id-keyed files on the private `JOBS_DIR` volume — never PII in DB rows, logs or headers.
-- `POST /api/mask` — body `{"text": "..."}` → `{"text": "<masked>", "stats": {"total", "occurrences_by_label", "unique_by_label"}, "keys": "<YAML>"}` (aggregates only — raw entity values/offsets never leave the API). Every entity gets a numbered placeholder `[LABEL_N]` and its value goes into `keys`; the same string repeated reuses one number/key.
-- `POST /api/mask-file` — multipart field `file` (.docx) → a **ZIP** holding `<base> (замаскированный).docx` + `<base> (ключи демаскировки).yaml` (`Content-Disposition: attachment`), count in `X-Masked-Count`, per-label JSON in `X-Masked-Breakdown`. The **front unpacks** the ZIP (jszip) and offers the two files as separate downloads — the user never sees the archive. `.txt` is **not** sent to the backend — the front reads it and puts its contents in the input text. Uploads are validated as OPC/ZIP packages (`docx_validation.py`): malformed/non-Word ZIPs → 415, size/entry/zip-bomb limits → 413 (tunable via `UPLOAD_MAX_MB`), encrypted archives → 415.
-- `POST /api/unmask` — body `{"text": "<masked>", "keys": "<YAML>"}` → `{"text": "<restored>"}`. Invalid keys → 422 with a Russian `detail` (from `validate_keys_yaml`). Unknown placeholders stay as-is. Oversized text/keys → 413 (`MAX_TEXT_CHARS` / `MAX_KEYS_CHARS`).
-- `POST /api/unmask-file` — multipart `file` (masked .docx) + `keys` (YAML text field) → a **ZIP** holding `<base> (демаскированный).docx` + `<base> (отчёт о демаскировке).json` (a manifest with the `unused_keys` list). The manifest replaced the `X-Unused-Keys` header (F-05): PII values no longer travel in transport metadata and no header-size limit can truncate them. Invalid keys → 422; malformed/oversized DOCX → 415/413 like mask-file.
-- Front routes `/api/mask`, `/api/mask-file`, `/api/unmask`, `/api/unmask-file` proxy to the back; the browser calls only its own origin.
+- `GET /health` — liveness, always `ok` (no model to load). `GET /api/profiles`
+  — read-only profile registry (ADR-0001); mask endpoints accept an optional
+  `profile_id` (omitted = `russian-default`). Setting `MASK_LABELS` fails startup.
+- `POST /api/mask` / `/api/unmask` — text → JSON (`text`, `stats` aggregates,
+  `keys` YAML) / masked text + keys → restored text.
+- `POST /api/mask-file` / `/api/unmask-file` — `.docx` → a ZIP (masked doc + keys
+  / restored doc + unused-keys JSON manifest). The front unpacks the archive and
+  offers two separate downloads; the user never sees the ZIP.
+- `POST /api/jobs` (202 + `job_id`) · `GET /api/jobs/{id}` (status/phase/progress) ·
+  `GET /api/jobs/{id}/result` (flat ZIP, `no-store`, 409 until ready) ·
+  `DELETE /api/jobs/{id}` (cancel). The four sync endpoints transparently
+  return `202 + JobAccepted` above `SYNC_MAX_TEXT_CHARS` /
+  `SYNC_MAX_DOCX_BYTES` / `SYNC_MAX_DOCX_PARAGRAPHS`.
+- Errors carry a Russian `detail`; 413/415/422/429/409/404 conventions and all
+  headers are in `docs/API.md` and `back/AGENTS.md`.
 
-## Masking pipeline
+## Masking pipeline (one-line index; detail — `docs/ARCHITECTURE.md`)
 
-Deterministic rules in `back/src/masking/rule_based.py` (`RuleBasedMasker`), in this order: emails (regex) → links (any `scheme://…` URL regex) → phones (`phonenumbers.PhoneNumberMatcher`, region RU) → persons (`natasha.NamesExtractor`; kept only when both parts are plausible proper names — a `Name`/`Surn`/`Patr` grammeme — so `из Сторон` / `Оператор ЭДО` are not masked) → addresses (`natasha.AddrExtractor`, adjacent parts glued; digit-only runs are rejected; a `адрес:`-introduced line is masked whole to the sentence boundary) → organisations (abbreviated prefixes `ООО/АО/ПАО/…` by regex; spelled-out legal forms matched **lemma-wise** so any case works; `«», „“, “”, ‘’, ""` and `< >` quotes plus `, - –` separators; natasha 1.6 has no `OrganisationsExtractor`). Spans are then merged non-overlapping and the text is rewritten back-to-front. Labels: `person, phone, email, link, address, organization`. Masking is **reversible**: `mapping.py::MaskKeys` numbers each entity per label in document order (`[PERSON_1]`, `[PHONE_1]`, …) and records the original values as the demasking keys (YAML via `yaml12`, Russian section titles, empty sections omitted). Unmasking replaces each `[LABEL_N]` with its value (`placeholders_from_document` reverses the keys). Details — `docs/ARCHITECTURE.md`.
-
-## Landmines (critical!)
-
-1. **`setuptools<81` is a hard runtime pin, not a lint convenience.** `natasha`→`pymorphy2` imports `pkg_resources` at runtime; on Python 3.15 setuptools is not a transitive dep (same since 3.12), and setuptools ≥81 removed `pkg_resources`. Without the pin the first `MorphVocab()` raises `ModuleNotFoundError`. It also emits a `UserWarning`, so `filterwarnings=error` needs the scoped ignore in `back/pyproject.toml`.
-2. **`natasha`'s morphological dictionary lives in memory and is expensive to build.** `MorphVocab()` + extractors load the pymorphy2 dictionary on first construction, so the masker is cached (`get_masker`, `lru_cache`) — never build a `RuleBasedMasker` per request. Tests construct one per test on purpose (isolated, still fast).
-3. **`natasha` extractors are not wired the way the docs imply.** In 1.6 the *multi-match* API is `extractor(text)` (calling the instance) — `extractor.find(text)` returns only the **first** `Match` (and `Match` is iterable, so a naive `for m in find(text)` silently unpacks into ints). There is no `natasha.OrganisationsExtractor`; `AddrExtractor` yields one match per component (`AddrPart`), not one whole address.
-4. **`NamesExtractor` over-fires on lone tokens and on two common words.** It matches prepositions, single letters, bare surnames (`fact.last` only) and any two adjacent words as a "given name + surname" (`из Сторон`, `Оператор ЭДО`). `RuleBasedMasker` keeps a match only when the fact has a given name **and** a surname/patronymic **and** both tokens are plausible proper names (`_is_name_token`: capitalised *and* a `Name`/`Surn`/`Patr` grammeme in natasha's dictionary) — don't drop either guard or false positives return.
-5. **HeroUI v3 is Slot-based, not v2** — component-level facts, the docs source and the exact installed version live in `front/AGENTS.md` (consult it for any HeroUI change). Wrong prop names surface as TS errors.
-6. **Windows/PowerShell mangles UTF-8 when sending bodies.** When testing the API from the host, put the JSON in a UTF-8 file and POST it with `curl.exe --data-binary @file`, or run Python inside a container. A Cyrillic body sent literally through PowerShell arrives corrupted and comes back as `?` — that's a test-harness artifact, not a server bug. The server and the Next proxy are verified UTF-8-correct.
-7. **DOCX masking works at the run level (`paragraph.runs`).** Formatting lives on runs; masking replaces only the covered slice of each run so styles/sizes are preserved. An entity spanning **several runs** (e.g. `АО «Росхим»` = `АО «` | `Росхим` | `»`) must still yield **one** `[LABEL]` — don't revert to per-run `mask_text`, which produces `[ORGANIZATION][ORGANIZATION][ORGANIZATION]`. `mask_paragraph` writes the marker into the run holding the entity start and blanks the covered slices of the following runs, and it **recomputes the run bounds for every entity** — a `bounds` list cached once goes stale as later (right-to-left) entities shorten runs and emits the marker once per covered run (`[PERSON_1][PERSON_1][ORGANIZATION_1]`). No highlight is written to the file: the yellow tint is **preview-only** (front `DocxViewer`), so the download stays plain. `iter_paragraphs` covers body + table cells (recursive) + **all six** header/footer variants per section (`header`, `footer`, `first_page_*`, `even_page_*`, plus tables inside them); python-docx 1.2 exposes these properties and resolves the OOXML `w:headerReference`/`w:footerReference` parts — older notes claiming only default variants exist are obsolete. Variants with `is_linked_to_previous` are skipped (their content belongs to the previous section). The unsupported OOXML parts are listed in `docs/DOCX_SUPPORT.md`.
-8. **Don't compare python-docx `Run` objects by identity.** `paragraph.add_run(...)` returns a fresh proxy each call; assert on `.text`/formatting, not `run is run`.
-9. **`iter_paragraphs` must keep a strong reference to `paragraph._p`.** python-docx hands out fresh proxies, so deduplicating by `id(paragraph._p)` alone drops paragraphs once an earlier proxy is garbage-collected and its address is reused by a later element (header/footer paragraphs vanished after repeated calls). The generator holds every seen element in a `keep_alive` list — keep it.
-10. **Hyperlinked text lives outside `paragraph.runs`.** A `mailto:`/URL hyperlink is a `w:hyperlink` wrapper; its runs are invisible to `paragraph.runs` but present in `paragraph.text`. `docx_service._paragraph_runs` walks `iter_inner_content()` so masks land inside links too, and a link whose text becomes only mask markers is unwrapped (element replaced by its runs, relationship dropped) so no dangling `mailto:` remains. Don't switch back to `paragraph.runs`.
-11. **`docx-preview` is a client-only renderer.** `DocxViewer` (`front/src/shared/ui/docx-viewer.tsx`) renders a Blob into a scrollable pane inside a `"use client"` component via `useEffect` — never call `renderAsync` in an RSC/server context. The rendered DOM is thrown away on unmount (`container.innerHTML = ""`). Its `highlight` prop wraps listed substrings in `<mark>` **after** render — preview-only (mask placeholders for a masked preview, restored values for a demasked one); never write a highlight into the document on the backend. A generation guard (`generationRef` bumped on every render/cleanup) prevents a stale `renderAsync()` from writing the previous Blob's DOM after a fast file switch or unmount; re-applying highlights is idempotent (no nested `<mark>`).
-12. **The two panes scroll in lock-step.** `useSyncedScroll` (`front/src/shared/hooks/use-synced-scroll.ts`) pairs the input/result surfaces (both text areas, or both DOCX previews) mapping the **scroll ratio**, not pixels — masked text is shorter. `DocxViewer` takes a `surfaceRef` so the parent can observe its scrollable element. It is disabled while the result pane shows an error (there is no document to align with). On narrow screens (`< 64rem`) the panes stack in one column: `.editor-grid` uses `grid-auto-rows: min-content; align-content: start` so each pane grows to its textarea + buttons — with `1fr` rows the first pane's buttons spill over the next pane's tab row/label. The grid keeps `overflow-y: auto` for genuinely tall documents but hides the bar (`scrollbar-width: none` + `::-webkit-scrollbar { display: none }`) — the page itself must not show a vertical scrollbar.
-13. **A `.txt` is input text, not a document.** The front reads an uploaded `.txt` client-side into the input `TextArea` (its name is never shown) and never posts it to `/api/mask-file`; only `.docx` goes to the backend. Masked text is always downloadable as `.txt` (typed or loaded from a file). The result label reads `N фрагментов`; the `Tooltip` body (`shared/mask-stats.ts::statsBreakdown`) lists `Тип: occurrences (uniques уникальных)` per label, and on demasking appends a `Не применено N:` block of key values whose placeholder was absent from the masked input (no tooltip when `N = 0`).
-14. **Backend tests run with `filterwarnings=error` — deprecated APIs fail the suite.** Use `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated `..._UNPROCESSABLE_ENTITY`. Any new endpoint path that the tests may hit must use non-deprecated symbols.
-**Sync CPU offload (F-01):** `back/src/masking/executor.py::run_cpu` runs the four sync endpoints' blocking work (natasha/python-docx/ZIP) in a bounded `ThreadPoolExecutor` (`JOBS_CONCURRENCY * 2` slots, semaphore per event loop); overflow → 429. `/health` stays responsive during a mask — never call `mask_document`/`mask_docx_in_memory` directly in an `async def` again.
-
-15. **Proxy timeouts are bounded; jobs carry long work.** `front/src/instrumentation.ts` sets a global undici Agent with `headersTimeout: 60_000` / `bodyTimeout: 600_000` (the old `0`/`0` unbounded dispatcher and `maxDuration = 3600` are gone). `shared/api/proxy.ts` streams backend responses through `new Response(response.body)` (no `arrayBuffer` copy), with `AbortSignal.timeout` per route: 15 s for JSON/job polling, 10 min for the synchronous file endpoints. `app/api/jobs/[...path]/route.ts` proxies the job API. Long operations never depend on a held-open HTTP connection — they go through `/api/jobs`.
-16. **The theme switcher is icon-only `Tabs` with `Tooltip`, and theme state lives in `next-themes`.** `shared/ui/theme-switcher.tsx` uses `Tabs` with **no `Tabs.Panel`** (the selection is a `setTheme` side-effect) and one icon per `Tabs.Tab`; the name is shown only in the hover `Tooltip`. `next-themes` already persists the choice to `localStorage` (default `storageKey: "theme"`) — per browser, not per account; there is no server-side/user DB storage and none is planned. Render `"system"` until mounted (`useEffect`), or the server-rendered selected tab mismatches the client.
-17. **HeroUI `Tabs` renders no pill background and no selected indicator unless composed** — details in `front/AGENTS.md` (HeroUI v3 facts). `Tabs.Tab` renders a `<button>`, so never nest another button inside it.
-18. **Keys are numbered per label in document order and deduped by exact text; document-wide numbering needs two passes.** `MaskKeys` (`mapping.py`) keys entities by `(label, text)`: the same string repeated reuses one placeholder and one key, distinct wordings (different cases of one org) stay separate — that is what keeps restoration lossless. Numbers are allocated **left-to-right before** the back-to-front rewrite (`mask_text`), or the last entity gets `_1`. In DOCX the numbering must span the whole document, so `mask_docx_in_memory` detects+assigns in a first pass over all paragraphs and rewrites in a second — don't fold it back into one pass.
-19. **The `/api/mask-file` response is a ZIP, not a `.docx`.** It bundles `<base> (замаскированный).docx` + `<base> (ключи демаскировки).yaml`; the front unpacks it with `jszip` (`shared/api/mask-archive.ts`) and offers two separate downloads. Don't return the `.docx` alone (the keys would be lost) and don't hand the archive to the user.
-20. **Keys YAML uses `yaml12` (the `py-yaml12` package), not PyYAML.** YAML 1.2 preserves quoting (`АО "Росхим"` stays quoted); PyYAML 1.1 would mangle it. Writers emit the **v2 envelope** (`версия: 2` + `профиль` + `версия_профиля`) ahead of the Russian sections; readers accept both v2 and legacy v1 (envelope-less) files, and a foreign envelope version is rejected. Section titles come from the profile registry (`profiles.py::registered_titles`); empty sections are omitted.
-**Tab title and mode persistence:** `document.title` is always `ДокМаскер / Маскировка` or `ДокМаскер / Демаскировка` (never the old em-dash form); the static `<title>` in `layout.tsx` is only the pre-hydration label — there is deliberately **no `metadata.title`**, because Next 16/React 19 re-applies a metadata title after hydration and would overwrite the client-set per-mode title. The last mode is stored in `localStorage["docmasker.mode"]` and restored on load; the restore and the title write live in one `useEffect([mode])` so they cannot disagree.
-
-21. **The two top-level modes are switched by a hover dropdown inside the brand, not `Tabs`.** `shared/ui/brand.tsx` renders «ДокМаскер» + a ghost button with the active mode, opening a `Dropdown.Menu` on hover via `shared/ui/hover-dropdown.tsx` (the mode items are `menuitemradio`). The in-pane result tabs are a separate HeroUI `Tabs` that still need `Tabs.ListContainer` **and** a `<Tabs.Indicator />` per `Tabs.Tab` (see #17). Mode state is per-mode: `page.tsx` keeps `Record<AppMode, ModeState>` and an `update(patch)` helper, so **switching modes keeps both drafts** — never reintroduce a reset-on-switch.
-22. **Unmasking is a plain placeholder→value substitution, so order does not matter; masking it does.** `unmask_text` does `str.replace` per placeholder (placeholders are self-delimiting), while `mask_text` must allocate numbers left-to-right *before* the back-to-front rewrite. On the DOCX side `unmask_docx_in_memory` finds placeholders in the paragraph text and rewrites runs, collapsing a marker that spans several runs the same way `mask_paragraph` does. The keys file is `.yaml` on **both** load and download (`.yml` also accepted on read).
-23. **Keys are validated on both sides, and the client validator must stay in sync with `LABEL_TITLES`.** Backend `validate_keys_yaml` (`mapping.py`) rejects empty/malformed YAML, unknown sections, non-list sections, empty values, **duplicate values within a section** and **a duplicated section name** (YAML keeps only the last of repeated keys, so duplicates are detected from the raw lines), raising `KeysValidationError` which the router turns into a 422 with a Russian `detail`. The front mirrors all of it in `shared/api/mask.ts::validateKeysYaml` — run **on every keystroke** (derived from `demaskKeys`, not on submit) — and both the module and the page import the shared `KEYS_SECTION_TITLES` list; add a section title in one place only when it exists in the backend's registered profile titles (`profiles.py`) too, and teach **both** validators the v2 envelope keys (`версия`/`профиль`/`версия_профиля`). An invalid keys editor gets `aria-invalid` and a red inline message, and the request is never sent.
-24. **Unused-keys metadata rides in the response body, not headers.** `/api/unmask-file` returns a ZIP: the restored `.docx` + `<base> (отчёт о демаскировке).json` manifest (`{"unused_keys": [...]}`). The former `X-Unused-Keys` header carried percent-encoded Cyrillic PII in transport metadata and could outgrow every header size limit — never reintroduce it; the front unpacks the manifest via `unpackRestoreArchive`.
+Deterministic rules in `back/src/masking/rule_based.py`, in profile order:
+emails → links → phones → persons (natasha `NamesExtractor` with a
+both-parts-plausible-proper-name guard) → addresses (natasha `AddrExtractor`,
+adjacent parts glued, digit-only runs rejected, `адрес:` line masked whole) →
+organisations (regex prefixes `ООО/АО/…`, spelled-out legal forms matched
+lemma-wise, natasha 1.6 has no `OrganisationsExtractor`). Spans are merged
+non-overlapping (start asc, length desc, score desc, detector order) and the
+text is rewritten back-to-front. Labels: `person, phone, email, link, address,
+organization`. Masking is **reversible**: `mapping.py::MaskKeys` numbers each
+entity per label in document order and records the originals as keys (YAML v2
+via `yaml12`, Russian section titles, empty sections omitted); unmasking is a
+plain placeholder→value substitution. **Landmines for all of this live in
+`back/AGENTS.md` — read it before touching the pipeline.**
 
 ## Working rules
 
-- **Git:** root `.gitignore` — deny-all + explicit whitelist (`back/`, `front/`, `docs/`, `infra/`, `.github/`, etc.). A new root file must be explicitly whitelisted. Nested `back/.gitignore`, `front/.gitignore` are whitelist-style too. Before any git operation check `git status` and the branch — never discard foreign or untracked work.
-- **Don't commit debug artifacts:** scratch scripts (`debug_*`, `*-probe*`, stray `.mjs`/`.cjs`, Playwright `probe/`) are not committed — delete them after use.
-- **Files: UTF-8, no BOM, LF.** Enforced by `/.gitattributes` + prek. PowerShell `Set-Content -Encoding UTF8` adds a BOM — use the file tools or Python to write files.
-- **Commits:** conventional commits `type(scope): …` + body Why/What/Verified; `main`/`dev`/`feature/*` git-flow (`master` is not used) — template, branching and merge checklist in `docs/WORKFLOW.md`. The user commits themselves; don't commit without an explicit request.
-- **Before delivery:** run the quality table (back: typecheck + lint + tests; front: typecheck + lint + tests) and make sure CI is green. Back tests are deterministic (no network) and enforce ≥80% branch coverage. The full "Definition of done" is in `docs/WORKFLOW.md`.
-- **When in doubt, ask the maintainer — do not guess.** Ambiguous product/config/process decisions go to the user first; only safe, reversible technical choices may proceed with documentation. See "Working principles" in `docs/WORKFLOW.md`.
-- **Tooling: ripgrep (`rg`) over grep, `uv` over bare Python, `bun` over node** — one toolchain per language, aligned with the lockfiles.
-- **Sync into the running dev stack by restarting with `just dev`** (compose `--watch`), not by `docker cp`.
-- **Languages:** code comments/docstrings, commits and agent docs — English; user-facing strings (UI labels, button text, API errors) — Russian. Full table — `docs/WORKFLOW.md`.
+- **Git:** root `.gitignore` is deny-all + explicit whitelist (`back/`, `front/`,
+  `docs/`, `infra/`, `.github/`, …); nested `back/`/`front/` `.gitignore` are
+  whitelist-style too. A new root file must be whitelisted. Before any git
+  operation check `git status` and the branch — never discard foreign or
+  untracked work.
+- **Don't commit debug artifacts:** scratch scripts (`debug_*`, `*-probe*`,
+  stray `.mjs`/`.cjs`, Playwright `probe/`) are not committed — delete them.
+- **Files: UTF-8, no BOM, LF.** Enforced by `/.gitattributes` + prek.
+  PowerShell `Set-Content -Encoding UTF8` adds a BOM — use the file tools.
+- **Commits:** conventional `type(scope): …` + body Why/What/Verified;
+  `main`/`dev`/`feature/*` git-flow (`master` is not used) — template,
+  branching and merge checklist in `docs/WORKFLOW.md`. The user commits
+  themselves; don't commit without an explicit request.
+- **Before delivery:** run the quality table (back: typecheck + lint + tests;
+  front: typecheck + lint + tests) and make sure CI is green. Back tests are
+  deterministic (no network), `filterwarnings=error`, ≥80% branch coverage;
+  front has a 65% line-coverage gate. Full "Definition of done" —
+  `docs/WORKFLOW.md`.
+- **When in doubt, ask the maintainer — do not guess.** Ambiguous
+  product/config/process decisions go to the user first; only safe, reversible
+  technical choices may proceed with documentation. See "Working principles" in
+  `docs/WORKFLOW.md`.
+- **Tooling: ripgrep (`rg`) over grep, `uv` over bare Python, `bun` over node**
+  — one toolchain per language, aligned with the lockfiles.
+- **Sync into the running dev stack by restarting with `just dev`** (compose
+  `--watch`), not by `docker cp`.
+- **Languages:** code comments/docstrings, commits and agent docs — English;
+  user-facing strings (UI labels, button text, API errors) — Russian. Full
+  table — `docs/WORKFLOW.md`.
 
 ## Documentation
 
-- `TODO.md` — живой список оставшихся работ по production-readiness (обновлять при каждом этапе).
-- `front/AGENTS.md` — frontend-specific guide: commands, exact installed HeroUI version and the mandatory HeroUI docs source.
-- `docs/ARCHITECTURE.md` — system diagram, env vars, API, masking pipeline, canonical toolchain version table.
-- `docs/WORKFLOW.md` — environment, quality commands, languages, commits/branching, definition of done, working principles.
-- `docs/PRODUCTION_READINESS.md` — living findings matrix for the production-readiness effort (statuses, evidence, stage plan).
-- `docs/DOCX_SUPPORT.md` — OOXML coverage matrix: what is masked (all header/footer variants, tables, hyperlinks) and what is not (footnotes, comments, text boxes, tracked changes, doc properties, hidden text) with the warning mechanism.
-- `back/benchmarks/` — reproducible perf probes and defect reproducers; run before/after perf-touching changes.
+- `TODO.md` — живой список оставшихся работ по production-readiness (обновлять
+  при каждом этапе).
+- `back/AGENTS.md`, `front/AGENTS.md`, `infra/AGENTS.md` — per-area agent guides
+  (landmines, commands, exact versions).
+- `docs/ARCHITECTURE.md` — system diagram, env vars, pipeline, canonical
+  toolchain version table. `docs/API.md` — HTTP contract. `docs/TEMPLATES.md`
+  — keys/profiles/recipes. `docs/PERFORMANCE.md` — benchmarks and limits.
+- `docs/WORKFLOW.md` — environment, quality commands, languages,
+  commits/branching, CI, definition of done, working principles.
+- `docs/PRODUCTION_READINESS.md` — living findings matrix (statuses, evidence,
+  stage plan). `docs/DOCX_SUPPORT.md` — OOXML coverage/limitations.
+- `docs/adr/` — accepted decisions. `back/benchmarks/` — reproducible perf
+  probes (run before/after perf-touching changes).
 
-**When behavior changes — update the matching section here and in `docs/` in the same change.** That's a requirement, not a wish: the docs are the only source of context for future agents. Record a new landmine here immediately; keep each fact in exactly one home (hot path in `AGENTS.md`, detail in `docs/`) so the two cannot drift.
+**When behavior changes — update the matching per-area guide and `docs/` file
+in the same change.** Record a new landmine immediately in that area's
+`AGENTS.md`; keep each fact in exactly one home (hot path in the per-area
+guide, detail in `docs/`) so the two cannot drift.

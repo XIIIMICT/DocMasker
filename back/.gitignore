@@ -4,6 +4,7 @@
 *
 !/.dockerignore
 !/.gitignore
+!AGENTS.md
 !Dockerfile
 !prek.toml
 !pyproject.toml

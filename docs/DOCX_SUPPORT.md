@@ -3,7 +3,8 @@
 DocMasker masks DOCX **at the run level** (`python-docx`), preserving
 formatting. Only the OOXML parts listed below are traversed. The output is
 **not** a complete anonymization of arbitrary OOXML — a document may carry PII
-in parts we do not touch. See `docs/ARCHITECTURE.md` and `AGENTS.md` landmine 7/10/11.
+in parts we do not touch. See `docs/ARCHITECTURE.md` and the DOCX landmines
+in `back/AGENTS.md`.
 
 ## Supported (masked and restored)
 
