@@ -6,12 +6,15 @@ import re
 import zipfile
 from collections import Counter
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
+from fastapi.responses import JSONResponse
 
 from src.config import get_settings
+from src.jobs.repository import JobQueueFullError
+from src.jobs.routing import count_docx_paragraphs, enqueue, needs_job
 from src.masking.profiles import ProfilesValidationError, get_profile, list_profiles
 
 from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
@@ -27,6 +30,9 @@ from .schemas import (
     UnmaskResponse,
 )
 from .service import mask_document, mask_stats, unmask_document
+
+if TYPE_CHECKING:
+    from src.jobs.models import JobKind
 
 router = APIRouter(tags=["masking"])
 
@@ -118,8 +124,30 @@ def _restore_archive(restored_docx: bytes, unused_keys: list[str], base: str) ->
     return buffer.getvalue()
 
 
+def _job_overflow(
+    kind: JobKind,
+    *,
+    input_bytes: bytes,
+    keys_bytes: bytes | None,
+    filename: str,
+    profile_id: str | None,
+) -> JSONResponse:
+    """Accept an oversized input as a durable job (202 + status/result URLs)."""
+    try:
+        accepted = enqueue(
+            kind,
+            input_bytes=input_bytes,
+            keys_bytes=keys_bytes,
+            filename=filename,
+            profile_id=profile_id,
+        )
+    except JobQueueFullError as error:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(error)) from error
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=accepted.model_dump())
+
+
 @router.post("/mask", response_model=MaskResponse)
-async def mask_text_endpoint(request: MaskRequest) -> MaskResponse:
+async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONResponse:
     """Mask sensitive information in the given text."""
     if not request.text.strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Текст пуст.")
@@ -128,6 +156,14 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Текст больше допустимого ({limit} символов).",
+        )
+    if needs_job(text=request.text):
+        return _job_overflow(
+            "mask_text",
+            input_bytes=request.text.encode("utf-8"),
+            keys_bytes=None,
+            filename="",
+            profile_id=request.profile_id,
         )
     try:
         masked, entities, keys = mask_document(request)
@@ -151,6 +187,14 @@ async def mask_file_endpoint(
     source = await file.read()
     if not source:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
+    if needs_job(data=source, paragraph_count=count_docx_paragraphs(source)):
+        return _job_overflow(
+            "mask_file",
+            input_bytes=source,
+            keys_bytes=None,
+            filename=file.filename,
+            profile_id=profile_id,
+        )
 
     try:
         profile = get_profile(profile_id)
@@ -170,7 +214,7 @@ async def mask_file_endpoint(
 
 
 @router.post("/unmask", response_model=UnmaskResponse)
-async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse:
+async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse | JSONResponse:
     """Restore a masked text from its demasking keys."""
     if not request.text.strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Текст пуст.")
@@ -184,6 +228,14 @@ async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Ключи больше допустимых ({settings.max_keys_chars} символов).",
+        )
+    if needs_job(text=request.text):
+        return _job_overflow(
+            "unmask_text",
+            input_bytes=request.text.encode("utf-8"),
+            keys_bytes=request.keys.encode("utf-8"),
+            filename="",
+            profile_id=None,
         )
     try:
         restored = unmask_document(request)
@@ -214,6 +266,14 @@ async def unmask_file_endpoint(
     source = await file.read()
     if not source:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
+    if needs_job(data=source, paragraph_count=count_docx_paragraphs(source)):
+        return _job_overflow(
+            "unmask_file",
+            input_bytes=source,
+            keys_bytes=keys.encode("utf-8"),
+            filename=file.filename,
+            profile_id=None,
+        )
 
     try:
         placeholders = placeholders_from_document(validate_keys_yaml(keys))
