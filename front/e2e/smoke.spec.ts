@@ -67,6 +67,19 @@ test("на мобильной ширине панели не накладыва�
     expect(geometry.buttonsBeforeNextLabel).toBe(true);
 });
 
+test("на мобильной ширине у подписи ввода маскировки нет фиксированной высоты", async ({
+    page,
+}) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    // The 2.5rem min-height only centres the input label against the result
+    // Tabs on desktop; on mobile the Tabs move below, so it is pure dead space.
+    const minHeight = await page
+        .locator(".editor-pane__label--mask-input")
+        .evaluate((x) => getComputedStyle(x).minHeight);
+    expect(minHeight).toBe("0px");
+});
+
 test("вкладки и кнопки видны сразу, ключи недоступны без маскировки", async ({ page }) => {
     await page.goto("/");
     const keysTab = page.getByRole("tab", { name: "Ключи демаскировки" });
