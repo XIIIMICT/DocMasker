@@ -45,6 +45,10 @@ Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
 
 The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (17 scenarios in 3 files, including the `rerender-smoke.spec.ts` regression — the `smoke` project's `testMatch` regex is unanchored, so it matches): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
 
+### Live UI checks (browser)
+
+For visual checks use the already-running dev stack — **`just dev`** (`http://127.0.0.1:5001`); compose `--watch` rebuilds on change, so no image rebuild is needed. Browser options available in this environment: **BrowserMCP**, the **built-in Orca browser** (`orca tab create --url …`, `set device --name "iPhone 12"`, `snapshot`, `screenshot`, `eval` — see the orca-cli skill), or **local Chrome via Playwright**. Prefer the dev stack over temporary prod containers; it also avoids competing for ports 5001/8001. Do not paste real PII into a live session/screenshot.
+
 ## Pre-commit (prek)
 
 Root `prek.toml` — builtin hooks (check-added-large-files, check-merge-conflict, check-yaml, end-of-file-fixer, trailing-whitespace, mixed-line-ending `--fix=lf`, fix-byte-order-marker). `back/prek.toml` — ruff format, ruff check --fix, ty check, uv lock. `front/prek.toml` — oxfmt, oxlint, bun check, bun lock. Run on `git commit` (`prek install`). If a hook fixes something itself, re-check the diff and commit again.
