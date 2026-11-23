@@ -84,6 +84,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/masking/*" = [
     "BLE001",  # Degraded windowing fallback may catch any prepare_batch error
+    "EM101",  # Russian user-facing 4xx messages (same style as the jobs API)
     "SLF001",  # python-docx lxml element access (paragraph._p) for stable identity
 ]
 "src/jobs/*" = [

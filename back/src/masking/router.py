@@ -18,7 +18,8 @@ from src.masking.profiles import ProfilesValidationError, get_profile, list_prof
 from .archives import mask_archive, restore_archive
 from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from .docx_validation import DocxValidationError, upload_limits, validate_docx_package
-from .mapping import KeysValidationError, placeholders_from_document, validate_keys_yaml
+from .executor import ExecutorBusyError, run_cpu
+from .mapping import KeysValidationError, MaskKeys, placeholders_from_document, validate_keys_yaml
 from .rule_based import get_masker_for
 from .schemas import (
     MaskedEntity,
@@ -81,6 +82,11 @@ def _attachment_headers(download_name: str, entities: list[MaskedEntity]) -> dic
     }
 
 
+def _busy() -> HTTPException:
+    """429 for the bounded synchronous executor."""
+    return HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Сервер занят. Повторите позже.")
+
+
 def _job_overflow(
     kind: JobKind,
     *,
@@ -123,7 +129,9 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONRespons
             profile_id=request.profile_id,
         )
     try:
-        masked, entities, keys = mask_document(request)
+        masked, entities, keys = await run_cpu(mask_document, request)
+    except ExecutorBusyError as error:
+        raise _busy() from error
     except ProfilesValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
     return MaskResponse(text=masked, stats=mask_stats(entities), keys=keys.to_yaml())
@@ -157,9 +165,15 @@ async def mask_file_endpoint(
         profile = get_profile(profile_id)
     except ProfilesValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
-    try:
+
+    def _mask_file() -> tuple[bytes, list[MaskedEntity], MaskKeys]:
         validate_docx_package(source, upload_limits())
-        masked_bytes, entities, keys = mask_docx_in_memory(source, get_masker_for(profile.profile_id))
+        return mask_docx_in_memory(source, get_masker_for(profile.profile_id))
+
+    try:
+        masked_bytes, entities, keys = await run_cpu(_mask_file)
+    except ExecutorBusyError as error:
+        raise _busy() from error
     except DocxValidationError as error:
         raise HTTPException(status_code=error.http_status, detail=str(error)) from error
 
@@ -195,7 +209,9 @@ async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse | JSONR
             profile_id=None,
         )
     try:
-        restored = unmask_document(request)
+        restored = await run_cpu(unmask_document, request)
+    except ExecutorBusyError as error:
+        raise _busy() from error
     except KeysValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
     return UnmaskResponse(text=restored)
@@ -234,8 +250,17 @@ async def unmask_file_endpoint(
 
     try:
         placeholders = placeholders_from_document(validate_keys_yaml(keys))
+    except KeysValidationError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+
+    def _unmask_file() -> tuple[bytes, list[str]]:
         validate_docx_package(source, upload_limits())
-        restored, unused = unmask_docx_in_memory(source, placeholders)
+        return unmask_docx_in_memory(source, placeholders)
+
+    try:
+        restored, unused = await run_cpu(_unmask_file)
+    except ExecutorBusyError as error:
+        raise _busy() from error
     except KeysValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
     except DocxValidationError as error:
