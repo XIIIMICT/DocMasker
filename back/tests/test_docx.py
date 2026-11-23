@@ -319,3 +319,83 @@ def test_entity_split_across_many_runs_yields_one_marker() -> None:
     assert text == "Привет! Меня зовут [PERSON_1], я работаю в [ORGANIZATION_1] и живу в Донецке…"
     assert text.count("[PERSON_1]") == 1
     assert text.count("[ORGANIZATION_1]") == 1
+
+
+def _build_variant_headers_docx() -> bytes:
+    """Build a document exercising every header/footer variant + a header table."""
+    doc = DocxDocument()
+    section = doc.sections[0]
+    section.different_first_page_header_footer = True
+    doc.settings.odd_and_even_pages_header_footer = True
+    section.header.paragraphs[0].add_run("Обычный: Сидоров Сидор Сидорович")
+    section.first_page_header.paragraphs[0].add_run("Первая: Иванов Иван Иванович")
+    section.even_page_header.paragraphs[0].add_run("Чётная: Петров Пётр Петрович")
+    section.footer.paragraphs[0].add_run("Низ обычный: +7 900 111-22-33")
+    section.first_page_footer.paragraphs[0].add_run("Низ первой: +7 900 222-33-44")
+    section.even_page_footer.paragraphs[0].add_run("Низ чётной: +7 900 333-44-55")
+    from docx.shared import Emu
+
+    # Six inches is enough for one cell; a test-only constant keeps the
+    # add_table(width: Length) contract explicit.
+    table = section.first_page_header.add_table(rows=1, cols=1, width=Emu(5_486_400))
+    table.cell(0, 0).paragraphs[0].add_run("Таблица шапки: Смирнов Иван Петрович")
+    doc.add_paragraph("Тело: Соколов Пётр Иванович")
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
+def test_all_header_footer_variants_are_masked() -> None:
+    source = _build_variant_headers_docx()
+    masked_bytes, entities, keys = mask_docx_in_memory(source)
+    document = DocxDocument(io.BytesIO(masked_bytes))
+    section = document.sections[0]
+    all_text = " ".join(
+        [
+            *(p.text for p in section.header.paragraphs),
+            *(p.text for p in section.first_page_header.paragraphs),
+            *(p.text for p in section.even_page_header.paragraphs),
+            *(p.text for p in section.footer.paragraphs),
+            *(p.text for p in section.first_page_footer.paragraphs),
+            *(p.text for p in section.even_page_footer.paragraphs),
+            *(
+                p.text
+                for t in section.first_page_header.tables
+                for row in t.rows
+                for c in row.cells
+                for p in c.paragraphs
+            ),
+            *(p.text for p in document.paragraphs),
+        ]
+    )
+    for secret in (
+        "Иванов Иван Иванович",
+        "Петров Пётр Петрович",
+        "Сидоров Сидор Сидорович",
+        "Смирнов Иван Петрович",
+        "Соколов Пётр Иванович",
+        "+7 900 111-22-33",
+        "+7 900 222-33-44",
+        "+7 900 333-44-55",
+    ):
+        assert secret not in all_text, f"{secret} leaked from a header/footer variant"
+    assert "[PERSON_1]" in all_text
+    assert "[PHONE_1]" in all_text
+    # Every variant contributed entities; numbering stays document-wide.
+    assert len(entities) >= 8
+    assert parse_keys_yaml(keys.to_yaml())
+
+
+def test_all_header_footer_variants_restore() -> None:
+    source = _build_variant_headers_docx()
+    masked_bytes, _entities, keys = mask_docx_in_memory(source)
+    placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
+    restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)
+    assert unused == []
+    document = DocxDocument(io.BytesIO(restored))
+    section = document.sections[0]
+    assert "Иванов Иван Иванович" in section.first_page_header.paragraphs[0].text
+    assert "Петров Пётр Петрович" in section.even_page_header.paragraphs[0].text
+    assert "Смирнов Иван Петрович" in section.first_page_header.tables[0].cell(0, 0).text
+    assert "+7 900 222-33-44" in section.first_page_footer.paragraphs[0].text
+    assert "+7 900 333-44-55" in section.even_page_footer.paragraphs[0].text

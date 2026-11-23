@@ -360,3 +360,39 @@ test("текстовая маскировка через job (202) показы�
         timeout: 15000,
     });
 });
+
+test("предупреждение о неподдерживаемых частях DOCX показывается в результате", async ({
+    page,
+}) => {
+    // Fully mock the file endpoint: a valid two-entry ZIP plus the safe
+    // warning header. route.fetch() is avoided because consuming its body
+    // would corrupt the multipart upload on replay.
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    zip.file("doc (замаскированный).docx", "masked-docx");
+    zip.file("doc (ключи демаскировки).yaml", "Физлица:\n  - Иван Петров");
+    const archive = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+
+    await page.route("**/api/mask-file", async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: "application/zip",
+            headers: {
+                "X-Masked-Count": "1",
+                "X-Masked-Breakdown": '{"person":1}',
+                "X-Docx-Unsupported-Parts": "comments,footnotes",
+                "Content-Disposition": 'attachment; filename="doc (замаскированный).zip"',
+            },
+            body: archive,
+        });
+    });
+
+    await page.goto("/");
+    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    const warning = page.getByRole("note", { name: "Предупреждение о покрытии DOCX" });
+    await expect(warning).toBeVisible({ timeout: 15000 });
+    await warning.hover();
+    await expect(page.getByRole("tooltip")).toContainText("комментарии");
+    await expect(page.getByRole("tooltip")).toContainText("не является полной анонимизацией");
+});
