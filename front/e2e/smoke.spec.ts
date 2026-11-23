@@ -299,3 +299,64 @@ test("демаскировка файла сообщает неприменён�
     await expect(tooltip).toContainText("Не применено 1:", { timeout: 10000 });
     await expect(tooltip).toContainText("- ООО «Рога и копыта»;");
 });
+
+test("текстовая маскировка через job (202) показывает результат", async ({ page }) => {
+    const jobId = "abcdefab-1234-4234-8234-abcdefabcdef";
+    const statusUrl = `/api/jobs/${jobId}`;
+    const resultUrl = `/api/jobs/${jobId}/result`;
+
+    // Build a one-entry result ZIP the same way the backend does (flat archive).
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    zip.file(
+        "result.json",
+        JSON.stringify({
+            text: "[PERSON_1]",
+            keys: "Физлица:\n  - Иван Петров",
+            stats: {
+                total: 1,
+                occurrences_by_label: { person: 1 },
+                unique_by_label: { person: 1 },
+            },
+        }),
+    );
+    const resultZip = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+
+    await page.route("**/api/mask", async (route) => {
+        await route.fulfill({
+            status: 202,
+            contentType: "application/json",
+            body: JSON.stringify({
+                job_id: jobId,
+                status: "queued",
+                status_url: statusUrl,
+                result_url: resultUrl,
+            }),
+        });
+    });
+    await page.route(`**${statusUrl}`, async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+                job_id: jobId,
+                status: "succeeded",
+                phase: "completed",
+                progress: 100,
+                attempt: 1,
+                error_code: null,
+                result_url: resultUrl,
+            }),
+        });
+    });
+    await page.route(`**${resultUrl}`, async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/zip", body: resultZip });
+    });
+
+    await page.goto("/");
+    await page.getByRole("textbox", { name: MASK_DATA }).fill("Иван Петров");
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue("[PERSON_1]", {
+        timeout: 15000,
+    });
+});

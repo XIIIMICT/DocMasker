@@ -3,6 +3,7 @@
 import { Button, ButtonGroup, Tabs, TextArea, Tooltip } from "@heroui/react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type RefObject } from "react";
 
+import { type JobAccepted, type JobResult, waitForJob } from "@/shared/api/jobs";
 import {
     keyEntries,
     type MaskResponse,
@@ -102,6 +103,74 @@ function fileKind(file: File): FileKind | null {
     if (name.endsWith(".docx") || file.type === DOCX_MIME) return "docx";
     if (name.endsWith(".txt") || file.type === TEXT_MIME) return "txt";
     return null;
+}
+
+/** Convert a text-mask job's result.json into the sync MaskResponse shape. */
+async function jobToMaskResponse(accepted: JobAccepted): Promise<MaskResponse> {
+    const payload = await (
+        await waitForJob(accepted)
+    ).json<{
+        text: string;
+        keys: string;
+        stats: MaskResponse["stats"];
+    }>();
+    return { text: payload.text, keys: payload.keys, stats: payload.stats };
+}
+
+async function jobToUnmaskResponse(accepted: JobAccepted): Promise<UnmaskResponse> {
+    const payload = await (await waitForJob(accepted)).json<{ text: string }>();
+    return { text: payload.text };
+}
+
+/** Build the two-artifact bundle from a file job's flat result ZIP. */
+async function jobBundle(
+    result: JobResult,
+    docxExtension: string,
+    keysExtension: string,
+): Promise<Awaited<ReturnType<typeof unpackMaskArchive>>> {
+    const docx = result.entry(docxExtension);
+    const keys = result.entry(keysExtension);
+    if (!docx || !keys) throw new Error("Не удалось получить результат задания.");
+    const nameFor = (extension: string) => {
+        for (const name of result.entries.keys()) {
+            if (name.toLowerCase().endsWith(extension)) return name;
+        }
+        return `result${extension}`;
+    };
+    return {
+        result: docx,
+        resultName: nameFor(docxExtension),
+        keys,
+        keysName: nameFor(keysExtension),
+    };
+}
+
+/** Build the restored-file bundle from an unmask_file job result ZIP. */
+async function jobRestoreBundle(accepted: JobAccepted) {
+    const result = await waitForJob(accepted);
+    const docx = result.entry(".docx");
+    const manifest = result.entry(".json");
+    if (!docx || !manifest) throw new Error("Не удалось получить результат задания.");
+    let unused: string[] = [];
+    try {
+        const parsed = JSON.parse(await manifest.text()) as { unused_keys?: unknown };
+        if (Array.isArray(parsed.unused_keys)) unused = parsed.unused_keys as string[];
+    } catch {
+        /* malformed manifest - treat as no unused keys */
+    }
+    let name = "restored.docx";
+    for (const key of result.entries.keys()) {
+        if (key.toLowerCase().endsWith(".docx")) {
+            name = key;
+            break;
+        }
+    }
+    return {
+        docx,
+        docxName: name,
+        manifestName: "manifest.json",
+        manifest: { unused_keys: unused },
+    };
 }
 
 /** Parse the backend's `X-Masked-Breakdown` header (a JSON label→count map). */
@@ -899,7 +968,10 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
             if (!response.ok) {
                 throw new Error(await readErrorDetail(response));
             }
-            const data = (await response.json()) as MaskResponse;
+            const data =
+                response.status === 202
+                    ? await jobToMaskResponse((await response.json()) as JobAccepted)
+                    : ((await response.json()) as MaskResponse);
             update({
                 result: data.text,
                 keys: data.keys,
@@ -936,11 +1008,27 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
             if (!response.ok) {
                 throw new Error(await readErrorDetail(response));
             }
-            const total = Number(response.headers.get("X-Masked-Count") ?? "0");
-            const byLabel = parseBreakdown(response.headers.get("X-Masked-Breakdown"));
-            // The backend returns one ZIP holding the masked .docx and its keys;
-            // unpack it so each half can be downloaded on its own.
-            const bundle = await unpackMaskArchive(await response.blob());
+            let bundle: Awaited<ReturnType<typeof unpackMaskArchive>>;
+            let total: number;
+            let byLabel: Record<string, number>;
+            if (response.status === 202) {
+                const jobResult = await waitForJob((await response.json()) as JobAccepted);
+                bundle = await jobBundle(jobResult, ".docx", ".yaml");
+                const keysText = await bundle.keys.text();
+                total = 0;
+                byLabel = {};
+                for (const [placeholder] of keyEntries(keysText)) {
+                    const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
+                    byLabel[label] = (byLabel[label] ?? 0) + 1;
+                    total += 1;
+                }
+            } else {
+                total = Number(response.headers.get("X-Masked-Count") ?? "0");
+                byLabel = parseBreakdown(response.headers.get("X-Masked-Breakdown"));
+                // The backend returns one ZIP holding the masked .docx and its keys;
+                // unpack it so each half can be downloaded on its own.
+                bundle = await unpackMaskArchive(await response.blob());
+            }
             const keysYaml = await bundle.keys.text();
             // Keys are deduped by value, so their per-label count is the unique
             // count (the headers only carry occurrence totals).
@@ -987,7 +1075,10 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
                     throw new Error(await readErrorDetail(response));
                 }
                 // The backend returns a ZIP: restored .docx + a report manifest.
-                const bundle = await unpackRestoreArchive(await response.blob());
+                const bundle =
+                    response.status === 202
+                        ? await jobRestoreBundle((await response.json()) as JobAccepted)
+                        : await unpackRestoreArchive(await response.blob());
                 update({
                     restoredFile: { blob: bundle.docx, name: bundle.docxName },
                     demaskUnused: bundle.manifest.unused_keys,
@@ -997,7 +1088,10 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
                 if (!response.ok) {
                     throw new Error(await readErrorDetail(response));
                 }
-                const data = (await response.json()) as UnmaskResponse;
+                const data =
+                    response.status === 202
+                        ? await jobToUnmaskResponse((await response.json()) as JobAccepted)
+                        : ((await response.json()) as UnmaskResponse);
                 update({ restored: data.text });
             }
         } catch (requestError) {
