@@ -29,7 +29,47 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    volumes:
+      # Private SQLite WAL + id-keyed artifact spool, shared with the worker.
+      - jobs-data:/app/jobs
     networks: [net]
+
+  worker:
+    profiles: [prod]
+    container_name: dm-worker
+    build:
+      context: ./back
+      dockerfile: Dockerfile
+      target: prod
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: true
+    command: ["python", "-m", "src.jobs.worker"]
+    volumes:
+      - jobs-data:/app/jobs
+    depends_on:
+      back:
+        condition: service_healthy
+    networks: [net]
+
+  worker-dev:
+    profiles: !override [dev]
+    container_name: dm-worker-dev
+    build:
+      context: ./back
+      dockerfile: Dockerfile
+      target: dev
+    env_file:
+      - path: ./.env
+        required: true
+    command: ["python", "-m", "src.jobs.worker"]
+    volumes:
+      - jobs-data:/app/jobs
+    depends_on:
+      back-dev:
+        condition: service_started
+    networks: !override [net-dev]
 
   back-dev:
     profiles: !override [dev]
@@ -126,3 +166,9 @@ networks:
     name: dm-net
   net-dev:
     name: dm-net-dev
+
+volumes:
+  # Never published: job inputs/results and the SQLite WAL database stay on
+  # this private volume, shared only by back and worker (ADR-0002).
+  jobs-data:
+    name: dm-jobs-data

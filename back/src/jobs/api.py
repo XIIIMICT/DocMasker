@@ -8,10 +8,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
 
 from src.config import get_settings
-from src.masking.docx_validation import DocxValidationError, validate_docx_package
+from src.masking.docx_validation import DocxValidationError, upload_limits, validate_docx_package
 from src.masking.mapping import KeysValidationError, validate_keys_yaml
 from src.masking.profiles import ProfilesValidationError, get_profile
-from src.masking.router import upload_limits
 
 from .dependencies import artifact_store, job_repository
 from .repository import JobNotFoundError, JobQueueFullError

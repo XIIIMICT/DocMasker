@@ -1,9 +1,7 @@
 """Masking and unmasking API router."""
 
-import io
 import json
 import re
-import zipfile
 from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -17,8 +15,9 @@ from src.jobs.repository import JobQueueFullError
 from src.jobs.routing import count_docx_paragraphs, enqueue, needs_job
 from src.masking.profiles import ProfilesValidationError, get_profile, list_profiles
 
+from .archives import mask_archive, restore_archive
 from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
-from .docx_validation import DocxLimits, DocxValidationError, validate_docx_package
+from .docx_validation import DocxValidationError, upload_limits, validate_docx_package
 from .mapping import KeysValidationError, placeholders_from_document, validate_keys_yaml
 from .rule_based import get_masker_for
 from .schemas import (
@@ -57,15 +56,6 @@ _DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessi
 _ZIP_CONTENT_TYPE = "application/zip"
 
 
-def upload_limits() -> DocxLimits:
-    """DOCX package limits derived from the settings (single source: root .env)."""
-    settings = get_settings()
-    return DocxLimits(
-        max_upload_bytes=settings.max_upload_mb * 1024 * 1024,
-        max_uncompressed_bytes=settings.max_upload_mb * 10 * 1024 * 1024,
-    )
-
-
 def _ascii_attachment_name(name: str) -> str:
     """Fallback filename for `filename=` (must be ASCII/latin-1 safe)."""
     ascii_name = re.sub(r"[^A-Za-z0-9_.()-]", "_", name)
@@ -89,39 +79,6 @@ def _attachment_headers(download_name: str, entities: list[MaskedEntity]) -> dic
         "X-Masked-Count": str(len(entities)),
         "X-Masked-Breakdown": _label_breakdown(entities),
     }
-
-
-def _archive(masked_docx: bytes, keys_yaml: str, base: str) -> bytes:
-    """
-    Bundle the masked document and its keys into one ZIP.
-
-    The front end unpacks it and offers the two files as separate downloads, so
-    the user never sees the archive. It also keeps the two artifacts of one
-    masking run together (a keys file without its document is useless).
-    """
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{base} (замаскированный).docx", masked_docx)
-        archive.writestr(f"{base} (ключи демаскировки).yaml", keys_yaml)
-    return buffer.getvalue()
-
-
-def _restore_archive(restored_docx: bytes, unused_keys: list[str], base: str) -> bytes:
-    """
-    Bundle the restored document and a manifest of unapplied keys into one ZIP.
-
-    The unused-keys metadata used to travel in the `X-Unused-Keys` header, but
-    the list holds original PII values and outgrew every header size limit for
-    large key sets — it now rides in the response body as a small JSON manifest.
-    """
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{base} (демаскированный).docx", restored_docx)
-        archive.writestr(
-            f"{base} (отчёт о демаскировке).json",
-            json.dumps({"unused_keys": unused_keys}, ensure_ascii=False, indent=2),
-        )
-    return buffer.getvalue()
 
 
 def _job_overflow(
@@ -207,7 +164,7 @@ async def mask_file_endpoint(
         raise HTTPException(status_code=error.http_status, detail=str(error)) from error
 
     base = Path(file.filename).stem
-    archive = _archive(masked_bytes, keys.to_yaml(), base)
+    archive = mask_archive(masked_bytes, keys.to_yaml(), base)
     headers = _attachment_headers(f"{base} (замаскированный).zip", entities)
     headers["Content-Type"] = _ZIP_CONTENT_TYPE
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
@@ -289,7 +246,7 @@ async def unmask_file_endpoint(
     # uploaded back for restoring; drop that suffix so the restored file is
     # named "<base> (демаскированный).docx", not "... (замаскированный) (...)".
     base = base.removesuffix(" (замаскированный)")
-    archive = _restore_archive(restored, unused, base)
+    archive = restore_archive(restored, unused, base)
     download_name = f"{base} (демаскированный).zip"
     headers = {"Content-Disposition": _content_disposition(download_name), "Content-Type": _ZIP_CONTENT_TYPE}
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
