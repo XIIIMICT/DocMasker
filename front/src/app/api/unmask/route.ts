@@ -1,13 +1,11 @@
 import { proxyUnmaskRequest } from "@/shared/api/mask";
 
 export const dynamic = "force-dynamic";
-// No serverless-style execution ceiling: a large DOCX must be allowed to finish.
-export const maxDuration = 3600;
 
 /**
  * Forward an unmask request to the backend. The browser sends JSON with the
  * masked text and its keys; the back restores it and we pass the response
- * through verbatim.
+ * through verbatim (a 202 job acceptance is streamed through too).
  */
 export async function POST(request: Request) {
     const payload = (await request.json().catch(() => null)) as {

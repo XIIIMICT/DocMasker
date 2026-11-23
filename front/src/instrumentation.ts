@@ -1,12 +1,12 @@
 /**
- * Remove the fetch header/body timeouts for the server-side backend proxy.
+ * Bounded server-side fetch timeouts (ADR-0002, F-08).
  *
- * Next's `fetch` runs on Node's bundled undici, whose defaults (300s headers,
- * 300s body) can abort a large DOCX round-trip before the backend answers.
- * The masking itself is fast, but upload + transfer of a sizable document
- * should never hit an arbitrary ceiling, so a global dispatcher disables the
- * two timeouts. `connectTimeout` stays at the default so a genuinely dead
- * backend still fails quickly.
+ * The old global dispatcher disabled undici's header/body timeouts for EVERY
+ * server-side fetch (0 = unbounded), which could leave hung requests forever.
+ * Long work now runs through the durable job API, so the proxy only needs
+ * finite, generous-but-bounded limits: 60 s to first byte, 10 min for a body.
+ * Short job/polling routes use a per-request AbortSignal.timeout instead.
+ * connectTimeout keeps its default so a dead backend still fails quickly.
  *
  * Runs once per server process (Node.js runtime only — this is a server file).
  */
@@ -15,8 +15,8 @@ export async function register(): Promise<void> {
     const { Agent, setGlobalDispatcher } = await import("undici");
     setGlobalDispatcher(
         new Agent({
-            headersTimeout: 0,
-            bodyTimeout: 0,
+            headersTimeout: 60_000,
+            bodyTimeout: 600_000,
         }),
     );
 }

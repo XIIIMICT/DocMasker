@@ -90,10 +90,11 @@ Rules:
 - `shared/mask-stats.ts` — result-label text and the stats tooltip body.
 - `app/api/{mask,mask-file,unmask,unmask-file,health}/route.ts` — server-side
   proxies; the browser talks only to its own origin.
-- `src/instrumentation.ts` — global undici dispatcher with
-  `headersTimeout: 0` / `bodyTimeout: 0`, so a large DOCX proxy round-trip is
-  never aborted by Node's default ceiling (root `AGENTS.md` landmine 15). Do
-  not "restore" the defaults without replacing the guarantee.
+- `src/instrumentation.ts` — bounded global undici dispatcher
+  (`headersTimeout: 60_000` / `bodyTimeout: 600_000`); `shared/api/proxy.ts`
+  streams responses through `new Response(response.body)` and adds
+  `AbortSignal.timeout` per route (15 s JSON / 10 min files). Long work goes
+  through the job API, never a held-open connection (root `AGENTS.md` landmine 15).
 
 ## Commands (from `front/`)
 

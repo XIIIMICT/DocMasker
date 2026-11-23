@@ -549,6 +549,14 @@ textarea.result-area--error {
         grid-auto-rows: min-content;
         align-content: start;
         overflow-y: auto;
+        /* The page itself must not show a vertical scrollbar: the grid keeps
+           its scroll container for genuinely tall documents, but the bar is
+           hidden (scrollbar-width: none + the WebKit pseudo-element). */
+        scrollbar-width: none;
+    }
+
+    .editor-grid::-webkit-scrollbar {
+        display: none;
     }
 }
 

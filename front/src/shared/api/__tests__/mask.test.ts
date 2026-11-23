@@ -65,6 +65,15 @@ describe("proxyMaskRequest", () => {
     });
 });
 
+describe("proxy timeouts", () => {
+    it("exposes bounded timeouts (no global 0/unbounded dispatcher)", async () => {
+        const { PROXY_FILE_TIMEOUT_MS, PROXY_JSON_TIMEOUT_MS } = await import("@/shared/api/mask");
+        expect(PROXY_JSON_TIMEOUT_MS).toBeGreaterThan(0);
+        expect(PROXY_FILE_TIMEOUT_MS).toBeGreaterThan(PROXY_JSON_TIMEOUT_MS);
+        expect(PROXY_FILE_TIMEOUT_MS).toBeLessThanOrEqual(600_000);
+    });
+});
+
 describe("proxyUnmaskRequest", () => {
     it("sends the masked text and keys, passing the response through", async () => {
         process.env.BACKEND_INTERNAL_URL = "http://back:8001";
