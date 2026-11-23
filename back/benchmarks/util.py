@@ -33,8 +33,14 @@ class MemoryInfo(ctypes.Structure):
 
 
 def _windows_peak_rss_mb() -> float:
-    psapi = ctypes.windll.psapi
-    kernel32 = ctypes.windll.kernel32
+    # `ctypes.windll` only exists on Windows. Access it via `getattr` so a
+    # Linux type checker (CI `ty check`) does not report a missing attribute;
+    # this function is only called when `sys.platform == "win32"` anyway.
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return 0.0
+    psapi = windll.psapi
+    kernel32 = windll.kernel32
     kernel32.GetCurrentProcess.restype = ctypes.wintypes.HANDLE
     psapi.GetProcessMemoryInfo.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(MemoryInfo), ctypes.wintypes.DWORD]
     psapi.GetProcessMemoryInfo.restype = ctypes.wintypes.BOOL
