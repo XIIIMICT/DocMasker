@@ -1,6 +1,6 @@
 # DocMasker Architecture
 
-Sensitive-information masking in text via a deterministic rule-based pipeline. Monorepo: `front/` (Next.js), `back/` (FastAPI), `docs/`.
+Sensitive-information masking in text via a deterministic rule-based pipeline. Monorepo: `front/` (Next.js), `back/` (FastAPI), `docs/`. Topic docs: `docs/API.md` (HTTP contract), `docs/TEMPLATES.md` (keys/profiles), `docs/PERFORMANCE.md` (benchmarks/limits).
 
 ## System diagram
 
@@ -60,7 +60,7 @@ bugfix support until ~2028-10); the backend targets it explicitly.
 | pytest / pytest-asyncio / pytest-cov | `>=9.2.0` / `>=1.4.0` / `>=7.1.0` | 9.2.0 / 1.5.0 / 7.1.0 | — | — |
 | Next.js | `16.4.6` (pinned) | 16.4.6 | — | — |
 | React / ReactDOM | `19.3.1` (pinned) | 19.3.1 | — | — |
-| @heroui/react, @heroui/styles | `^3.2.7` | 3.2.7 | — | — |
+| @heroui/react, @heroui/styles | `^3.2.8` | 3.2.8 | — | — |
 | docx-preview | `^0.4.1` | 0.4.1 | — | — |
 | jszip | `^3.10.2` | 3.10.2 | — | — |
 | undici | `^8.13.1` | 8.13.1 | — | — |
@@ -129,6 +129,9 @@ The default profile reports `person, phone, email, link, address, organization` 
 
 ## API (back, prefix `/api`)
 
+Full request/response schemas, headers, status codes and the job contract —
+`docs/API.md`. Summary:
+
 - `GET /profiles` — the registered masking profiles (id, version, display name, labels with titles/order). Read-only; profiles are code-configured (ADR-0001), there is no mutation endpoint.
 - `POST /mask` — body `{"text": "...", "profile_id": "..."}` (profile optional) → `{"text": "<masked>", "stats": {"total": 2, "occurrences_by_label": {"person": 1, …}, "unique_by_label": {…}}, "keys": "<YAML>"}`. 422 for empty/whitespace text.
 - `POST /mask-file` — multipart field `file` (.docx) + optional `profile_id` form field → a **ZIP** (`Content-Disposition: attachment`, `application/zip`) holding `<base> (замаскированный).docx` and `<base> (ключи демаскировки).yaml`, with the masked-entity count in the `X-Masked-Count` header and a per-label JSON map in `X-Masked-Breakdown` (e.g. `{"person":2,"phone":1}`). The archive keeps the two artifacts of one run together; the **front unpacks it** and offers them as two separate downloads, the user never sees the ZIP. 422 for non-`.docx` or empty files.
@@ -157,7 +160,15 @@ Errors carry a Russian `detail`; the front renders them in red inside the result
 - `shared/api/mask.ts` — `proxyMaskRequest` / `proxyUnmaskRequest`: forward to `BACKEND_INTERNAL_URL`, pass the body/status back verbatim.
 - `shared/api/mask-archive.ts` — `unpackMaskArchive`: unpacks the `/api/mask-file` ZIP (via `jszip`) into the masked document and the keys file, with the names taken from the archive entries. The two halves are then offered as separate downloads.
 - `shared/config.ts` — `getBackendInternalUrl()` (throws if unset).
-- `src/instrumentation.ts` — Node-runtime hook that installs a global undici dispatcher with `headersTimeout: 0` / `bodyTimeout: 0`, so the server-side backend proxy has **no fetch timeout**: a large DOCX round-trip can never be aborted by an arbitrary ceiling. `connectTimeout` keeps its default, so a dead backend still fails fast. All proxy routes also set `maxDuration = 3600` for parity with hosted environments.
+- `src/instrumentation.ts` — Node-runtime hook that installs a bounded global
+  undici dispatcher (`headersTimeout: 60_000` / `bodyTimeout: 600_000`), so a
+  large synchronous DOCX round-trip is generous-but-finite; `connectTimeout`
+  keeps its default so a dead backend still fails fast. `shared/api/proxy.ts`
+  streams backend responses through `new Response(response.body)` (no
+  `arrayBuffer` copy) with `AbortSignal.timeout` per route (15 s JSON/job
+  polling, 10 min files). The old `0`/`0` unbounded dispatcher and
+  `maxDuration = 3600` were removed in stage 4 (F-08) — long work goes through
+  the durable job API, never a held-open connection.
 
 The masked file is named `<original> (замаскированный).docx` and the keys `<original> (ключи демаскировки).yaml` (inside the ZIP; the front takes the names from the archive entries).
 
@@ -165,7 +176,13 @@ The header brand mirrors ReportCollector: the `ruschem_icon.png` icon (also the 
 
 ## Deployment (prod)
 
-`just prod` builds the prod-profile images and starts `dm-back` + `dm-front`. The front publishes `FRONT_PORT`, the back `BACKEND_PORT`. The backend starts instantly — there is no model download and no persistent cache volume. The base image is Alpine (`python:3.15-alpine`), matching the project convention, because dropping PyTorch removed the glibc/musl constraint.
+`just prod` builds the prod-profile images and starts `dm-back` + `dm-worker` +
+`dm-front` (the worker is mandatory — large jobs need the shared `jobs-data`
+volume). The front publishes `FRONT_PORT`, the back publishes `BACKEND_PORT` to
+loopback only (`127.0.0.1`). The backend starts instantly — there is no model
+download and no persistent cache volume. The base image is Alpine
+(`python:3.15-alpine`), matching the project convention, because dropping
+PyTorch removed the glibc/musl constraint.
 
 ## CI stack (`infra/compose.ci.yaml`)
 

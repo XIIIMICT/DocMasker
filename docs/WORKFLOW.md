@@ -43,7 +43,7 @@ Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
 
 ### e2e (Playwright)
 
-The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (17 scenarios in 3 files, including the `rerender-smoke.spec.ts` regression — the `smoke` project's `testMatch` regex is unanchored, so it matches): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
+The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (**21 scenarios in 3 files**, including the `rerender-smoke.spec.ts` regression — the `smoke` project's `testMatch` regex is unanchored, and CI asserts all three spec files are discovered): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
 
 ### Live UI checks (browser)
 
@@ -131,7 +131,7 @@ Notes:
 - `.github/workflows/codeql.yaml` runs CodeQL for `javascript-typescript`, `python` and `actions` (build-mode `none`). Enable code scanning in repo settings; use advanced setup, not default setup. CodeQL ≠ `CI required`.
 - `.github/dependabot.yaml` — weekly updates for actions, docker, uv and npm (patch bumps ignored for deps).
 
-Local reproduction of the `production` job: build the images (`docker compose -f infra/compose.ci.yaml build`), start them (`docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 600`), then `E2E_BASE_URL=http://127.0.0.1:15001 bun run --cwd front test:e2e --project=smoke`. Tear down with `docker compose -f infra/compose.ci.yaml down --volumes --remove-orphans`.
+Local reproduction of the `production` job: build the images (`docker compose -f infra/compose.ci.yaml build`), start them (`docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 180 back worker front`), then `E2E_BASE_URL=http://127.0.0.1:15001 bun run --cwd front test:e2e --project=smoke`. Tear down with `docker compose -f infra/compose.ci.yaml down --volumes --remove-orphans`.
 
 ## Definition of done
 
@@ -144,10 +144,22 @@ Local reproduction of the `production` job: build the images (`docker compose -f
 
 ## Documentation discipline
 
-- **Documentation is part of the change.** Behavior, API, config, timings or a landmine changed → update `AGENTS.md` and the corresponding `docs/` file in the same change.
-- **Record a landmine immediately** when you hit it — one line in `AGENTS.md`. Easy to lose by delivery time.
-- **Docs are durable, not a changelog.** State how things are now; dates and "removed on …" belong in commit messages. Exact Russian quotations are the exception — keep them to map docs to the UI.
-- **One home per fact.** A fact lives either in `AGENTS.md` (hot path) or in `docs/` (detail) — never duplicated, so the two cannot drift.
+- **Documentation is part of the change.** Behavior, API, config, timings or a
+  landmine changed → update the matching per-area `AGENTS.md` and the
+  corresponding `docs/` file in the same change. Topic homes: `docs/API.md`
+  (HTTP contract), `docs/TEMPLATES.md` (keys/profiles), `docs/PERFORMANCE.md`
+  (benchmarks/limits), `docs/WORKFLOW.md` (process/CI), `docs/ARCHITECTURE.md`
+  (system/pipeline), `docs/DOCX_SUPPORT.md` (OOXML coverage), `docs/adr/`
+  (decisions), `TODO.md` (living status).
+- **Record a landmine immediately** when you hit it — one line in the relevant
+  per-area guide (`back/AGENTS.md`, `front/AGENTS.md`, `infra/AGENTS.md`). Easy
+  to lose by delivery time. The root `AGENTS.md` is only a short index and must
+  not accumulate landmines again.
+- **Docs are durable, not a changelog.** State how things are now; dates and
+  "removed on …" belong in commit messages. Exact Russian quotations are the
+  exception — keep them to map docs to the UI.
+- **One home per fact.** A fact lives either in a per-area `AGENTS.md` (hot
+  path) or in `docs/` (detail) — never duplicated, so the two cannot drift.
 
 ## Working principles
 

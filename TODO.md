@@ -63,23 +63,30 @@
       (есть на `/api/jobs/{id}/result` — проверить остальные).
 - [ ] Ротация/retention логов.
 
-## Этап 7 — Финальная документация, CI, production verification `todo`
+## Этап 7 — Финальная документация, CI, production verification `in progress`
 
-- [ ] Корневой `AGENTS.md` перестроить в короткий индекс; завести
-      `back/AGENTS.md`, `infra/AGENTS.md` (front уже есть), ценные landmines
-      перенести по темам, не дублировать.
+> Делается этап 7 без зависимости от этапа 6 (по решению maintainer). Этап 6
+> остаётся `deferred` и придёт позже.
+
+- [x] Корневой `AGENTS.md` — короткий индекс; `back/AGENTS.md` и
+      `infra/AGENTS.md` заведены; все landmines перенесены по темам
+      (`front/AGENTS.md` обновлён: 3.2.8, `registered_titles`, 21 тест),
+      без дублирования.
+- [x] `docs/API.md` (полный HTTP-контракт), `docs/TEMPLATES.md` (формат ключей,
+      профили, рецепты расширения), `docs/PERFORMANCE.md` (бенчмарки, лимиты,
+      незакрытые хотспоты); поправлены устаревшие факты в `ARCHITECTURE.md`,
+      `WORKFLOW.md`, `PRODUCTION_READINESS.md`, `DOCX_SUPPORT.md`.
+- [x] CI: front coverage gate (65% строк, измерено 71%), `production` зависит от
+      `config`+`back`+`front`, поднимает `back`+`worker`+`front`, явно
+      перечисляет smoke-спеки, `--wait-timeout 180`.
 - [ ] Корневой `README.md` (создаст maintainer — не трогать без запроса):
       продукт, форматы, архитектура, запуск, production requirements, безопасность,
       Known DOCX limitations.
-- [ ] Документы по темам: `docs/API.md`, `docs/TEMPLATES.md`,
-      `docs/SECURITY.md`, `docs/OPERATIONS.md`, `docs/PERFORMANCE.md`
-      (сейчас часть фактов в ARCHITECTURE/WORKFLOW/DOCX_SUPPORT).
-- [ ] CI: `.github/workflows/ci.yaml` — поправить триггеры под фактические
-      `main`/`dev` и default branch, явно перечислить тесты Playwright
-      (`rerender-smoke.spec.ts` уже в smoke), добавить отдельные gates
-      (back/front/API/DOCX integration/prod image), coverage threshold для front.
+- [ ] `docs/SECURITY.md`, `docs/OPERATIONS.md` — **зависят от этапа 6**
+      (reverse-proxy/TLS/auth boundary, runbooks, retention), делать вместе с ним.
 - [ ] Branch protection / ruleset + required check `CI required` — **внешняя
-      настройка GitHub**, не утверждать, что включено; вести checklist.
+      настройка GitHub**, не утверждать, что включено; вести checklist
+      (origin пока только `feat/demasking`, `main`/`dev` локально).
 - [ ] Clean install → unit → integration → e2e → Docker production smoke
       (включая job lifecycle: crash/restart, queue full, expired result,
       cancel, disk full) на целевом железе; записать замеры.
