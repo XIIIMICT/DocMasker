@@ -43,8 +43,18 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
    `Оператор ЭДО`). `RuleBasedMasker` keeps a match only when the fact has a
    given name **and** a surname/patronymic **and** both tokens are plausible
    proper names (`_is_name_token`: capitalised *and* a `Name`/`Surn`/`Patr`
-   grammeme in natasha's dictionary) — don't drop either guard or false
-   positives return.
+   grammeme in natasha's dictionary). natasha's dictionary is incomplete, so a
+   **three-part FIO** relaxes the surname guard to `_surname_accepted` (a
+   capitalised surname-shaped word that is not a role word like `Секретарь`):
+   `Поповцев`/`Старухин` have no `Surn` grammeme but must still be masked. A
+   role word before a FIO makes natasha attach the role as the surname and
+   split the name (`Секретарь Т.Ф. Гилязов` → `Секретарь Т.Ф.` + `Гилязов`), so
+   `_find_persons` also recovers `Т.Ф. Гилязов` / `Гилязов Т.Ф.` with the
+   two-initials regexes and a strict name-pair fallback for `Иван Петров`.
+   **Never drop the two-part strict guard or drop the role-word exclusion** —
+   `из Сторон`, `Оператор ЭДО`, `Г. Москва` and bare `Секретарь` must stay
+   unmasked. Regressions: `test_rule_based.py::test_masks_full_fio_*`,
+   `::test_masks_initials_with_surname_*`, `::test_fio_recovery_does_not_create_false_positives`.
 5. **Deprecated APIs fail the suite** (`filterwarnings=error`). Use
    `status.HTTP_422_UNPROCESSABLE_CONTENT`, not the deprecated
    `..._UNPROCESSABLE_ENTITY`. Any new endpoint path the tests may hit must
