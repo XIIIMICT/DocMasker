@@ -32,9 +32,8 @@ export const KEYS_SECTION_TITLES = [
     "Адреса",
 ] as const;
 
-/** Envelope keys of a v2 keys file (ADR-0001): metadata, not sections. */
-const KEYS_ENVELOPE_KEYS = ["версия", "профиль", "версия_профиля"] as const;
-const KEYS_ENVELOPE_VERSION = 2;
+/** The single metadata key of a keys file (`Профиль`); not a section. */
+const KEYS_ENVELOPE_KEYS = ["Профиль"] as const;
 
 /** Russian keys section title → entity label (mirrors the backend `LABEL_TITLES`). */
 export const KEYS_TITLE_LABELS: Record<string, string> = {
@@ -129,16 +128,13 @@ export function validateKeysYaml(text: string): string | null {
     if (typeof parsed !== "object" || Array.isArray(parsed)) {
         return "Файл ключей должен содержать словарь разделов.";
     }
-    // A v2 keys file (ADR-0001) carries a metadata envelope before the sections.
-    let hasEnvelope = false;
+    // A keys file may carry a `Профиль` marker before the sections; it is
+    // metadata only (a file without it restores as the default profile).
+    // No version keys exist — the format has one current shape, so any other
+    // top-level key is an unknown section and fails the checks below.
     const record = parsed as Record<string, unknown>;
-    if (KEYS_ENVELOPE_KEYS.some((key) => key in record)) {
-        hasEnvelope = true;
-        if (Number(record.версия) !== KEYS_ENVELOPE_VERSION) {
-            return `Неподдерживаемая версия файла ключей: ${String(record.версия)}. Ожидается ${KEYS_ENVELOPE_VERSION}.`;
-        }
-    }
-    const entries = Object.entries(parsed as Record<string, unknown>).filter(
+    const hasEnvelope = KEYS_ENVELOPE_KEYS.some((key) => key in record);
+    const entries = Object.entries(record).filter(
         ([title]) => !(KEYS_ENVELOPE_KEYS as readonly string[]).includes(title),
     );
     if (entries.length === 0) {

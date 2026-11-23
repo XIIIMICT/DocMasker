@@ -93,7 +93,7 @@ Rules:
   (masked text is shorter than the original).
 - `shared/api/mask.ts` — backend proxy helpers, the client-side keys validator
   (`validateKeysYaml`, runs on every keystroke), `KEYS_SECTION_TITLES` and the
-  v2 envelope keys. The section titles must stay in sync with the backend's
+  `Профиль` marker. The section titles must stay in sync with the backend's
   profile-independent `profiles.py::registered_titles` union (and the two
   validators — backend `mapping.py::validate_keys_yaml` and this module — must
   learn any new envelope key together); add a title only when it exists in the
@@ -182,8 +182,8 @@ Rules:
    with a Russian `detail`. The front mirrors all of it in
    `shared/api/mask.ts::validateKeysYaml` — run **on every keystroke** (derived
    from `demaskKeys`, not on submit) — and both the module and the page import
-   the shared `KEYS_SECTION_TITLES` list and the v2 envelope keys
-   (`версия`/`профиль`/`версия_профиля`). An invalid keys editor gets
+   the shared `KEYS_SECTION_TITLES` list and the `Профиль` marker
+   (no version keys — the pre-prod v2 envelope was retired). An invalid keys editor gets
    `aria-invalid` and a red inline message, and the request is never sent. The
    keys file is `.yaml` on **both** load and download (`.yml` also accepted on
    read). Unused-keys metadata rides in the restore ZIP's JSON manifest, never

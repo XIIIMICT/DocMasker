@@ -120,11 +120,14 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     reverses a parsed keys file.
 14. **Keys YAML uses `yaml12` (the `py-yaml12` package), not PyYAML.** YAML
     1.2 preserves quoting (`АО "Росхим"` stays quoted); PyYAML 1.1 would
-    mangle it. Writers emit the **v2 envelope** (`версия: 2` + `профиль` +
-    `версия_профиля`) ahead of the Russian sections; readers accept both v2
-    and legacy v1 (envelope-less) files, and a foreign envelope version is
-    rejected. Section titles come from the profile registry
-    (`profiles.py::registered_titles`); empty sections are omitted.
+    mangle it. Writers emit one `Профиль: <id>` marker (default
+    `russian-default` when no profile is supplied) ahead of the Russian
+    sections; readers accept that shape and the legacy envelope-less one (a
+    file without the marker restores as the default profile). **No
+    `версия`/`версия_профиля` keys** are written or read — the pre-prod v2
+    envelope was retired, those keys are now unknown sections. Section titles
+    come from the profile registry (`profiles.py::registered_titles`); empty
+    sections are omitted.
 15. **The `/api/mask-file` response is a ZIP, not a `.docx`.** It bundles
     `<base> (замаскированный).docx` + `<base> (ключи демаскировки).yaml`;
     the front unpacks it with jszip and offers two separate downloads. Don't
