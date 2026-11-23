@@ -23,6 +23,8 @@
 !/src/**
 !/e2e/
 !/e2e/**
+!/scripts/
+!/scripts/**
 
 # Junk inside the whitelist (last rule wins)
 *.tsbuildinfo

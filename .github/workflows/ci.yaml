@@ -83,6 +83,8 @@ jobs:
       - run: bun run lint:check
       - run: bun run format:check
       - run: bun test --coverage --coverage-reporter=lcov
+      - name: Enforce frontend coverage threshold
+        run: bun scripts/check-coverage.mjs 65
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -92,7 +94,7 @@ jobs:
 
   production:
     name: Production images and browser smoke
-    needs: config
+    needs: [config, back, front]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -124,15 +126,23 @@ jobs:
           tags: dm-front:ci
           cache-from: type=gha,scope=front
           cache-to: type=gha,mode=max,scope=front
-      - name: Start tested production images
-        run: docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 120 back front
+      - name: Start tested production images (back, worker, front)
+        run: docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 180 back worker front
       - name: Install browser
         working-directory: front
         run: |
           bun install --frozen-lockfile
           bunx --no-install playwright install --with-deps chromium
+      - name: Verify the smoke project actually lists every regression
+        working-directory: front
+        run: |
+          bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
+          cat smoke-tests.txt
+          for name in "rerender-smoke.spec.ts" "smoke.spec.ts" "health.spec.ts"; do
+            grep -q "$name" smoke-tests.txt || { echo "Missing smoke test: $name"; exit 1; }
+          done
       - name: Browser smoke
-        run: bun run --cwd front test:e2e --project=smoke
+        run: bun run --cwd front test:e2e --project=smoke --reporter=list
       - name: Export tested release images
         if: startsWith(github.ref, 'refs/tags/v')
         run: docker save -o production-images.tar dm-back:ci dm-front:ci
