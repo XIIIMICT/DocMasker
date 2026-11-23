@@ -16,8 +16,8 @@
         "typecheck": "bun check"
     },
     "dependencies": {
-        "@heroui/react": "^3.2.7",
-        "@heroui/styles": "^3.2.7",
+        "@heroui/react": "^3.2.8",
+        "@heroui/styles": "^3.2.8",
         "docx-preview": "^0.4.1",
         "iconoir-react": "^7.12.2",
         "jszip": "^3.10.2",
