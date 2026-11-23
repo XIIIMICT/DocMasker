@@ -6,7 +6,15 @@ original claim), `already fixed`, `needs validation` (cannot be verified from
 this repo alone), `planned` (accepted, scheduled for a specific stage).
 
 Evidence for performance claims lives in `back/benchmarks/` (reproducible
-probes, see `back/benchmarks/README.md`).
+probes, see `back/benchmarks/README.md`), interpreted in `docs/PERFORMANCE.md`.
+
+Stage-7 verification (2026-11-23, this host): back 174 tests, front 53 unit +
+65% coverage gate, ruff/ty/oxlint/oxfmt/actionlint, both compose configs green;
+dev stack + isolated prod-image CI stack each passed **21/21** Playwright smoke
+(incl. the 202→worker job path and the DOCX warning). The prod stack booted
+`back`+`worker`+`front` all healthy on 18001/15001 and was torn down afterwards.
+Still outstanding: target-hardware run and the job-lifecycle stress scenarios
+(crash/restart, queue full, disk full, expired result, cancel) — see `TODO.md`.
 
 ## Baseline environment (2026-11-22)
 

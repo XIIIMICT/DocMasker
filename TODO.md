@@ -87,9 +87,15 @@
 - [ ] Branch protection / ruleset + required check `CI required` — **внешняя
       настройка GitHub**, не утверждать, что включено; вести checklist
       (origin пока только `feat/demasking`, `main`/`dev` локально).
-- [ ] Clean install → unit → integration → e2e → Docker production smoke
-      (включая job lifecycle: crash/restart, queue full, expired result,
-      cancel, disk full) на целевом железе; записать замеры.
+- [x] Clean install → unit → integration → e2e → Docker production smoke:
+      prod images `dm-back:ci`/`dm-front:ci` built, isolated `infra/compose.ci.yaml`
+      stack (`back`+`worker`+`front`, `--wait --wait-timeout 180`) booted all three
+      healthy, `/health`+`/api/health` 200, **21/21 e2e** on 15001 (включая job
+      202→воркер и DOCX-warning); dev-стек — 21/21 на 5001; back 174 теста /
+      90%+ branch, front 53 unit / 65% gate, ruff/ty/oxlint/oxfmt/actionlint,
+      оба compose config зелёные. Стек разобран (`down --volumes`), dev не тронут.
+      Осталось: повторить на целевом железе + стресс job lifecycle
+      (crash/restart, queue full, disk full, expired result, cancel).
 - [ ] Повторно пройти исходный список замечаний раздела 3 и обновить матрицу:
       `done`, `not done`, `blocked`, `deferred` с доказательствами.
 
