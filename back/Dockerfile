@@ -21,7 +21,7 @@ ARG BACKEND_PORT=8000
 ENV BACKEND_PORT=${BACKEND_PORT}
 
 RUN addgroup -S appgroup && adduser -S -G appgroup -h /app appuser && \
-    mkdir -p /app/logs && \
+    mkdir -p /app/logs /app/jobs && \
     chown -R appuser:appgroup /app
 
 COPY --chown=appuser:appgroup src/ src/

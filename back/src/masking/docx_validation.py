@@ -12,6 +12,8 @@ import io
 import zipfile
 from dataclasses import dataclass
 
+from src.config import get_settings
+
 #: Parts every valid DOCX (WordprocessingML package) must contain.
 _REQUIRED_PARTS = ("[Content_Types].xml", "word/document.xml")
 
@@ -99,3 +101,12 @@ def validate_docx_package(data: bytes, limits: DocxLimits) -> None:
                     raise _too_large(_ZIP_BOMB)
         if total_uncompressed > limits.max_uncompressed_bytes:
             raise _too_large(_OVERSIZE_UNCOMPRESSED)
+
+
+def upload_limits() -> DocxLimits:
+    """DOCX package limits derived from the settings (single source: root .env)."""
+    settings = get_settings()
+    return DocxLimits(
+        max_upload_bytes=settings.max_upload_mb * 1024 * 1024,
+        max_uncompressed_bytes=settings.max_upload_mb * 10 * 1024 * 1024,
+    )

@@ -6,17 +6,17 @@ set shell := ["powershell.exe", "-Command"]
 export UV_SYSTEM_CERTS := "1"
 export NODE_OPTIONS := "--use-system-ca"
 
-# Запуск бэкенда и фронтенда в prod-режиме (только сервисы приложения)
+# Запуск prod-стека: бэкенд, воркер заданий и фронтенд
 prod:
-    docker compose --profile prod up -d back front
+    docker compose --profile prod up -d back worker front
 
 # То же самое, но с пересборкой
 prod-build:
-    docker compose --profile prod up --build -d back front
+    docker compose --profile prod up --build -d back worker front
 
-# Запуск бэкенда и фронтенда в dev-режиме (всегда с пересборкой)
+# dev-стек (всегда с пересборкой, compose --watch): + воркер заданий
 dev:
-    docker compose --profile dev up --build --watch back-dev front-dev
+    docker compose --profile dev up --build --watch back-dev worker-dev front-dev
 
 # Установка / обновление зависимостей (uv, bun)
 deps:

@@ -28,6 +28,8 @@ The browser talks only to the front origin; the front proxies `/api/mask` to the
 | `back` / `back-dev` | `dm-back` / `dm-back-dev` | prod / dev | FastAPI on Granian, port `BACKEND_PORT` |
 | `front` / `front-dev` | `dm-front` / `dm-front-dev` | prod / dev | Next.js standalone (prod) or `bun dev` (dev, hot-reload), port `FRONT_PORT` |
 
+The prod/dev stacks also run a dedicated worker container (`dm-worker` / `dm-worker-dev`, `python -m src.jobs.worker`) that polls the SQLite WAL queue and executes large jobs with a bounded warm thread pool; the private `jobs-data` volume is mounted into `back` and `worker` only.
+
 Key point: **ports and hosts are set once in the root `.env`** and spread into the Dockerfiles (build-arg `PORT`/`BACKEND_PORT`), port publishing, healthchecks, and internal URLs. All mandatory (`:?` in compose — fails with a clear error instead of staying silent). `BACKEND_INTERNAL_URL` is derived from the service name + `BACKEND_PORT` (e.g. `http://back-dev:8001` in dev).
 
 ## Toolchain versions (canonical)

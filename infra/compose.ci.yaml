@@ -18,11 +18,20 @@ services:
         BACKEND_PORT: "8001"
     environment: *back-env
     ports: ["127.0.0.1:18001:8001"]
+    volumes: ["jobs-data:/app/jobs"]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
       interval: 2s
       timeout: 5s
       retries: 30
+  worker:
+    image: dm-back:ci
+    environment: *back-env
+    command: ["python", "-m", "src.jobs.worker"]
+    volumes: ["jobs-data:/app/jobs"]
+    depends_on:
+      back:
+        condition: service_healthy
   front:
     image: dm-front:ci
     build:
@@ -48,3 +57,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+
+volumes:
+  jobs-data:

@@ -8,7 +8,7 @@ this file in the same change (see "Documentation discipline").
 
 1. Copy the config: `cp .env.example .env` (root — single source).
 2. Dependencies: `just deps` (`uv sync --directory back` + `bun install --cwd front`).
-3. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts `dm-back-dev` and `dm-front-dev`.
+3. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts `dm-back-dev`, `dm-worker-dev` and `dm-front-dev`. `just prod` starts `dm-back`, `dm-worker`, `dm-front`; all share the private `jobs-data` volume (SQLite WAL + job artifacts, ADR-0002).
 
 There are no host-run recipes for the servers (`just back` / `just front` are commented out in the `justfile`). If needed, run the backend manually with Granian: `uv run --directory back granian --interface asgi --reload --reload-ignore-dirs logs src.main:app --port 8001`. For host-run installs the `justfile` exports `UV_SYSTEM_CERTS=1` and `NODE_OPTIONS=--use-system-ca` so corporate CAs are trusted.
 
