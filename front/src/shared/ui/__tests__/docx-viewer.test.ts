@@ -39,4 +39,17 @@ describe("highlightTexts", () => {
         expect(marks).toHaveLength(1);
         expect(marks[0]?.textContent).toBe("[PERSON_1]");
     });
+
+    it("re-applying highlights never nests marks (fast highlight changes)", () => {
+        const root = document.createElement("div");
+        root.innerHTML = "<span>[PERSON_1] и [ORGANIZATION_1]</span>";
+        highlightTexts(root, ["[PERSON_1]"]);
+        highlightTexts(root, ["[PERSON_1]", "[ORGANIZATION_1]"]);
+        highlightTexts(root, ["[ORGANIZATION_1]"]);
+        const marks = root.querySelectorAll("mark.docx-marker");
+        expect(marks).toHaveLength(1);
+        expect(marks[0]?.textContent).toBe("[ORGANIZATION_1]");
+        expect(root.querySelectorAll("mark mark")).toHaveLength(0);
+        expect(root.textContent).toBe("[PERSON_1] и [ORGANIZATION_1]");
+    });
 });
