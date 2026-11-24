@@ -39,6 +39,18 @@ jobs:
         working-directory: back
     env:
       COVERAGE_FILE: coverage-data
+      TEST_DATABASE_URL: postgresql+psycopg://dm:ci_password@127.0.0.1:15432/dm_ci
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: dm
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: dm_ci
+        ports: ["127.0.0.1:15432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dm -d dm_ci"
+          --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.4.0
@@ -50,7 +62,9 @@ jobs:
       - run: uv run --no-sync ruff check
       - run: uv run --no-sync ruff format --check
       - run: uv run --no-sync ty check
-      - name: Masking tests
+      - name: Migrate empty database
+        run: uv run --no-sync alembic upgrade head
+      - name: Masking + PostgreSQL integration tests
         run: uv run --no-sync pytest -q --cov=src --cov-branch --cov-fail-under=80 --cov-report=term --cov-report=xml:coverage.xml --junitxml=test-results.xml --durations=10
       - uses: actions/upload-artifact@v7
         if: always()
@@ -128,6 +142,10 @@ jobs:
           cache-to: type=gha,mode=max,scope=front
       - name: Start tested production images (back, worker, front)
         run: docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 180 back worker front
+      - name: Apply Alembic migrations to the isolated CI database
+        run: |
+          docker compose -f infra/compose.ci.yaml exec -T back alembic upgrade head
+          docker compose -f infra/compose.ci.yaml restart worker
       - name: Install browser
         working-directory: front
         run: |

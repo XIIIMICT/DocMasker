@@ -8,8 +8,8 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
 
 - Python **3.15** (`uv`), FastAPI on Granian, `natasha` + `phonenumbers` +
   regex detectors, `python-docx`, `py-yaml12` keys. Backend image is Alpine,
-  runs as `appuser` (non-root). Dev CMD adds `--reload-ignore-dirs jobs` —
-  Granian otherwise reloads on every SQLite WAL write.
+  runs as `appuser` (non-root). Dev CMD adds `--reload-ignore-dirs jobs` so
+  Granian does not watch the artifact spool.
 - `uv run --directory back ruff check --fix` · `ruff format` · `ty check` ·
   `pytest -q`. Tests are offline/deterministic, `filterwarnings=error`,
   **≥80% branch coverage** enforced in CI. Test files: `test_rule_based.py`,
@@ -152,14 +152,18 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     `ThreadPoolExecutor` (`JOBS_CONCURRENCY * 2` slots, semaphore per event
     loop); overflow → 429. `/health` stays responsive during a mask — never
     call `mask_document`/`mask_docx_in_memory` directly in an `async def`.
-18. **Large inputs become durable jobs** (ADR-0002): SQLite WAL
-    (`jobs/repository.py`) + private id-keyed spool (`jobs/storage.py`),
-    long-lived warm worker (`python -m src.jobs.worker`), leases/heartbeat/
-    retry/TTL/cancel. Job rows, logs and metrics must never contain PII or
-    keys. The four sync endpoints transparently return `202 + JobAccepted`
-    above `SYNC_MAX_TEXT_CHARS` / `SYNC_MAX_DOCX_BYTES` /
+18. **Large inputs become durable jobs** (ADR-0002 / PostgreSQL substrate
+    ADR-0003): PostgreSQL (`jobs/repository.py`, SQLAlchemy 2 sync + psycopg 3,
+    Alembic migration `0001_jobs`, `SKIP LOCKED` claim with a fresh `uuid4()`
+    lease token) + private id-keyed spool (`jobs/storage.py`), long-lived warm
+    worker (`python -m src.jobs.worker`), leases/heartbeat/retry/TTL/cancel.
+    Job rows, logs and metrics must never contain PII or keys. The four sync
+    endpoints transparently return `202 + JobAccepted` above
+    `SYNC_MAX_TEXT_CHARS` / `SYNC_MAX_DOCX_BYTES` /
     `SYNC_MAX_DOCX_PARAGRAPHS`; `/api/jobs/{id}/result` is one flat ZIP
     (`result.json` for text jobs, `.docx` + `.yaml`/manifest for files).
+    **No SQLite fallback remains.** Integration tests need a real PostgreSQL
+    (`TEST_DATABASE_URL`); without it the job tests skip.
 19. **Error/status conventions**: `validate_keys_yaml` raises
     `KeysValidationError` → 422 with a Russian `detail`; malformed/oversized/
     encrypted DOCX → 415/413; bounded queue/executor → 429; job result not

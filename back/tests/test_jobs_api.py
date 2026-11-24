@@ -15,10 +15,10 @@ from src.main import app
 
 
 @pytest.fixture
-def jobs_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+def jobs_env(tmp_path: Path, pg_url: str, clean_jobs: None, monkeypatch: pytest.MonkeyPatch) -> Settings:
     settings = Settings.model_validate(
         {
-            "jobs_db_path": str(tmp_path / "jobs.sqlite3"),
+            "database_url": pg_url,
             "jobs_dir": str(tmp_path),
             "jobs_max_active": 16,
             "jobs_ttl_seconds": 3600.0,

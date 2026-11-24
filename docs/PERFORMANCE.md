@@ -115,7 +115,8 @@ never depends on a held-open connection.
 - **12.2** stress tests: worker crash/restart, queue full, disk full, request
   cancellation, "almost no PII" documents, 1/2/4/N concurrent jobs.
 - **6.1** multi-instance scaling (Postgres/Redis + private object storage) —
-  needs an ADR; SQLite WAL is single-host by decision.
+  needs an ADR; PostgreSQL coordinates workers but the artifact spool is
+  single-host by decision (ADR-0003).
 
 ## Capacity facts worth keeping
 

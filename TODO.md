@@ -46,7 +46,7 @@
       сущности по label, глубина очереди, длительность jobs, concurrency воркера.
       Без Prometheus/OTel-стека, если деплой его не использует.
 - [ ] Разделить liveness и readiness: `GET /health` (liveness) и `GET /ready`
-      (проверка SQLite WAL + spool); readiness фронта — доступность бэка.
+      (проверка PostgreSQL + spool + Valkey); readiness фронта — доступность бэка.
       Обновить compose/CI healthchecks.
 - [ ] Грамотные startup/shutdown хуки, graceful drain воркера (SIGTERM уже есть —
       проверить на живом стеке после рестарта).
@@ -121,14 +121,48 @@
       `request_id`), отказ от ручного дублирования `KEYS_SECTION_TITLES`
       (сейчас согласовано тестами).
 - [ ] **Масштабирование (6.1)**: для multi-instance понадобятся Postgres/Redis
-      и приватное object storage (сейчас SQLite — один хост, по решению).
-      ADR перед добавлением.
+      и приватное object storage (PostgreSQL уже координация, но spool на
+      одном хосте — ADR-0003). ADR перед добавлением.
 - [ ] **Auth (8.1)**: приложение без аутентификации; для публичного/межпользовательского
       деплоя — OIDC/SSO или проверенный reverse-proxy auth + защита job/result
       от IDOR, CSRF/origin для cookie-based auth.
 - [ ] **TLS при сборке (8.3)**: `--allow-insecure-host` / `NODE_TLS_REJECT_UNAUTHORIZED=0`
       оставлены осознанно (как в ReportCollector); замена на доверенный CA —
       когда появится корпоративный сертификат.
+
+---
+
+## Implementation Brief (`docs/DocMasker_Production_Readiness_Implementation_Brief.md`, 2026-11-24)
+
+> Новая редакция ТЗ. Фазы по §13, по одной task-ветке на фазу.
+
+- [x] **Phase 0** — baseline/дизайн: `docs/IMPLEMENTATION_BASELINE.md`
+      (карта data-flow, зависимости, 0 живых строк в старой SQLite),
+      `docs/adr/0003-postgres-job-foundation.md` (выбор SQLAlchemy 2 sync +
+      psycopg 3 + Alembic, PostgreSQL 18 + Valkey 8, схема `jobs`,
+      SKIP LOCKED, перенос паттернов ReportCollector, план backup/migration).
+- [x] **Phase 1** — PostgreSQL foundation + job schema: compose prod/dev/CI
+      (postgres/valkey приватные, healthcheck-gated), Alembic `0001_jobs`,
+      новый репозиторий (staging/publish, SKIP LOCKED claim + fencing token,
+      lease reclaim, transitions), Settings-валидация, интеграционные тесты
+      на реальном PostgreSQL (`TEST_DATABASE_URL`), SQLite удалён полностью.
+- [ ] **Phase 2** — durable-job correctness: atomic enqueue, independent
+      heartbeat, cooperative cancellation, error classification/backoff,
+      TTL/GC, immutable result publication, graceful drain, frontend
+      cancel/resume, failure-injection tests.
+- [ ] **Phase 3** — Valkey result cache (versioned cache key, TTL/GC,
+      cache-outage fallback, metrics).
+- [ ] **Phase 4** — one masking configuration + exception/lexicon files
+      (убрать profile_id/registry/CRUD, `LabelMeta.order`, сохранить
+      совместимость `Профиль: russian-default`).
+- [ ] **Phase 5** — namespace-aware DOCX coverage + общий manifest
+      (убрать warning-only поведение).
+- [ ] **Phase 6** — API contracts/timeouts/streaming/event-loop safety
+      (generated TS types, stable errors, request IDs).
+- [ ] **Phase 7** — performance/capacity (long-text windowing, DOCX prefilters,
+      re-run benchmarks).
+- [ ] **Phase 8** — final agent-doc refresh + release readiness
+      (clean install, migrations, stress, CI protection checklist).
 
 ---
 

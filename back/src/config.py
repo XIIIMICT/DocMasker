@@ -3,7 +3,7 @@
 import json
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,10 +26,23 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(default=25, validation_alias="UPLOAD_MAX_MB")
     max_text_chars: int = Field(default=200_000, validation_alias="MAX_TEXT_CHARS")
     max_keys_chars: int = Field(default=1_000_000, validation_alias="MAX_KEYS_CHARS")
-    # --- Durable jobs (ADR-0002) --------------------------------------------
-    #: SQLite WAL database + private spool directory; both on one mounted volume.
-    jobs_db_path: str = Field(default="/app/jobs/jobs.sqlite3", validation_alias="JOBS_DB_PATH")
+    # --- Durable jobs (ADR-0002 / PostgreSQL substrate ADR-0003) -----------
+    #: PostgreSQL is the authoritative job store; no SQLite fallback remains.
+    database_url: str = Field(
+        default="postgresql+psycopg://dm:dm@localhost:5432/dm",
+        validation_alias="DATABASE_URL",
+    )
+    db_pool_size: int = Field(default=5, validation_alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=5, validation_alias="DB_MAX_OVERFLOW")
+    db_connect_timeout_seconds: float = Field(default=5.0, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
+    #: Private artifact spool (shared volume, single-host boundary).
     jobs_dir: str = Field(default="/app/jobs", validation_alias="JOBS_DIR")
+    #: Infrastructure settings required by the brief (Valkey logic is Phase 3).
+    valkey_url: str = Field(default="redis://valkey:6379/0", validation_alias="VALKEY_URL")
+    cache_enabled: bool = Field(default=True, validation_alias="CACHE_ENABLED")
+    cache_ttl_seconds: float = Field(default=86400.0, validation_alias="CACHE_TTL_SECONDS")
+    cache_namespace_version: int = Field(default=1, validation_alias="CACHE_NAMESPACE_VERSION")
+    worker_shutdown_grace_seconds: float = Field(default=30.0, validation_alias="WORKER_SHUTDOWN_GRACE_SECONDS")
     #: Inputs at or below these thresholds stay synchronous (baseline-anchored).
     sync_max_text_chars: int = Field(default=20_000, validation_alias="SYNC_MAX_TEXT_CHARS")
     sync_max_docx_bytes: int = Field(default=1024 * 1024, validation_alias="SYNC_MAX_DOCX_BYTES")
@@ -68,6 +81,48 @@ class Settings(BaseSettings):
             )
             raise ValueError(msg)
         return value
+
+    @model_validator(mode="after")
+    def _validate_infrastructure(self) -> Settings:
+        """Fail fast on incoherent DB/pool/lease settings (brief §2.3)."""
+        for name in (
+            "db_pool_size",
+            "db_max_overflow",
+            "max_upload_mb",
+            "max_text_chars",
+            "max_keys_chars",
+            "sync_max_text_chars",
+            "sync_max_docx_bytes",
+            "sync_max_docx_paragraphs",
+            "jobs_max_active",
+            "jobs_concurrency",
+            "jobs_max_attempts",
+            "cache_namespace_version",
+        ):
+            if getattr(self, name) <= 0:
+                msg = f"Настройка {name.upper()} должна быть положительной."
+                raise ValueError(msg)
+        for name in (
+            "db_connect_timeout_seconds",
+            "jobs_lease_seconds",
+            "jobs_poll_seconds",
+            "jobs_ttl_seconds",
+            "cache_ttl_seconds",
+            "worker_shutdown_grace_seconds",
+        ):
+            if getattr(self, name) <= 0:
+                msg = f"Настройка {name.upper()} должна быть положительной."
+                raise ValueError(msg)
+        if not self.database_url.startswith("postgresql"):
+            msg = "DATABASE_URL должен указывать на PostgreSQL (SQLite больше не поддерживается)."
+            raise ValueError(msg)
+        if self.jobs_poll_seconds >= self.jobs_lease_seconds / 3:
+            msg = "Интервал опроса воркера должен быть меньше трети времени аренды."
+            raise ValueError(msg)
+        if self.cache_enabled and self.cache_ttl_seconds <= 0:
+            msg = "CACHE_TTL_SECONDS должен быть положительным при включённом кэше."
+            raise ValueError(msg)
+        return self
 
 
 @lru_cache

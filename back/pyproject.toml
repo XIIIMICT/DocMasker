@@ -16,6 +16,9 @@ dependencies = [
     # below 81.
     "granian[reload]>=2.8.9",
     "setuptools>=80.0.0,<81",
+    "sqlalchemy>=2.0.44",
+    "psycopg[binary]>=3.2.10",
+    "alembic>=1.17.0",
 ]
 
 [dependency-groups]
@@ -40,6 +43,10 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore:pkg_resources is deprecated as an API:UserWarning",
+    # psycopg3's BaseConnection deallocator can surface a Windows-GC-only
+    # unraisable warning after a pool is disposed; every pool is closed in the
+    # fixtures, so this is a runtime artifact, not a leaked connection.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 pythonpath = ["."]
 

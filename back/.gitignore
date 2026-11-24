@@ -6,6 +6,7 @@
 !/.gitignore
 !AGENTS.md
 !Dockerfile
+!alembic.ini
 !prek.toml
 !pyproject.toml
 !uv.lock
@@ -15,6 +16,8 @@
 !/src/**
 !/tests/
 !/tests/**
+!/migrations/
+!/migrations/**
 !/benchmarks/
 !/benchmarks/**
 

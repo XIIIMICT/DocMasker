@@ -187,7 +187,7 @@ Response 202 (`JobAccepted`):
 ```
 
 Inputs are spooled to the private `jobs-data` volume under the opaque id; only
-metadata goes into SQLite WAL. No PII/keys in DB rows, logs or headers. Bounded
+metadata goes into PostgreSQL (authoritative job state). No PII/keys in DB rows, logs or headers. Bounded
 queue (`JOBS_MAX_ACTIVE`) → 429. Opaque ids are the IDOR guard in this
 single-tenant/private deployment (no auth — see `TODO.md`).
 
