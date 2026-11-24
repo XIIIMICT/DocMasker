@@ -149,9 +149,32 @@ Full request/response schemas, headers, status codes and the job contract —
 - `POST /unmask-file` — multipart fields `file` (masked .docx) and `keys` (YAML as a form field) → a **flat ZIP** holding `<base> (демаскированный).docx` and `manifest.json` (with `statistics.unused_keys` — PII never rides in headers). Uploads are validated as OPC/ZIP packages: malformed/non-Word ZIPs → 415, size/entry/zip-bomb limits → 413, encrypted archives → 415.
 
 Both file operations use the **same archive builder and manifest serializer** in sync and job paths (§7); text jobs return the exact canonical `MaskResponse` / `UnmaskResponse` in `result.json`.
-- `GET /health` — readiness probe used by Docker healthcheck; always `ok` (no warm-up).
+- `GET /health` — liveness probe used by the Docker healthcheck; always `ok` (no warm-up).
+- `GET /ready` — readiness probe (Phase 6): verifies PostgreSQL; `503` with a
+  sanitized Russian reason when the store is unavailable.
+- `GET /metrics` — coarse safe counters (`active_jobs`, cache hits/misses/…),
+  no PII; degrades instead of 500 on a DB/cache outage.
 
-Errors carry a Russian `detail`; the front renders them in red inside the result TextArea.
+Errors use the stable envelope `{code, detail, request_id}` + `X-Request-ID`
+header (Phase 6 §8.1); `detail` stays Russian and is shown in red inside the
+result TextArea. No traceback/path/DB message/PII/keys ever leaves the API.
+
+## Execution model / event-loop safety (Phase 6, §10)
+
+- `masking/executor.py` keeps **two separate bounded pools**: `run_cpu`
+  (`JOBS_CONCURRENCY * 2` slots, overflow → 429) for natasha/OOXML work and
+  `run_blocking` (`DB_POOL_SIZE + DB_MAX_OVERFLOW` slots) for short
+  DB/Valkey/ZIP/filesystem calls. No synchronous DB/ZIP/XML/hash/fs call runs
+  directly in an `async def` route.
+- Sync file endpoints validate the hard byte limit **before** any ZIP/XML
+  paragraph-count heuristic; `jobs/routing.py::count_docx_paragraphs` uses an
+  incremental `lxml.iterparse` over `ZipExtFile` (no `archive.read()` of a huge
+  XML part).
+- `jobs/api.py::submit_job` streams multipart uploads into a private temp file
+  with a real byte counter, validates from the path and streams into the spool;
+  `/api/jobs/{id}/result` uses `FileResponse`. Cleanup is exception/abort-safe.
+- `GET /health` stays responsive during CPU/DB/ZIP work; `/ready` and `/metrics`
+  do their DB calls on the IO pool.
 
 ## Front (`front/src/`)
 

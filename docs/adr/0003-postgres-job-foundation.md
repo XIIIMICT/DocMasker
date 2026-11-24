@@ -169,6 +169,16 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
+**Implemented in Phase 6 (2026-11-24):** API contracts, timeouts, streaming
+and event-loop safety. One stable error envelope (`{code, detail, request_id}`
++ `X-Request-ID`) with sanitized handlers; canonical `timeouts.ts` route map
+(15 s JSON/job, 120 s upload, 300 s result); Next streams multipart unchanged,
+backend stages uploads with a real byte counter + path validation and streams
+results via `FileResponse`; `run_cpu`/`run_blocking` separate bounded pools keep
+DB/ZIP/XML/filesystem work off the ASGI loop; `GET /ready` (PostgreSQL) +
+`GET /metrics` and Pydantic cross-field validators. §8.2 OpenAPI→TS types
+deferred by maintainer decision (`TODO.md`).
+
 **Implemented in Phase 5 (2026-11-24):** full OPC-aware OOXML transformer
 (`back/src/masking/ooxml/`), replacing the python-docx run-level traversal.
 All text-bearing parts are located through `[Content_Types].xml` + relationship

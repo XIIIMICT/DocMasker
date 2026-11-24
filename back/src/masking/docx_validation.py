@@ -11,6 +11,7 @@ a clear Russian `detail` instead of crashing.
 import io
 import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.config import get_settings
 
@@ -60,47 +61,74 @@ class DocxLimits:
     max_entry_count: int = _ENTRY_COUNT_LIMIT
 
 
+def _validate_zip(archive: zipfile.ZipFile, limits: DocxLimits) -> None:
+    """Shared OPC/ZIP checks over an already-opened ZipFile (no full read)."""
+    infos = archive.infolist()
+    if len(infos) > limits.max_entry_count:
+        raise _too_large(_TOO_MANY_ENTRIES)
+
+    names = {info.filename for info in infos}
+    if any(part not in names for part in _REQUIRED_PARTS):
+        raise DocxValidationError(_MISSING_PARTS)
+
+    total_uncompressed = 0
+    for info in infos:
+        if info.flag_bits & _ZIP_FLAG_ENCRYPTED:
+            raise DocxValidationError(_ENCRYPTED)
+        total_uncompressed += info.file_size
+        if info.compress_size > 0:
+            ratio = info.file_size / info.compress_size
+            # A huge ratio only matters when the entry is actually large.
+            if ratio > _MAX_COMPRESSION_RATIO and info.file_size > limits.max_uncompressed_bytes / 100:
+                raise _too_large(_ZIP_BOMB)
+    if total_uncompressed > limits.max_uncompressed_bytes:
+        raise _too_large(_OVERSIZE_UNCOMPRESSED)
+
+
+def _check_size(size: int, limits: DocxLimits) -> None:
+    if size == 0:
+        raise DocxValidationError(_EMPTY_FILE)
+    if size > limits.max_upload_bytes:
+        raise _too_large(_OVERSIZE_UPLOAD.format(limit_mb=limits.max_upload_bytes // (1024 * 1024)))
+
+
 def validate_docx_package(data: bytes, limits: DocxLimits) -> None:
     """
     Validate an uploaded DOCX as an OPC/ZIP package against `limits`.
 
     Raises `DocxValidationError` with a Russian message; the router turns that
     into 413 (resource limits) or 415 (malformed/unsupported) instead of letting
-    the exception reach `python-docx` and surface as a 500.
+    the exception reach the transformer and surface as a 500.
     """
-    size = len(data)
-    if size == 0:
-        raise DocxValidationError(_EMPTY_FILE)
-    if size > limits.max_upload_bytes:
-        raise _too_large(_OVERSIZE_UPLOAD.format(limit_mb=limits.max_upload_bytes // (1024 * 1024)))
-
+    _check_size(len(data), limits)
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as error:
         raise DocxValidationError(_BAD_ZIP) from error
-
     with archive:
-        infos = archive.infolist()
-        if len(infos) > limits.max_entry_count:
-            raise _too_large(_TOO_MANY_ENTRIES)
+        _validate_zip(archive, limits)
 
-        names = {info.filename for info in infos}
-        if any(part not in names for part in _REQUIRED_PARTS):
-            raise DocxValidationError(_MISSING_PARTS)
 
-        total_uncompressed = 0
-        for info in infos:
-            if info.flag_bits & _ZIP_FLAG_ENCRYPTED:
-                raise DocxValidationError(_ENCRYPTED)
-            total_uncompressed += info.file_size
-            if info.compress_size > 0:
-                ratio = info.file_size / info.compress_size
-                # A huge ratio only matters when the entry is actually large
-                # (every tiny XML part compresses hundreds-fold).
-                if ratio > _MAX_COMPRESSION_RATIO and info.file_size > limits.max_uncompressed_bytes / 100:
-                    raise _too_large(_ZIP_BOMB)
-        if total_uncompressed > limits.max_uncompressed_bytes:
-            raise _too_large(_OVERSIZE_UNCOMPRESSED)
+def validate_docx_package_path(path: Path, limits: DocxLimits) -> None:
+    """
+    Validate a staged upload from its filesystem path (Phase 6 §8.5/§10).
+
+    `zipfile.ZipFile` opens the file lazily and reads only the central
+    directory — the full document is never loaded into a single `bytes`
+    object here. Use this for the job-submit upload path; sync endpoints keep
+    the in-memory variant because the OPC transformer needs the whole package.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        raise DocxValidationError(_BAD_ZIP) from error
+    _check_size(size, limits)
+    try:
+        archive = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError) as error:
+        raise DocxValidationError(_BAD_ZIP) from error
+    with archive:
+        _validate_zip(archive, limits)
 
 
 def upload_limits() -> DocxLimits:

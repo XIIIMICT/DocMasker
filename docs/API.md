@@ -9,11 +9,10 @@ mounted under one `APIRouter(prefix="/api")` (`back/src/api.py`).
 The **browser never calls the backend directly**: `front/src/app/api/*/route.ts`
 proxies each path server-side to `BACKEND_INTERNAL_URL`. CORS is enabled on the
 backend only for direct dev access (curl/tools); there is no browser CORS hop.
-Errors are `{"detail": "<Russian message>"}` — user-facing strings stay Russian.
 
 Interactive OpenAPI docs: `/docs`, `/redoc`, `/openapi.json` (FastAPI defaults).
-Generating client types from that schema is a deferred item (`TODO.md`), so the
-shapes below are currently duplicated by hand in `front/src/shared/api/`.
+Generating client types from that schema is a deferred item (`TODO.md`, §8.2), so
+the shapes below are currently duplicated by hand in `front/src/shared/api/`.
 
 ## Conventions
 
@@ -21,9 +20,32 @@ shapes below are currently duplicated by hand in `front/src/shared/api/`.
 |---|---|
 | Content types | JSON bodies for text endpoints; `multipart/form-data` for file endpoints; `application/zip` for all file responses |
 | Filenames | RFC 5987 `Content-Disposition`: ASCII fallback + `filename*=UTF-8''…` for Cyrillic names |
-| Errors | Russian `detail`; statuses below are the only ones the client must handle |
-| PII | Raw entity values/offsets never leave the API in JSON (`stats` is aggregate-only); keys files are the only carrier of originals |
+| Errors | one stable envelope (below): Russian user-facing `detail` + machine `code` + `request_id` |
+| PII | Raw entity values/offsets never leave the API in JSON (`stats` is aggregate-only); keys files are the only carrier of originals. Error bodies never contain tracebacks, paths, DB messages, submitted PII or keys |
 | Caching | `/api/jobs/{id}/result` sends `Cache-Control: no-store`; proxies use `cache: "no-store"` |
+
+### Stable error contract (Phase 6, §8.1)
+
+Every error response (validation, domain, not-found, conflict, queue-full,
+storage and unexpected 500) has the same shape and carries an `X-Request-ID`
+header with the same value:
+
+```json
+{
+  "code": "invalid_keys",
+  "detail": "Файл ключей не является корректным YAML.",
+  "request_id": "3f9a…"
+}
+```
+
+`code` is stable and machine-readable (`empty_text`, `text_too_large`,
+`invalid_keys`, `invalid_extension`, `invalid_package`, `encrypted_package`,
+`zip_bomb`, `unsafe_xml`, `executor_busy`, `queue_full`, `result_not_ready`,
+`result_expired`, `job_not_found`, `validation_error`, `bad_request`,
+`not_found`, `conflict`, `payload_too_large`, `unsupported_media_type`,
+`unprocessable`, `internal_error`). `detail` stays Russian. Handler is
+`back/src/errors.py::install_error_handlers`; it logs only exception *types*,
+never messages. The Next proxies forward `X-Request-ID` verbatim.
 
 ### Status codes
 
@@ -48,8 +70,64 @@ is **not** a trust boundary — the backend enforces everything.
 ## `GET /health`
 
 Liveness probe used by the Docker healthcheck. `{"status": "ok"}`, always 200 —
-the masker is deterministic, there is no model to load or warm up. Splitting
-liveness/readiness is deferred to stage 6.
+the masker is deterministic, there is no model to load or warm up. Carries
+`X-Request-ID`.
+
+## `GET /ready` (Phase 6, §10)
+
+Readiness probe: verifies the PostgreSQL substrate (and that the immutable
+masking config is loaded). `200 {"status": "ready", "labels": 6}` or
+`503 {"status": "not_ready", "reason": "Хранилище заданий недоступно."}`.
+A DB failure logs only the exception type — no DSN, path, PII or keys. The
+full readiness/liveness rollout (compose/CI healthchecks, front readiness)
+remains part of the deferred observability stage.
+
+## `GET /metrics` (Phase 6, §10)
+
+Coarse counters only, never PII/keys/job ids/cache keys:
+
+```json
+{"active_jobs": 0, "cache": {"hits": 3, "misses": 1, "writes": 1, "failures": 0, "evictions": 0}}
+```
+
+A PostgreSQL outage degrades to `active_jobs: null` instead of a 500; a cache
+outage yields zeroed cache counters. Full metrics/latency/structured logs remain
+deferred (TODO stage 6).
+
+## Proxy timeout policy (canonical: `front/src/shared/api/timeouts.ts`)
+
+| Route class | Timeout | Where |
+|---|---|---|
+| short JSON `/api/mask`, `/api/unmask`, `/api/labels` | 15 s | `JSON_TIMEOUT_MS` |
+| job submit / status / cancel | 15 s | `JOB_TIMEOUT_MS` |
+| multipart upload forwarding | 120 s | `UPLOAD_TIMEOUT_MS` |
+| result download/streaming | 300 s | `RESULT_TIMEOUT_MS` |
+| overall client job wait (workflow, not a request) | 20 min | `JOB_WAIT_TIMEOUT_MS` |
+
+The global undici dispatcher is a finite outer bound only
+(`headersTimeout: 60 s`, `bodyTimeout: 600 s`; never `0`/unbounded). Per-route
+`AbortSignal.timeout` is combined with the incoming request's abort signal
+(`AbortSignal.any`), so an aborted client upload does not leave a staged
+artifact. `timeoutForRoute()` is unit-tested. Large operations become durable
+jobs (202) instead of holding one HTTP request open.
+
+### Streaming / buffering (Phase 6, §8.5/§10)
+
+- Next file proxies forward the original multipart stream unchanged
+  (`Content-Type` + boundary preserved, `duplex: "half"`), without
+  `request.formData()` and a rebuilt `FormData`.
+- Backend job submit streams the upload in 64 KiB chunks into a private temp
+  file with a **real byte counter** (Content-Length is never trusted), validates
+  the OPC package **from the staged path**, then streams it into the artifact
+  spool with `ArtifactStore.copy_from`. Cleanup is exception/abort-safe.
+- `/api/jobs/{id}/result` returns `FileResponse` (streams from disk); no
+  `Path.read_bytes()` of a large ZIP. Sync file endpoints still build the small
+  ZIP in memory because the OPC transformer needs the whole package — that
+  part-level DOM memory is documented, not claimed as streaming.
+- All DB/Valkey/ZIP/XML/filesystem calls in async routes run through
+  `run_blocking` (separate bounded IO pool) or `run_cpu` (bounded CPU pool);
+  the paragraph-count heuristic uses an incremental `lxml.iterparse` over
+  `ZipExtFile` instead of reading the whole `word/document.xml`.
 
 ## `GET /api/labels`
 

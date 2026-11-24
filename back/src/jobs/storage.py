@@ -37,6 +37,10 @@ class ArtifactStore:
             raise ArtifactError(msg)
         return self._root / f"{job_id}.{suffix}"
 
+    def path_for(self, job_id: str, suffix: str) -> Path:
+        """Absolute path of a stored artifact (for streaming, no read into RAM)."""
+        return self._path(job_id, suffix)
+
     def write(self, job_id: str, suffix: str, data: bytes) -> None:
         """Write `data` atomically (a crash never leaves a half-written file)."""
         target = self._path(job_id, suffix)
@@ -46,6 +50,30 @@ class ArtifactStore:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
+            Path(tmp).replace(target)
+        finally:
+            leftover = Path(tmp)
+            if leftover.exists():
+                leftover.unlink()
+
+    def copy_from(self, job_id: str, suffix: str, src: Path) -> None:
+        """
+        Atomically copy a staged upload into the spool in bounded chunks.
+
+        The whole file is never materialised in one `bytes` object (§8.5/§10);
+        use this on the job-submit path instead of `read_staged` + `write`.
+        """
+        target = self._path(job_id, suffix)
+        fd, tmp = tempfile.mkstemp(prefix=f".{job_id}.", dir=str(self._root))
+        try:
+            with os.fdopen(fd, "wb") as out, src.open("rb") as source:
+                while True:
+                    chunk = source.read(64 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                out.flush()
+                os.fsync(out.fileno())
             Path(tmp).replace(target)
         finally:
             leftover = Path(tmp)

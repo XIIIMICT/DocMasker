@@ -276,14 +276,26 @@ class ResultCache:
 def fingerprint_for(
     operation: str,
     *,
-    input_bytes: bytes,
+    input_bytes: bytes | None = None,
+    input_digest: str | None = None,
     keys_bytes: bytes | None = None,
     filename: str = "",
 ) -> CacheFingerprint:
-    """Build the canonical fingerprint for one operation (§4.2)."""
+    """
+    Build the canonical fingerprint for one operation (§4.2).
+
+    `input_digest` lets the streaming job-submit path reuse a SHA-256 computed
+    from a staged file without ever materialising the whole upload in RAM
+    (Phase 6 §8.5); the in-memory path passes `input_bytes` as before.
+    """
+    if input_digest is None:
+        if input_bytes is None:
+            msg = "Either input_bytes or input_digest is required."
+            raise ValueError(msg)
+        input_digest = sha256_hex(input_bytes)
     return CacheFingerprint(
         operation=operation,
-        input_hash=sha256_hex(input_bytes),
+        input_hash=input_digest,
         keys_hash=sha256_hex(keys_bytes) if keys_bytes is not None else None,
         # Archive entry names depend on the filename stem, so it is part of the
         # fingerprint (§4.2 / test 8). Text operations ignore it.

@@ -1,12 +1,14 @@
 /**
- * Bounded server-side fetch timeouts (ADR-0002, F-08).
+ * Bounded global server-side fetch timeouts (§8.4 safety net).
  *
  * The old global dispatcher disabled undici's header/body timeouts for EVERY
  * server-side fetch (0 = unbounded), which could leave hung requests forever.
- * Long work now runs through the durable job API, so the proxy only needs
- * finite, generous-but-bounded limits: 60 s to first byte, 10 min for a body.
- * Short job/polling routes use a per-request AbortSignal.timeout instead.
+ * The canonical per-route policy now lives in `shared/api/timeouts.ts`
+ * (15 s JSON / job, 120 s upload, 300 s result); `postToBackend` applies it
+ * via `AbortSignal.timeout`. This global Agent is only a coarse outer bound:
+ * 60 s to first byte and 10 min for a body — finite, never 0/unbounded.
  * connectTimeout keeps its default so a dead backend still fails quickly.
+ * Long work runs through the durable job API, never a held-open connection.
  *
  * Runs once per server process (Node.js runtime only — this is a server file).
  */

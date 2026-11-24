@@ -109,10 +109,14 @@ Rules:
 - `app/api/{mask,mask-file,unmask,unmask-file,health}/route.ts` — server-side
   proxies; the browser talks only to its own origin.
 - `src/instrumentation.ts` — bounded global undici dispatcher
-  (`headersTimeout: 60_000` / `bodyTimeout: 600_000`); `shared/api/proxy.ts`
-  streams responses through `new Response(response.body)` and adds
-  `AbortSignal.timeout` per route (15 s JSON / 10 min files). Long work goes
-  through the job API, never a held-open connection.
+  (`headersTimeout: 60_000` / `bodyTimeout: 600_000`, finite outer net only).
+  `shared/api/timeouts.ts` is the **canonical** route→timeout map
+  (15 s JSON/job, 120 s upload, 300 s result, 20 min client job-wait);
+  `shared/api/proxy.ts::postToBackend` applies it via `AbortSignal.timeout`
+  combined with the incoming request's abort signal (`AbortSignal.any`),
+  streams responses through `new Response(response.body)` and forwards
+  `X-Request-ID`. File routes forward the multipart stream unchanged
+  (`duplex: "half"`) — never rebuild `FormData`.
 
 ## Frontend landmines (moved from the root cheat sheet)
 
@@ -196,16 +200,20 @@ Rules:
    never headers or placeholder counting; a missing/bad manifest is a clear
    error, never "0 entities".
 9. **Proxy timeouts are bounded; jobs carry long work.**
-   `src/instrumentation.ts` sets a global undici Agent with
-   `headersTimeout: 60_000` / `bodyTimeout: 600_000` (the old `0`/`0`
-   unbounded dispatcher and `maxDuration = 3600` are gone).
-   `shared/api/proxy.ts` streams backend responses through
-   `new Response(response.body)` (no `arrayBuffer` copy), with
-   `AbortSignal.timeout` per route: 15 s for JSON/job polling, 10 min for the
-   synchronous file endpoints. `app/api/jobs/[...path]/route.ts` proxies the
-   job API. Long operations never depend on a held-open HTTP connection — they
-   go through `/api/jobs`; `waitForJob` polls `status_url` with backoff
-   (bounded attempts, AbortSignal) and unpacks the flat result ZIP.
+   `src/instrumentation.ts` sets a finite global undici Agent
+   (`headersTimeout: 60_000` / `bodyTimeout: 600_000`) — an outer net only;
+   the old `0`/`0` unbounded dispatcher and `maxDuration = 3600` are gone.
+   The **canonical** map is `shared/api/timeouts.ts`: 15 s JSON/job, 120 s
+   upload, 300 s result, 20 min overall client job-wait.
+   `shared/api/proxy.ts::postToBackend` applies `timeoutForRoute()` plus the
+   incoming request's abort signal (`AbortSignal.any`), streams responses
+   through `new Response(response.body)` and forwards `X-Request-ID`; file
+   routes forward multipart unchanged (`duplex: "half"`, no `formData()`
+   rebuild). `timeouts.test.ts` tests the route→timeout mapping.
+   `app/api/jobs/[...path]/route.ts` proxies the job API. Long operations never
+   depend on a held-open HTTP connection — they go through `/api/jobs`;
+   `waitForJob` polls `status_url` with backoff under `JOB_WAIT_TIMEOUT_MS`
+   and unpacks the flat result ZIP.
 
 10. **Job Cancel / resume (Phase 2).** `use-masker-workflow.ts` tracks the
     active `JobAccepted` in `ModeState` and

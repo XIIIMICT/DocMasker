@@ -40,14 +40,18 @@
 
 > Отложено решением maintainer от 2026-11-23. Вернуться отдельной task-веткой.
 
-- [ ] Request ID / correlation ID и структурированные JSON-логи без PII
-      (сейчас только plain-логи старта/воркера).
+- [x] Request ID / correlation ID в ответах и заголовке (`X-Request-ID`) —
+      сделано в Phase 6. Структурированные JSON-логи без PII,
+      корреляция по request_id в логах — остаётся здесь.
 - [ ] Минимальные метрики: счётчики запросов/ошибок/latency, размер входа/выхода,
       сущности по label, глубина очереди, длительность jobs, concurrency воркера.
       Без Prometheus/OTel-стека, если деплой его не использует.
-- [ ] Разделить liveness и readiness: `GET /health` (liveness) и `GET /ready`
-      (проверка PostgreSQL + spool + Valkey); readiness фронта — доступность бэка.
-      Обновить compose/CI healthchecks.
+      *(Phase 6 добавил лишь coarse `GET /metrics`: active_jobs + cache counters;
+      полный набор остаётся здесь.)*
+- [x] Разделить liveness и readiness: `GET /health` (liveness) и `GET /ready`
+      (проверка PostgreSQL); `/metrics` — coarse-агрегаты без PII.
+      *(сделано в Phase 6; обновление compose/CI healthchecks и readiness
+      фронта — всё ещё в этом отложенном этапе)*
 - [ ] Грамотные startup/shutdown хуки, graceful drain воркера (SIGTERM уже есть —
       проверить на живом стеке после рестарта).
 - [ ] Харднинг контейнеров: `read_only` + `tmpfs` (проверить temp-файлы
@@ -117,9 +121,8 @@
       «без изменений UI»), пользовательские словари/исключения как данные
       профиля, пользовательские regex с лимитами/timeout при появлении спроса.
 - [ ] **API-контракт (§9)**: сгенерированные TypeScript типы из OpenAPI
-      (единый source-of-truth), стабильный формат ошибок (`code`, `detail`,
-      `request_id`), отказ от ручного дублирования `KEYS_SECTION_TITLES`
-      (сейчас согласовано тестами).
+      (единый source-of-truth) — см. «Отложено по решению maintainer» ниже.
+      Стабильный формат ошибок и единый каталог labels уже сделаны в Phase 4/6.
 - [ ] **Масштабирование (6.1)**: для multi-instance понадобятся Postgres/Redis
       и приватное object storage (PostgreSQL уже координация, но spool на
       одном хосте — ADR-0003). ADR перед добавлением.
@@ -176,8 +179,27 @@
       `manifest.json` для sync и job (`statistics`/`coverage`/`versions`),
       frontend требует и валидирует его, text-job DTO = канонический ответ.
       215 back tests incl. `test_ooxml.py` synthetic fixtures.
-- [ ] **Phase 6** — API contracts/timeouts/streaming/event-loop safety
-      (generated TS types, stable errors, request IDs).
+- [x] **Phase 6** — API contracts/timeouts/streaming/event-loop safety:
+      единый формат ошибок `{code, detail, request_id}` + `X-Request-ID`
+      (обработчики validation/domain/not-found/queue/storage/500, без утечки
+      PII/путей/traceback), каноническая карта route→timeout
+      (`front/src/shared/api/timeouts.ts`: 15 s JSON/job, 120 s upload, 300 s
+      result; 20 min client job-wait), streaming multipart через Next без
+      `formData()`-rebuild + `duplex:"half"`, bounded staging upload с реальным
+      счётчиком байт, валидация по пути, `FileResponse` для результата,
+      отдельные CPU/IO пулы (`run_cpu`/`run_blocking`), потоковый подсчёт
+      абзацев, `/ready` (PostgreSQL) + `/metrics` (без PII), Pydantic
+      cross-field валидация лимитов. 260 back tests / 88% branch, 63 front unit.
+      **§8.2 (OpenAPI → TS-типы) перенесено в отдельный пункт ниже по решению
+      maintainer.**
+
+## Отложено по решению maintainer (2026-11-24)
+
+- [ ] **§8.2 — генерация TypeScript API-типов из текущего OpenAPI**:
+      `openapi-typescript` (или аналог), экспорт схемы из живой FastAPI-аппы в
+      CI, коммит `front/src/shared/api/generated/schema.ts`, проверка свежести
+      в CI, замена рукописных DTO. Решение: «поместим в TODO» — не делается в
+      Phase 6, чтобы не смешивать с error-contract/streaming работой.
 - [ ] **Phase 7** — performance/capacity (long-text windowing, DOCX prefilters,
       re-run benchmarks).
 - [ ] **Phase 8** — final agent-doc refresh + release readiness
