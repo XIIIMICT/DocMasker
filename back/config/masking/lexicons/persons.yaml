@@ -1,0 +1,28 @@
+schema_version: 1
+# Lemmas that must never be treated as a surname / part of a person's name.
+# Roles, greetings and common addresses that natasha can parse as animate nouns.
+role_exclusions:
+  - секретарь
+  - директор
+  - начальник
+  - руководитель
+  - заместитель
+  - председатель
+  - бухгалтер
+  - менеджер
+  - инженер
+  - исполнитель
+  - подписант
+  - заявитель
+  - представитель
+  - сотрудник
+  - работник
+  - глава
+  - генеральный директор
+  - оператор
+  - привет
+  - здравствуйте
+  - уважаемый
+  - дорогой
+  - дорога
+  - новый

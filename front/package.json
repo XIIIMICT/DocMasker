@@ -13,7 +13,8 @@
         "format:check": "oxfmt --check",
         "test": "bun test",
         "test:e2e": "playwright test",
-        "typecheck": "bun check"
+        "typecheck": "bun check",
+        "gen:labels": "bun scripts/gen-labels.mjs"
     },
     "dependencies": {
         "@heroui/react": "^3.2.8",

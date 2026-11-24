@@ -101,6 +101,9 @@ jobs:
           node-version: "26"
       - run: bun install --frozen-lockfile
       - run: bunx --no-install next typegen
+      - run: bun run gen:labels
+      - name: Verify generated label catalogue is fresh
+        run: git diff --exit-code -- front/src/shared/api/labels.generated.ts
       - run: bun run typecheck
       - run: bun run lint:check
       - run: bun run format:check

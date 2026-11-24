@@ -11,3 +11,5 @@ logs
 .git/
 *.log
 granian.*.log
+# Private runtime exception data: never bake real values into an image.
+config/masking/exceptions.yaml

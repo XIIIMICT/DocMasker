@@ -20,8 +20,6 @@ export async function POST(request: Request) {
 
     const upload = new FormData();
     upload.append("file", file, file.name);
-    const profileId = formData.get("profile_id");
-    if (typeof profileId === "string" && profileId) upload.append("profile_id", profileId);
 
     const response = await postToBackend(
         "/api/mask-file",

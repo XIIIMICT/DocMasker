@@ -1,9 +1,9 @@
 """
-Detector registry: the mapping between a masking profile and detection code.
+Detector registry: the mapping between the single masking engine and detection code.
 
 A `Detector` binds a stable id and a label to one provider method of
 `RuleBasedMasker`. Adding a label means writing one `_find_*` provider on the
-masker and registering it here once — profiles then enable it by id. The
+masker and registering it here once — the single engine then runs it. The
 registry stores method *names* (resolved with `getattr` at run time), so this
 module stays import-light and avoids a circular import with `rule_based`.
 """

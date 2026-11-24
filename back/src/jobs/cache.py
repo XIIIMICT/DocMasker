@@ -75,13 +75,18 @@ def build_cache_key(settings: Settings, fingerprint: CacheFingerprint) -> str:
     can change the result. HMAC with a stable secret prevents offline guessing
     of predictable PII inputs and keeps source hashes out of key names.
     """
+    from src.masking.config import config_digest
+
+    digest_input = settings.masking_config_digest
+    if digest_input == "auto":
+        digest_input = config_digest()
     payload = {
         "operation": fingerprint.operation,
         "input": fingerprint.input_hash,
         "keys": fingerprint.keys_hash,
         "output_name": fingerprint.output_name,
         "ruleset": settings.masking_ruleset_version,
-        "config_digest": settings.masking_config_digest,
+        "config_digest": digest_input,
         "manifest": settings.result_manifest_version,
         "keys_format": settings.keys_format_version,
         "docx_transformer": settings.docx_transformer_version,

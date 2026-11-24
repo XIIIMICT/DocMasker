@@ -121,10 +121,10 @@ never depends on a held-open connection.
 ## Capacity facts worth keeping
 
 - natasha's `MorphVocab` + extractors cost ~170 MB of in-memory dictionary per
-  instance and are not proven thread-safe: the worker keeps **one warm masker
-  per thread**, bounded by `JOBS_CONCURRENCY`; the sync path caches one masker
-  per profile (`get_masker_for`, `lru_cache`). Never construct a
-  `RuleBasedMasker` per request.
+  instance and are not proven thread-safe: Phase 4 uses **one process-wide warm
+  masker** (`get_masker`, `cache`) built from the single immutable config
+  snapshot; worker threads share it and each call runs read-only detection.
+  Never construct a `RuleBasedMasker` per request.
 - DOCX masking is two-pass over all paragraphs (document-wide numbering), so a
   5,000-paragraph document is ~2 min of CPU — exactly the case the job path
   exists for.

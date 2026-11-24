@@ -33,7 +33,6 @@ class JobSubmitText(BaseModel):
     """Text-mode job body (kind inferred from the endpoint path)."""
 
     text: str
-    profile_id: str | None = None
     keys: str | None = None
 
 

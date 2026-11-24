@@ -52,9 +52,10 @@ class Settings(BaseSettings):
     masking_ruleset_version: int = Field(default=1, validation_alias="MASKING_RULESET_VERSION")
     #: Bump when the result manifest / archive contract changes (§4.3).
     result_manifest_version: int = Field(default=1, validation_alias="RESULT_MANIFEST_VERSION")
-    #: Validated contents of active exception/lexicon files (Phase 4 wires the
-    #: real digest; an empty default means "no exception data yet").
-    masking_config_digest: str = Field(default="none", validation_alias="MASKING_CONFIG_DIGEST")
+    #: Validated contents of active exception/lexicon files (Phase 4). The
+    #: value "auto" means the digest is computed from the loaded snapshot.
+    masking_config_digest: str = Field(default="auto", validation_alias="MASKING_CONFIG_DIGEST")
+    masking_config_dir: str = Field(default="/app/config/masking", validation_alias="MASKING_CONFIG_DIR")
     keys_format_version: int = Field(default=1, validation_alias="KEYS_FORMAT_VERSION")
     docx_transformer_version: int = Field(default=1, validation_alias="DOCX_TRANSFORMER_VERSION")
     worker_shutdown_grace_seconds: float = Field(default=30.0, validation_alias="WORKER_SHUTDOWN_GRACE_SECONDS")
@@ -91,8 +92,8 @@ class Settings(BaseSettings):
     def _reject_mask_labels(cls, value: str | None) -> str | None:
         if value:
             msg = (
-                "MASK_LABELS удалена: типы сущностей задаются профилями маскирования "
-                "(см. GET /api/profiles). Уберите переменную из окружения."
+                "MASK_LABELS удалена: типы сущностей задаются каталогом labels.yaml "
+                "(см. GET /api/labels). Уберите переменную из окружения."
             )
             raise ValueError(msg)
         return value

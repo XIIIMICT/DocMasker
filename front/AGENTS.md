@@ -92,12 +92,13 @@ Rules:
 - `shared/hooks/use-synced-scroll.ts` — pairs the two panes by scroll **ratio**
   (masked text is shorter than the original).
 - `shared/api/mask.ts` — backend proxy helpers, the client-side keys validator
-  (`validateKeysYaml`, runs on every keystroke), `KEYS_SECTION_TITLES` and the
-  `Профиль` marker. The section titles must stay in sync with the backend's
-  profile-independent `profiles.py::registered_titles` union (and the two
-  validators — backend `mapping.py::validate_keys_yaml` and this module — must
-  learn any new envelope key together); add a title only when it exists in the
-  registry too. Cross-language agreement is enforced by tests.
+  (`validateKeysYaml`, runs on every keystroke) and the `Профиль` marker.
+  `KEYS_SECTION_TITLES` / `KEYS_TITLE_LABELS` and the tooltip titles come from
+  `shared/api/labels.generated.ts`, generated from the backend's canonical
+  `back/config/masking/labels.yaml` (`bun run --cwd front gen:labels`; CI
+  checks freshness). Never edit the generated file or re-introduce hardcoded
+  title lists; `app/api/labels/route.ts` also proxies the runtime catalogue.
+  Backend `mapping.py::validate_keys_yaml` remains authoritative.
 - `shared/api/mask-archive.ts` — unpacks the `/api/mask-file` ZIP (jszip) into
   the masked document and its demasking keys.
 - `shared/api/jobs.ts` / `jobs-types.ts` — client for the durable job API:

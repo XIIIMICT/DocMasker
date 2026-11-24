@@ -1,0 +1,16 @@
+schema_version: 1
+# Synthetic examples only — never put real names / PII in this file.
+# `match` is one of: exact, case_insensitive, token_sequence.
+always_mask:
+  organization:
+    - value: "Росхим"
+      match: case_insensitive
+      variants: ["Росхима", "Росхиме", "Росхимом"]
+  person: []
+  address: []
+never_mask:
+  organization: []
+  person:
+    - value: "Иван Иванов"
+      match: case_insensitive
+  address: []

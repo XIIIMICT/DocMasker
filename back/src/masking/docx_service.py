@@ -208,7 +208,7 @@ def mask_docx_in_memory(
     """
     active = masker or get_masker()
     document = Document(io.BytesIO(source_bytes))
-    keys = MaskKeys(active.profile)
+    keys = MaskKeys()
 
     paragraphs: list[tuple[Paragraph, str, list[MaskedEntity], dict[tuple[int, int], str]]] = []
     all_entities: list[MaskedEntity] = []

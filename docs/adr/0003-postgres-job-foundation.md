@@ -169,6 +169,17 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
+**Implemented in Phase 4 (2026-11-24):** one immutable masking configuration.
+`back/config/masking/labels.yaml` is the canonical label catalogue (sequence
+= output order, no `order` field), published as `GET /api/labels`; the frontend
+consumes a generated shared TS file (`front/scripts/gen-labels.mjs`, CI checks
+freshness). All curated lexicons and `always_mask`/`never_mask` exceptions live
+in typed YAML loaded into one validated snapshot at startup
+(`back/src/masking/config.py`); a non-reversible digest feeds the cache key,
+so any exception change invalidates cached results. The profile abstraction,
+`profile_id`, `GET /api/profiles` and `LabelMeta.order` were removed; the keys
+`Профиль` marker is retained as ignored legacy metadata (§5.2).
+
 **Implemented in Phase 3 (2026-11-24):** Valkey result cache. Keys are
 `docmasker:result:v{CACHE_NAMESPACE_VERSION}:{operation}:{HMAC-SHA256}` over a
 canonical fingerprint (exact input/keys bytes, normalized output filename,

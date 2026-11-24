@@ -16,7 +16,7 @@ from src.jobs.cache import build_cache_key, canonical_json, fingerprint_for
 from src.jobs.dependencies import result_cache
 from src.jobs.repository import JobQueueFullError
 from src.jobs.routing import count_docx_paragraphs, enqueue, needs_job
-from src.masking.profiles import ProfilesValidationError, get_profile, list_profiles
+from src.masking.config import SCHEMA_VERSION, get_config
 
 from .archives import mask_archive, restore_archive
 from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
@@ -28,12 +28,12 @@ from .docx_validation import (
 )
 from .executor import ExecutorBusyError, run_cpu
 from .mapping import KeysValidationError, MaskKeys, placeholders_from_document, validate_keys_yaml
-from .rule_based import get_masker_for
+from .rule_based import get_masker
 from .schemas import (
+    LabelsResponse,
     MaskedEntity,
     MaskRequest,
     MaskResponse,
-    ProfilesResponse,
     UnmaskRequest,
     UnmaskResponse,
 )
@@ -45,19 +45,12 @@ if TYPE_CHECKING:
 router = APIRouter(tags=["masking"])
 
 
-@router.get("/profiles", response_model=ProfilesResponse)
-async def profiles_endpoint() -> ProfilesResponse:
-    """List the registered masking profiles (read-only metadata)."""
-    return ProfilesResponse(
-        profiles=[
-            {
-                "profile_id": profile.profile_id,
-                "version": profile.version,
-                "display_name": profile.display_name,
-                "labels": [{"id": meta.id, "title": meta.title, "order": meta.order} for meta in profile.labels],
-            }
-            for profile in list_profiles()
-        ]
+@router.get("/labels", response_model=LabelsResponse)
+async def labels_endpoint() -> LabelsResponse:
+    """Return the single canonical label catalogue (read-only, runtime source)."""
+    return LabelsResponse(
+        schema_version=SCHEMA_VERSION,
+        labels=[{"id": label, "title": title} for label, title in get_config().labels.entries],
     )
 
 
@@ -143,7 +136,6 @@ def _job_overflow(
     input_bytes: bytes,
     keys_bytes: bytes | None,
     filename: str,
-    profile_id: str | None,
 ) -> JSONResponse:
     """Accept an oversized input as a durable job (202 + status/result URLs)."""
     try:
@@ -152,7 +144,6 @@ def _job_overflow(
             input_bytes=input_bytes,
             keys_bytes=keys_bytes,
             filename=filename,
-            profile_id=profile_id,
         )
     except JobQueueFullError as error:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(error)) from error
@@ -177,7 +168,6 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONRespons
             input_bytes=input_bytes,
             keys_bytes=None,
             filename="",
-            profile_id=request.profile_id,
         )
     key = _cache_key("mask_text", input_bytes=input_bytes, keys_bytes=None, filename="")
     cached = _cache_get(key)
@@ -190,8 +180,6 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONRespons
         masked, entities, keys = await run_cpu(mask_document, request)
     except ExecutorBusyError as error:
         raise _busy() from error
-    except ProfilesValidationError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
     response = MaskResponse(text=masked, stats=mask_stats(entities), keys=keys.to_yaml())
     _cache_put(key, response.model_dump_json().encode("utf-8"))
     return response
@@ -200,7 +188,6 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONRespons
 @router.post("/mask-file")
 async def mask_file_endpoint(
     file: Annotated[UploadFile, File(description="DOCX file to mask")],
-    profile_id: Annotated[str | None, Form(description="Masking profile id (default profile when omitted)")] = None,
 ) -> Response:
     """Upload a .docx, mask PII in place (formatting preserved), return a ZIP of result + keys."""
     if not file.filename or not file.filename.lower().endswith(".docx"):
@@ -218,13 +205,7 @@ async def mask_file_endpoint(
             input_bytes=source,
             keys_bytes=None,
             filename=file.filename,
-            profile_id=profile_id,
         )
-
-    try:
-        profile = get_profile(profile_id)
-    except ProfilesValidationError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
     # Validate the package BEFORE a cache lookup (§4.5: a hit must not bypass
     # input/security validation).
@@ -242,7 +223,7 @@ async def mask_file_endpoint(
         result_cache().invalidate(key)
 
     def _mask_file() -> tuple[bytes, list[MaskedEntity], MaskKeys]:
-        return mask_docx_in_memory(source, get_masker_for(profile.profile_id))
+        return mask_docx_in_memory(source, get_masker())
 
     try:
         masked_bytes, entities, keys = await run_cpu(_mask_file)
@@ -283,7 +264,6 @@ async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse | JSONR
             input_bytes=input_bytes,
             keys_bytes=keys_bytes,
             filename="",
-            profile_id=None,
         )
     key = _cache_key("unmask_text", input_bytes=input_bytes, keys_bytes=keys_bytes, filename="")
     cached = _cache_get(key)
@@ -331,7 +311,6 @@ async def unmask_file_endpoint(
             input_bytes=source,
             keys_bytes=keys.encode("utf-8"),
             filename=file.filename,
-            profile_id=None,
         )
 
     try:

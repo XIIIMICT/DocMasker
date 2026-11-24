@@ -72,7 +72,7 @@ class ArtifactStore:
 
     def delete(self, job_id: str) -> None:
         """Remove every artifact of a job (TTL / cancellation cleanup)."""
-        for suffix in ("input", "keys", "result", "error", "name", "kind", "profile"):
+        for suffix in ("input", "keys", "result", "error", "name", "kind"):
             path = self._path(job_id, suffix)
             with suppress(FileNotFoundError):
                 path.unlink()

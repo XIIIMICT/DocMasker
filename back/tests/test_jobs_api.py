@@ -130,11 +130,13 @@ async def test_submit_file_rejects_garbage(client: AsyncClient, jobs_env: Settin
     assert response.status_code == 415
 
 
-async def test_unknown_kind_and_profile_rejected(client: AsyncClient, jobs_env: Settings) -> None:
+async def test_unknown_kind_rejected(client: AsyncClient, jobs_env: Settings) -> None:
     assert (await client.post("/api/jobs", data={"kind": "fly", "text": "x"})).status_code == 422
+    # `profile_id` was removed from the public contract; a stray field is
+    # ignored by FastAPI and the single masking configuration is used.
     assert (
         await client.post("/api/jobs", data={"kind": "mask_text", "text": "x", "profile_id": "nope"})
-    ).status_code == 422
+    ).status_code == 202
 
 
 async def test_queue_full_returns_429(client: AsyncClient, jobs_env: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,7 +10,6 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, 
 from src.config import get_settings
 from src.masking.docx_validation import DocxValidationError, upload_limits, validate_docx_package
 from src.masking.mapping import KeysValidationError, validate_keys_yaml
-from src.masking.profiles import ProfilesValidationError, get_profile
 
 from .dependencies import artifact_store, job_repository
 from .repository import JobNotFoundError, JobQueueFullError
@@ -36,7 +35,6 @@ def _enqueue_safe(
     input_bytes: bytes,
     keys_bytes: bytes | None,
     filename: str,
-    profile_id: str | None,
 ) -> JobAccepted:
     """Enqueue, translating the bounded-queue overflow into an HTTP 429."""
     try:
@@ -45,7 +43,6 @@ def _enqueue_safe(
             input_bytes=input_bytes,
             keys_bytes=keys_bytes,
             filename=filename,
-            profile_id=profile_id,
         )
     except JobQueueFullError as error:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(error)) from error
@@ -68,17 +65,12 @@ async def submit_job(
     text: Annotated[str | None, Form(description="Text to mask/restore")] = None,
     keys: Annotated[str | None, Form(description="Demasking keys YAML (unmask only)")] = None,
     kind: Annotated[str, Form(description="mask_text | mask_file | unmask_text | unmask_file")] = "mask_text",
-    profile_id: Annotated[str | None, Form(description="Masking profile id")] = None,
     filename: Annotated[str | None, Form(description="Original file name for the result archive")] = None,
 ) -> JobAccepted:
     """Submit a large operation: 202 + opaque job id; inputs are spooled."""
     allowed: tuple[JobKind, ...] = ("mask_text", "mask_file", "unmask_text", "unmask_file")
     if kind not in allowed:
         raise _safe_error("Неизвестный тип задания.")
-    try:
-        get_profile(profile_id)
-    except ProfilesValidationError as error:
-        raise _safe_error(str(error)) from error
     # Operation-specific fields (§3.11): unmask_* require keys, mask_* reject
     # keys (unless deliberately supported) — reject inappropriate fields early.
     if kind.startswith("unmask_") and (keys is None or not keys.strip()):
@@ -100,7 +92,6 @@ async def submit_job(
             input_bytes=text.encode("utf-8"),
             keys_bytes=keys_bytes,
             filename="",
-            profile_id=profile_id,
         )
 
     if file is None or not file.filename or not file.filename.lower().endswith(".docx"):
@@ -117,7 +108,6 @@ async def submit_job(
         input_bytes=data,
         keys_bytes=keys_bytes,
         filename=filename or file.filename,
-        profile_id=profile_id,
     )
 
 

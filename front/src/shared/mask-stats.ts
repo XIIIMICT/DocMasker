@@ -1,3 +1,4 @@
+import { LABEL_CATALOGUE } from "@/shared/api/labels.generated";
 import { keyEntries, type MaskStatsPayload } from "@/shared/api/mask";
 
 /**
@@ -24,15 +25,10 @@ const LABEL_LABELS: Record<string, [one: string, few: string, many: string]> = {
     organization: ["организация", "организации", "организаций"],
 };
 
-/** Section titles for the tooltip lines (mirrors the backend's `LABEL_TITLES`). */
-const LABEL_TITLES: Record<string, string> = {
-    person: "Физлица",
-    phone: "Номера телефонов",
-    email: "Email",
-    link: "Ссылки",
-    address: "Адреса",
-    organization: "Организации",
-};
+/** Section titles for the tooltip lines (canonical, generated from labels.yaml). */
+const LABEL_TITLES: Record<string, string> = Object.fromEntries(
+    LABEL_CATALOGUE.map((entry) => [entry.id, entry.title]),
+);
 
 /** Pick the Russian plural form for `count` (1 фрагмент / 2 фрагмента / 5 фрагментов). */
 export function plural(count: number, forms: [string, string, string]): string {
