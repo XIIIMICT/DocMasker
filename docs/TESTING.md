@@ -5,7 +5,7 @@ failure-scenario matrix and the verification commands. Toolchain conventions,
 CI job descriptions and the quality table live in `docs/WORKFLOW.md`; backend
 hot-path test notes in `back/AGENTS.md`, `back/src/jobs/AGENTS.md` and
 `back/src/masking/AGENTS.md`; frontend notes in `front/AGENTS.md`. The scenario
-source is Implementation Brief §14 (`docs/DocMasker_Production_Readiness_Implementation_Brief.md`).
+source is Implementation Brief §14 (the implementation brief (removed after Phase 8; remaining items in `TODO.md`)).
 
 Status labels below mean: **Covered** = a named test exists in the repository;
 **Recorded** = a historical run is documented, not re-run here; **TODO** =

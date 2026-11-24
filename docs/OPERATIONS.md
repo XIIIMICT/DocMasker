@@ -24,6 +24,12 @@ just seed                     # Alembic 0001_jobs + verify the jobs table (idemp
 just dev                      # or: just prod
 ```
 
+`just seed` runs on the host using `POSTGRES_HOST`/`POSTGRES_PORT` from `.env`
+(localhost:15433). Compose overrides `DATABASE_URL` with
+`POSTGRES_HOST_DOCKER` (the compose service name) for `back`/`worker`, following
+ReportCollector — there is no need to rewrite `.env` between host and container
+runs. `POSTGRES_PASSWORD` is read from the same components in both places.
+
 - `just dev` starts `back-dev`, `dm-worker-dev`, `dm-front-dev` with
   `develop.watch` hot-reload; `just prod` starts `dm-back`, `dm-worker`,
   `dm-front`. Sync a running dev stack by restarting with `just dev`

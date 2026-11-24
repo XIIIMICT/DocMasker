@@ -1,6 +1,6 @@
 # Implementation baseline and dependency map (Phase 0)
 
-Source: `docs/DocMasker_Production_Readiness_Implementation_Brief.md` §13
+Source: implementation brief §13 (brief removed after Phase 8; remaining items in `TODO.md`)
 Phase 0. Recorded 2026-11-24 before any Phase 1 code change. The detailed
 target design and the ReportCollector comparison live in
 `docs/adr/0003-postgres-job-foundation.md`.

@@ -33,9 +33,11 @@ PostgreSQL and Valkey are in `infra/compose.db.yaml` (included from
 `compose.yaml`) and are started **separately** with `just db-stand` — the
 ReportCollector pattern. App services have no `depends_on` for them;
 `just seed` / `just migrate` create the `jobs` schema explicitly before the
-stack starts. `DATABASE_URL`/`VALKEY_URL` use compose service names inside the
-private networks; host-side seed/migrate reach PostgreSQL via loopback
-`${POSTGRES_PORT:-15433}` (5432 belongs to ReportCollector).
+stack starts. `DATABASE_URL` is built from `POSTGRES_*` components: `.env`
+uses `POSTGRES_HOST=localhost`/`POSTGRES_PORT=15433` for host-side seed and
+migrations, compose overrides it with `POSTGRES_HOST_DOCKER` (service name) for
+`back`/`worker` (ReportCollector pattern). `VALKEY_URL` is overridden by compose
+for containers.
 
 Key point: **ports and hosts are set once in the root `.env`** and spread into the Dockerfiles (build-arg `PORT`/`BACKEND_PORT`), port publishing, healthchecks, and internal URLs. All mandatory (`:?` in compose — fails with a clear error instead of staying silent). `BACKEND_INTERNAL_URL` is derived from the service name + `BACKEND_PORT` (e.g. `http://back-dev:8001` in dev).
 

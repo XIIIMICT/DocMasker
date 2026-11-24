@@ -2,7 +2,7 @@
 
 - Status: **accepted** (Phase 0 design 2026-11-24; Phase 1 implemented and
   verified the same day)
-- Implements: `docs/DocMasker_Production_Readiness_Implementation_Brief.md`
+- Implements: the implementation brief (removed after Phase 8; remaining items in `TODO.md`)
   §2 (PostgreSQL migration/infrastructure), §3.1–3.4 (job record, transitions,
   atomic enqueue, `SKIP LOCKED` claim), §13 Phase 0/1
 - Supersedes: ADR-0002's **SQLite** decision (the durable-job *concept* stays;

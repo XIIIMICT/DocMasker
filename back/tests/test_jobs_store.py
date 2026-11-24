@@ -178,7 +178,7 @@ def test_ttl_sweep_removes_rows_and_artifacts(repo: JobRepository, store: Artifa
 
 
 def test_no_pii_columns_in_schema(settings: Settings) -> None:
-    inspector = inspect(create_engine(settings.database_url))
+    inspector = inspect(create_engine(settings.sqlalchemy_database_url))
     columns = {column["name"] for column in inspector.get_columns("jobs")}
     assert {
         "id",
