@@ -21,11 +21,11 @@ def bench(masker) -> None:
         size_kb = len(data) / 1024
 
         t0 = time.perf_counter()
-        masked, entities, keys = mask_docx_in_memory(data)
+        masked, entities, keys, _coverage = mask_docx_in_memory(data)
         mask_ms = (time.perf_counter() - t0) * 1000
 
         t1 = time.perf_counter()
-        restored, _unused = unmask_docx_in_memory(masked, keys.placeholders())
+        restored, _unused, _coverage = unmask_docx_in_memory(masked, keys.placeholders())
         unmask_ms = (time.perf_counter() - t1) * 1000
 
         assert not _unused
@@ -56,7 +56,7 @@ def repro_dedupe_across_paragraphs() -> None:
     buffer = io.BytesIO()
     doc.save(buffer)
 
-    masked, entities, _keys = mask_docx_in_memory(buffer.getvalue())
+    masked, entities, _keys, _coverage = mask_docx_in_memory(buffer.getvalue())
     document = Document(io.BytesIO(masked))
     occurrences = sum(paragraph.text.count("[PERSON_1]") for paragraph in document.paragraphs)
     print(

@@ -31,5 +31,5 @@ export async function POST(request: Request) {
         FILE_TIMEOUT_MS,
     );
 
-    return passThrough(response, ["Content-Disposition"]);
+    return passThrough(response, ["Content-Disposition", "Cache-Control"]);
 }

@@ -31,7 +31,7 @@ Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
 - `ruff` with rule `ALL` and explicit exclusions (`back/pyproject.toml`); Cyrillic `RUF001-003` allowed, docstrings optional.
 - `ty check` — static type checker (**not mypy**).
 - `pytest`: `asyncio_mode=auto`, `filterwarnings=error` (with a scoped ignore for the `pkg_resources` deprecation that `natasha`→`pymorphy2` emits). Tests are deterministic and offline — no model, no network.
-- Test files: `back/tests/test_rule_based.py` (CAPSLOCK, inflected names, phone/email/address/org cases, label overrides), `test_mask.py` (service + `/api/mask` endpoint), `test_docx.py` (DOCX masking + formatting preservation), `test_mask_file.py` (multipart endpoints + download headers).
+- Test files: `test_rule_based.py` (CAPSLOCK, names, phone/email/address/org cases), `test_config.py` / `test_labels_api.py` (Phase 4 config), `test_ooxml.py` (Phase 5 synthetic OPC fixtures + manifest parity), `test_cache.py` (Phase 3), `test_mask.py`, `test_docx.py`, `test_mask_file.py` (multipart + versioned manifest), `test_unmask.py`, `test_jobs_*.py`, `test_executor.py`.
 - Coverage: `--cov=src --cov-branch`; CI requires ≥80% (see `[tool.coverage]` in `back/pyproject.toml`).
 
 ### Front

@@ -109,44 +109,68 @@ validated by `validate_keys_yaml` first (see `docs/TEMPLATES.md`): invalid →
 
 ## `POST /api/mask-file`
 
-Multipart: `file` (`.docx`). Response is a
-**ZIP** (200, `application/zip`, `Content-Disposition: attachment`) — not a bare
-`.docx` — containing:
+Multipart: `file` (`.docx`). Response is a **flat ZIP** (200,
+`application/zip`, `Content-Disposition: attachment`, `Cache-Control: no-store`)
+— not a bare `.docx` — containing the same entries for sync and job paths (§7):
 
 | Entry | Content |
 |---|---|
 | `<base> (замаскированный).docx` | masked document, formatting preserved |
-| `<base> (ключи демаскировки).yaml` | demasking keys (v2) |
+| `<base> (ключи демаскировки).yaml` | demasking keys |
+| `manifest.json` | versioned result manifest (statistics, coverage, versions) |
 
-Response headers:
-
-| Header | Value |
-|---|---|
-| `X-Masked-Count` | total masked occurrences |
-| `X-Masked-Breakdown` | per-label JSON, e.g. `{"person":2,"phone":1}` |
-| `X-Docx-Unsupported-Parts` | optional comma-separated safe codes (footnotes, comments, …) when the package has OOXML parts we don't mask — see `docs/DOCX_SUPPORT.md` |
-
-The frontend unpacks the ZIP (`front/src/shared/api/mask-archive.ts`, jszip) and
-offers the two files as **separate downloads**; the user never sees the archive.
-Non-`.docx`/empty → 422; malformed/oversized/encrypted DOCX → 415/413. Over
-`SYNC_MAX_DOCX_BYTES` or `SYNC_MAX_DOCX_PARAGRAPHS` → `202 + JobAccepted`.
+There are **no semantic `X-Masked-*` / `X-Docx-*` headers**: all metadata
+lives in `manifest.json`. The frontend requires and validates the manifest.
+Genuinely unprocessable content (embedded OLE/binary objects, unsafe XML) is a
+strict 422 — no best-effort warning. Non-`.docx`/empty → 422;
+malformed/oversized/encrypted DOCX → 415/413. Over `SYNC_MAX_DOCX_BYTES` or
+`SYNC_MAX_DOCX_PARAGRAPHS` → `202 + JobAccepted`.
 
 ## `POST /api/unmask-file`
 
 Multipart: `file` (masked `.docx`) + `keys` (YAML as a form field). Response is
-a **ZIP** (200, `application/zip`):
+a **flat ZIP** (200, `application/zip`, `Cache-Control: no-store`):
 
 | Entry | Content |
 |---|---|
 | `<base> (демаскированный).docx` | restored document |
-| `<base> (отчёт о демаскировке).json` | `{"unused_keys": [...]}` |
+| `manifest.json` | versioned manifest with `statistics.unused_keys` |
 
 The `<base>` has an optional ` (замаскированный)` suffix stripped so names don't
-double up. The manifest replaced the former `X-Unused-Keys` header (F-05): PII
-values no longer ride in transport metadata and no header-size limit can
-truncate them. `X-Docx-Unsupported-Parts` may also be present. Invalid keys →
-422; file validation → 415/413 as above. Over the sync thresholds →
-`202 + JobAccepted`.
+double up. PII values never ride in headers (`X-Unused-Keys` was removed in
+F-05). Invalid keys → 422; file validation → 415/413 as above. Over the sync
+thresholds → `202 + JobAccepted`.
+
+### `manifest.json` (canonical, `schema_version: 1`)
+
+```json
+{
+  "schema_version": 1,
+  "operation": "mask_file",
+  "status": "succeeded",
+  "complete": true,
+  "masking_ruleset_version": 1,
+  "exception_config_digest": "...",
+  "input": { "sha256": "...", "size_bytes": 12345 },
+  "output": { "document_name": "...", "keys_name": "..." },
+  "statistics": {
+    "total_occurrences": 5,
+    "occurrences_by_label": { "person": 2 },
+    "unique_by_label": { "person": 1 }
+  },
+  "coverage": {
+    "processed_parts": ["main_document", "footnotes"],
+    "unprocessed_text_parts": [],
+    "rejected_parts": [],
+    "raster_image_ocr": "not_performed"
+  },
+  "cache": { "hit": false, "namespace_version": 1 }
+}
+```
+
+`unmask_file` reports `statistics.unused_keys` instead of occurrence counts.
+The frontend rejects a missing/malformed/wrong-version manifest with a clear
+error. See `docs/DOCX_SUPPORT.md`.
 
 ## Durable jobs (`/api/jobs`, ADR-0002)
 
@@ -216,9 +240,9 @@ One **flat ZIP** (200, `application/zip`, `Cache-Control: no-store`):
 
 | Job kind | Entries |
 |---|---|
-| `mask_text` / `unmask_text` | `result.json` — the same JSON shape as `/api/mask` / `/api/unmask` |
-| `mask_file` | masked `.docx` + keys `.yaml` |
-| `unmask_file` | restored `.docx` + manifest `.json` |
+| `mask_text` / `unmask_text` | `result.json` — the **exact** canonical `MaskResponse` / `UnmaskResponse` (ZIP wrapping is transport only) |
+| `mask_file` | masked `.docx` + keys `.yaml` + `manifest.json` (same as sync) |
+| `unmask_file` | restored `.docx` + `manifest.json` (same as sync) |
 
 409 while the job is not `succeeded`; 404 for an unknown id or when the result
 artifact expired (TTL `JOBS_TTL_SECONDS`). The front unpacks `result.json` via

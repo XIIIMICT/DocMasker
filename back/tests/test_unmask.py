@@ -59,9 +59,9 @@ def test_unmask_docx_restores_the_document() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, _entities, keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, _entities, keys, _coverage = mask_docx_in_memory(out.getvalue())
     placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
-    restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)
+    restored, unused, _coverage = unmask_docx_in_memory(masked_bytes, placeholders)
 
     text = "\n".join(p.text for p in DocxDocument(io.BytesIO(restored)).paragraphs)
     assert text == "Доклад: Иван Петров, тел +7 900 123-45-67."
@@ -78,7 +78,7 @@ def test_unmask_docx_restores_a_marker_split_across_runs() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    restored, unused = unmask_docx_in_memory(out.getvalue(), {"[PERSON_1]": "Иван Петров"})
+    restored, unused, _coverage = unmask_docx_in_memory(out.getvalue(), {"[PERSON_1]": "Иван Петров"})
     text = DocxDocument(io.BytesIO(restored)).paragraphs[0].text
     assert text == "Иван Петров пришёл."
     assert unused == []
@@ -90,7 +90,7 @@ def test_unmask_docx_reports_keys_absent_from_the_document() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    restored, unused = unmask_docx_in_memory(
+    restored, unused, _coverage = unmask_docx_in_memory(
         out.getvalue(),
         {"[PERSON_1]": "Иван Петров", "[ORGANIZATION_1]": "ООО «Рога и копыта»"},
     )
@@ -153,7 +153,7 @@ async def test_post_unmask_file_endpoint() -> None:
     doc.add_paragraph("Контакты: Иван Петров, тел +7 900 123-45-67.")
     out = io.BytesIO()
     doc.save(out)
-    masked_bytes, _entities, keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, _entities, keys, _coverage = mask_docx_in_memory(out.getvalue())
 
     async with _client() as client:
         response = await client.post(
@@ -176,14 +176,14 @@ async def test_post_unmask_file_endpoint() -> None:
         names = set(archive.namelist())
         assert names == {
             "доклад (демаскированный).docx",
-            "доклад (отчёт о демаскировке).json",
+            "manifest.json",
         }
         restored_docx = archive.read("доклад (демаскированный).docx")
-        manifest = json.loads(archive.read("доклад (отчёт о демаскировке).json").decode("utf-8"))
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
     text = "\n".join(p.text for p in DocxDocument(io.BytesIO(restored_docx)).paragraphs)
     assert text == "Контакты: Иван Петров, тел +7 900 123-45-67."
     # Every key was applied.
-    assert manifest == {"unused_keys": []}
+    assert manifest["statistics"]["unused_keys"] == []
 
 
 async def test_post_unmask_file_endpoint_reports_unused_keys() -> None:
@@ -204,4 +204,4 @@ async def test_post_unmask_file_endpoint_reports_unused_keys() -> None:
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         manifest_name = next(name for name in archive.namelist() if name.endswith(".json"))
         manifest = json.loads(archive.read(manifest_name).decode("utf-8"))
-    assert manifest == {"unused_keys": ["ООО «Рога и копыта»"]}
+    assert manifest["statistics"]["unused_keys"] == ["ООО «Рога и копыта»"]

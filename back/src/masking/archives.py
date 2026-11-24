@@ -1,28 +1,48 @@
-"""Archive builders shared by the sync router and the worker (ADR-0002)."""
+"""One archive builder + manifest serializer shared by sync and worker (§7.1)."""
 
 import io
 import json
 import zipfile
+from typing import Any
+
+from .ooxml.manifest import MANIFEST_NAME
 
 _ZIP_DEFLATED = zipfile.ZIP_DEFLATED
 
 
-def mask_archive(masked_docx: bytes, keys_yaml: str, base: str) -> bytes:
-    """Bundle the masked document and its keys into one ZIP."""
+def _write_archive(entries: dict[str, bytes]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", _ZIP_DEFLATED) as archive:
-        archive.writestr(f"{base} (замаскированный).docx", masked_docx)
-        archive.writestr(f"{base} (ключи демаскировки).yaml", keys_yaml)
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
     return buffer.getvalue()
 
 
-def restore_archive(restored_docx: bytes, unused_keys: list[str], base: str) -> bytes:
-    """Bundle the restored document and a manifest of unapplied keys into one ZIP."""
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", _ZIP_DEFLATED) as archive:
-        archive.writestr(f"{base} (демаскированный).docx", restored_docx)
-        archive.writestr(
-            f"{base} (отчёт о демаскировке).json",
-            json.dumps({"unused_keys": unused_keys}, ensure_ascii=False, indent=2),
-        )
-    return buffer.getvalue()
+def mask_archive(
+    masked_docx: bytes,
+    keys_yaml: str,
+    base: str,
+    manifest: dict[str, Any],
+) -> bytes:
+    """Flat mask ZIP: masked .docx + keys .yaml + versioned manifest.json."""
+    return _write_archive(
+        {
+            f"{base} (замаскированный).docx": masked_docx,
+            f"{base} (ключи демаскировки).yaml": keys_yaml.encode("utf-8"),
+            MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        }
+    )
+
+
+def restore_archive(
+    restored_docx: bytes,
+    base: str,
+    manifest: dict[str, Any],
+) -> bytes:
+    """Flat restore ZIP: restored .docx + versioned manifest.json (with unused_keys)."""
+    return _write_archive(
+        {
+            f"{base} (демаскированный).docx": restored_docx,
+            MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        }
+    )

@@ -169,6 +169,16 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
+**Implemented in Phase 5 (2026-11-24):** full OPC-aware OOXML transformer
+(`back/src/masking/ooxml/`), replacing the python-docx run-level traversal.
+All text-bearing parts are located through `[Content_Types].xml` + relationship
+URIs, parsed securely with `defusedxml.lxml`, rewritten at the text-node level,
+and unchanged ZIP entries are copied byte-for-byte. Strict 422 rejection for
+uninspectable embedded objects/unsafe XML; warning-only headers removed. One
+versioned `manifest.json` (statistics, coverage, versions, cache) is produced
+by sync and job file paths; the frontend requires and validates it. Text jobs
+return the exact canonical DTO. `docs/DOCX_SUPPORT.md` documents coverage.
+
 **Implemented in Phase 4 (2026-11-24):** one immutable masking configuration.
 `back/config/masking/labels.yaml` is the canonical label catalogue (sequence
 = output order, no `order` field), published as `GET /api/labels`; the frontend

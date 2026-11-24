@@ -514,16 +514,6 @@ textarea.result-area--empty {
     border-color: var(--danger) !important;
 }
 
-/* Warning that parts of the DOCX were not masked (stage 5, safe codes only). */
-.editor-pane__docx-warning {
-    flex: none;
-    color: var(--warning);
-    font-size: 0.78rem;
-    font-weight: 600;
-    white-space: nowrap;
-    cursor: default;
-}
-
 /* Masking summary shown inside the result pane label; the breakdown lives in
    a Tooltip. It is the Tooltip.Trigger, so it must look like plain text. */
 .editor-pane__stats {

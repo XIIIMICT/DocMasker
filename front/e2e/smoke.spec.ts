@@ -424,28 +424,46 @@ test("активное задание показывает «Отменить з
     expect(cancelled).toBe(true);
 });
 
-test("предупреждение о неподдерживаемых частях DOCX показывается в результате", async ({
+test("результат маскировки файла требует manifest.json и берёт статистику из него", async ({
     page,
 }) => {
-    // Fully mock the file endpoint: a valid two-entry ZIP plus the safe
-    // warning header. route.fetch() is avoided because consuming its body
-    // would corrupt the multipart upload on replay.
     const JSZip = (await import("jszip")).default;
+    const manifest = {
+        schema_version: 1,
+        operation: "mask_file",
+        status: "succeeded",
+        complete: true,
+        masking_ruleset_version: 1,
+        exception_config_digest: "digest",
+        input: { sha256: "abc", size_bytes: 12 },
+        output: {
+            document_name: "doc (замаскированный).docx",
+            keys_name: "doc (ключи демаскировки).yaml",
+        },
+        statistics: {
+            total_occurrences: 2,
+            occurrences_by_label: { person: 1, email: 1 },
+            unique_by_label: { person: 1, email: 1 },
+        },
+        coverage: {
+            processed_parts: ["main_document", "footnotes"],
+            unprocessed_text_parts: [],
+            rejected_parts: [],
+            raster_image_ocr: "not_performed",
+        },
+        cache: { hit: false, namespace_version: 1 },
+    };
     const zip = new JSZip();
     zip.file("doc (замаскированный).docx", "masked-docx");
     zip.file("doc (ключи демаскировки).yaml", "Физлица:\n  - Иван Петров");
+    zip.file("manifest.json", JSON.stringify(manifest));
     const archive = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
 
     await page.route("**/api/mask-file", async (route) => {
         await route.fulfill({
             status: 200,
             contentType: "application/zip",
-            headers: {
-                "X-Masked-Count": "1",
-                "X-Masked-Breakdown": '{"person":1}',
-                "X-Docx-Unsupported-Parts": "comments,footnotes",
-                "Content-Disposition": 'attachment; filename="doc (замаскированный).zip"',
-            },
+            headers: { "Content-Disposition": 'attachment; filename="doc (замаскированный).zip"' },
             body: archive,
         });
     });
@@ -453,14 +471,21 @@ test("предупреждение о неподдерживаемых част�
     await page.goto("/");
     await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
     await page.getByRole("button", { name: "Замаскировать" }).click();
-    const warning = page.getByRole("note", { name: "Предупреждение о покрытии DOCX" });
-    await expect(warning).toBeVisible({ timeout: 15000 });
-    await warning.hover();
-    await expect(page.getByRole("tooltip")).toContainText("комментарии");
-    await expect(page.getByRole("tooltip")).toContainText("не является полной анонимизацией");
+    // Statistics come from the manifest, not from headers.
+    await expect(page.locator(".editor-pane__stats")).toHaveText("2 фрагмента", { timeout: 15000 });
+    await expect(page.getByRole("button", { name: "Скачать ключи демаскировки" })).toBeEnabled();
 
-    // Removing the file clears the whole result, including the coverage
-    // warning — it must not survive into the next run.
+    // A missing/malformed manifest is a clear result error, never "0 entities".
+    const badZip = new JSZip();
+    badZip.file("doc (замаскированный).docx", "masked-docx");
+    badZip.file("doc (ключи демаскировки).yaml", "Физлица:\n  - Иван Петров");
+    const badArchive = Buffer.from(await badZip.generateAsync({ type: "nodebuffer" }));
+    await page.unroute("**/api/mask-file");
+    await page.route("**/api/mask-file", async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/zip", body: badArchive });
+    });
     await page.getByRole("button", { name: "Удалить файл" }).click();
-    await expect(warning).toHaveCount(0);
+    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    await expect(page.getByText(/отчёт о результате/i)).toBeVisible({ timeout: 15000 });
 });

@@ -1,61 +1,77 @@
-# DOCX coverage and limitations
+# DOCX / OOXML coverage (Phase 5)
 
-DocMasker masks DOCX **at the run level** (`python-docx`), preserving
-formatting. Only the OOXML parts listed below are traversed. The output is
-**not** a complete anonymization of arbitrary OOXML — a document may carry PII
-in parts we do not touch. See `docs/ARCHITECTURE.md` and the DOCX landmines
-in `back/AGENTS.md`.
+DocMasker masks `.docx` at the **OPC package level**. `back/src/masking/ooxml/`
+builds a namespace-aware inventory from `[Content_Types].xml` and relationship
+files (QName/URI, never hardcoded prefixes), parses selected XML parts with
+`defusedxml.lxml` (no DTD, no external entities, no network) and rewrites
+text-node slices. Only modified ZIP entries are re-serialized; **all other
+entries are copied byte-for-byte**. `python-docx` is no longer used for masking.
 
-## Supported (masked and restored)
+## Processed (masked and restored)
 
-| Part | How | Notes |
-|---|---|---|
-| Body paragraphs | `document.paragraphs` | All text, including `w:t` runs |
-| Body tables, nested | `_iter_table_paragraphs` | Recursive, all cells |
-| Default header / footer | `section.header` / `.footer` | Per section |
-| First-page header / footer | `section.first_page_header` / `_footer` | Only when `different_first_page_header_footer` is set; `is_linked_to_previous` variants are skipped |
-| Even-page header / footer | `section.even_page_header` / `_footer` | `odd_and_even_pages_header_footer` setting |
-| Tables inside any header/footer | `header_footer.tables` → recursive | Covered since stage 5 |
-| Hyperlinked runs (`w:hyperlink`) | `iter_inner_content()` | Masked inline; a link whose text becomes only markers is unwrapped and its relationship dropped |
-| Entities spanning several runs | `mask_paragraph` | Collapsed into one `[LABEL_N]`; run bounds recomputed per entity |
-
-python-docx 1.2 resolves the `w:headerReference` / `w:footerReference`
-parts for all variants — no raw XML traversal is needed for these.
-
-## Not supported (PII here is NOT masked)
-
-| Part | Risk |
+| Part / content | How |
 |---|---|
-| Text boxes / shapes (`w:txbxContent`, DrawingML) | High — visible text |
-| Footnotes / endnotes | High — visible text |
-| Comments | High — author names, text |
-| Tracked changes (`w:ins`, `w:del`) | High — deleted text still in the file |
-| Document properties (`docProps/core.xml`, `app.xml`) | High — author, company, manager |
-| Alt text / image descriptions (`wp:docPr`) | Medium |
-| Hyperlink relationship *targets* (`mailto:`, URLs) in attributes | Medium — the visible link text is masked, but a target may still carry a name when the visible text is not fully covered |
-| Embedded objects / OLE / charts | Medium |
-| Hidden text / `w:vanish` runs | Medium |
-| Custom XML, content controls (`w:sdt`), field codes | Low–medium |
-| First-page/even variants linked to a previous section | Skipped deliberately: their content belongs to that section and is masked there |
+| Main document body, tables, nested tables | `w:t` grouped by closest `w:p` |
+| Default / first-page / even-page headers & footers, tables inside them | resolved through relationship Type URI; shared parts once |
+| Hyperlink visible text **and** external relationship `Target` | `w:t` + `TargetMode="External"` attribute allowlist; link element preserved, target restored on unmask |
+| Footnotes / endnotes | `word/footnotes.xml`, `word/endnotes.xml` |
+| Comments (text + author/initial metadata) | `word/comments.xml` and its text nodes |
+| Tracked changes (`w:ins`, `w:del`, `w:delText`) | `w:delText` is text-bearing; deleted PII is masked |
+| Text boxes / shapes | `w:txbxContent` nested paragraphs + DrawingML `a:t` |
+| Content controls (`w:sdt`) | nested WordprocessingML paragraphs |
+| Document properties | `docProps/core.xml` (creator, title, subject, description, lastModifiedBy, keywords, category) and `docProps/app.xml` (Company, Manager) |
+| Alt text / title / description | explicit attribute allowlist on `wp:docPr` (`descr`, `title`, `name`) |
+| Other text-bearing XML parts | found through the package inventory; processed when they carry one of the supported text QNames |
 
-Because of these gaps, the mask-file response carries an explicit
-`X-Docx-Unsupported-Parts` warning header / result manifest entry when a
-package contains any of the unsupported parts (stage 5). The UI shows it in
-the result pane. Treat the download as "masked within the supported scope",
-not as a fully anonymized file.
+One entity spanning several runs/text nodes becomes **one** placeholder. Key
+numbering is document-wide across every processed part (`MaskKeys`). Masking and
+restoration use the same inverse text-node rewrite.
 
-## Test matrix
+## Not processed (documented limitations)
 
-`back/tests/test_docx.py` covers: run-level formatting, split-across-runs
-entities, hyperlink unwrapping, body/table/header phone+person collisions,
-all six header/footer variants + a header table, keys round-trip, no
-highlight written to the file. Synthetic fixtures only — no real PII.
-The e2e suite (`front/e2e/smoke.spec.ts`) covers a text round-trip and a
-DOCX file round-trip through the front proxy.
+- **Raster/vector image pixels** — no OCR in this scope. `raster_image_ocr:
+  "not_performed"` is reported in `manifest.json`; images are copied through
+  unchanged. Do not claim full image-content anonymization.
+- Field codes / `w:instrText`, hidden `w:vanish` text, custom XML data, chart
+  cache values and embedded OLE/binary objects are **not** treated as ordinary
+  text-bearing WordprocessingML.
 
-## Adding coverage
+## Rejection (strict blocking, §6.4/§6.5)
 
-To support a new part: extend `iter_paragraphs()` (or add a dedicated
-traversal over the corresponding OOXML part), keep the `keep_alive` list,
-write a synthetic fixture that actually contains that part, and add both a
-mask and a restore test. Update this matrix in the same change.
+A package is rejected with a clear non-PII error (HTTP 422) when it contains
+**embedded binary/OLE objects** (`*.bin`, `word/embeddings/*`) that cannot be
+inspected safely, or malformed/unsafe XML (DTD, external entities, oversized
+part). There is no "best-effort warning" for supported content: the normal path
+is a successful result with `complete: true` in `manifest.json`.
+
+There is **no** `X-Docx-Unsupported-Parts` plumbing and no frontend warning —
+that mechanism was removed in Phase 5.
+
+## Result manifest (§7)
+
+Both sync and job file operations return the same flat ZIP and the same
+versioned `manifest.json`:
+
+```text
+mask_file:   <base> (замаскированный).docx + <base> (ключи демаскировки).yaml + manifest.json
+unmask_file: <base> (демаскированный).docx + manifest.json
+```
+
+The manifest carries `schema_version`, `operation`, `status`, `complete`,
+ruleset/config versions, input hash/size, output names, `statistics`
+(occurrences/unique by label, `unused_keys` for unmask), `coverage`
+(processed parts, unprocessed *text* parts, rejected parts, OCR status) and
+`cache`. The frontend requires and validates it — a missing/malformed/wrong
+version is a clear result error, never "0 entities". Semantic metadata no
+longer lives in `X-Masked-Count` / `X-Masked-Breakdown`; both were removed.
+
+## Tests
+
+`back/tests/test_ooxml.py` builds synthetic OPC fixtures by hand: default
+namespace and custom-prefix variants, PII beyond byte 65,536, footnotes,
+endnotes, comments, tracked deletions, text boxes, content controls, core/app
+properties, alt-text attributes, external relationship targets, shared parts,
+malformed XML, embedded objects, and mask → keys → unmask round-trips with
+byte-for-byte preservation of an unrelated PNG entry. Sync/job manifest parity
+is asserted with the same source and config. `front/e2e/smoke.spec.ts` includes
+a manifest-required/validated-statistics case.
