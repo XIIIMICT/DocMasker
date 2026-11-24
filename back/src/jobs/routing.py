@@ -41,23 +41,31 @@ def enqueue(
        transaction. On any failure the staging row is aborted and the artifacts
        cleaned up idempotently, so no partially staged job is ever exposed.
     """
-    import hashlib
-
     settings: Settings = get_settings()
     store = artifact_store()
     repo = job_repository()
-    digest = hashlib.sha256(input_bytes)
-    if keys_bytes is not None:
-        digest.update(b"\0keys\0")
-        digest.update(keys_bytes)
-    cache_key = digest.hexdigest()
+    from .cache import build_cache_key, fingerprint_for
 
-    staged = repo.create_staging(
+    cache_key = build_cache_key(
+        settings,
+        fingerprint_for(
+            kind,
+            input_bytes=input_bytes,
+            keys_bytes=keys_bytes,
+            filename=filename,
+        ),
+    )
+
+    staged, created = repo.create_staging(
         kind,
         max_active=settings.jobs_max_active,
         max_attempts=settings.jobs_max_attempts,
         cache_key=cache_key,
     )
+    if not created:
+        # An identical job is already staging/queued/running: attach to it
+        # instead of duplicating expensive work (§4.5).
+        return accepted(staged.id)
     try:
         store.write(staged.id, "input", input_bytes)
         store.write(staged.id, "name", filename.encode("utf-8"))

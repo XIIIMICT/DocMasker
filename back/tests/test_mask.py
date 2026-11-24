@@ -1,5 +1,8 @@
 """Tests for the masking service and the /api/mask endpoint."""
 
+from pathlib import Path
+
+import pytest
 from httpx2 import ASGITransport, AsyncClient
 
 from src.main import app
@@ -85,6 +88,57 @@ async def test_post_mask_endpoint() -> None:
         "Физлица": ["Иван Петров"],
         "Email": ["ivan@mail.ru"],
     }
+
+
+async def test_post_mask_endpoint_cache_hit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """§4.6-1: repeated identical sync input is served from the cache."""
+    from src.config import Settings
+    from src.jobs import dependencies
+    from src.jobs.cache import CacheArtifactStore, ResultCache, build_cache_key, fingerprint_for
+    from src.masking import router
+
+    cfg = Settings.model_validate(
+        {
+            "database_url": "postgresql+psycopg://dm:dm@localhost:5432/dm",
+            "jobs_dir": str(tmp_path),
+            "cache_enabled": True,
+            "cache_key_secret": "endpoint-cache-test-secret-32ch",
+            "valkey_url": "redis://127.0.0.1:1/0",
+            "cache_connect_timeout_seconds": 0.1,
+            "cache_socket_timeout_seconds": 0.1,
+        }
+    )
+    cache = ResultCache(cfg, CacheArtifactStore(tmp_path))
+    cache._client = _EndpointFakeValkey()
+    monkeypatch.setattr(router, "result_cache", lambda: cache)
+    monkeypatch.setattr(dependencies, "result_cache", lambda: cache)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.post("/api/mask", json={"text": "Иван Петров"})
+        second = await client.post("/api/mask", json={"text": "Иван Петров"})
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert cache.metrics["hits"] == 1
+    key = build_cache_key(cfg, fingerprint_for("mask_text", input_bytes="Иван Петров".encode()))
+    assert key.startswith("docmasker:result:v1:mask_text:")
+
+
+class _EndpointFakeValkey:
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
+
+    def ping(self) -> bool:
+        return True
+
+    def get(self, key: str) -> str | None:
+        return self.data.get(key)
+
+    def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.data[key] = value
+
+    def delete(self, key: str) -> None:
+        self.data.pop(key, None)
 
 
 async def test_post_mask_endpoint_rejects_blank_text() -> None:

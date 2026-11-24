@@ -19,6 +19,7 @@ dependencies = [
     "sqlalchemy>=2.0.44",
     "psycopg[binary]>=3.2.10",
     "alembic>=1.17.0",
+    "valkey>=6.2.0",
 ]
 
 [dependency-groups]

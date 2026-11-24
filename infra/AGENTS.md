@@ -40,10 +40,15 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
 - New infrastructure settings in `.env.example` (ADR-0003): `DATABASE_URL`
   (`postgresql+psycopg://…`), `POSTGRES_USER/PASSWORD/DB`, `DB_POOL_SIZE`,
   `DB_MAX_OVERFLOW`, `DB_CONNECT_TIMEOUT_SECONDS`, `VALKEY_URL`,
-  `CACHE_ENABLED`, `CACHE_TTL_SECONDS`, `CACHE_NAMESPACE_VERSION`,
-  `WORKER_SHUTDOWN_GRACE_SECONDS`. Production startup fails clearly when
-  credentials are missing (`:?` in compose). Valkey has no auth/ACL yet —
-  Phase 3 will add it; it stays private to the internal network.
+  `VALKEY_PASSWORD` (Valkey runs with `--requirepass`; prod `back`/`worker`
+  get the password via `VALKEY_URL`), `CACHE_ENABLED`, `CACHE_KEY_SECRET`
+  (stable HMAC secret ≥16 chars; startup fails without it when caching is
+  on), `CACHE_TTL_SECONDS`, `CACHE_NAMESPACE_VERSION`, `CACHE_MAX_ENTRIES`,
+  `CACHE_MAX_MEMORY_MB`, `MASKING_RULESET_VERSION`,
+  `RESULT_MANIFEST_VERSION`, `MASKING_CONFIG_DIGEST`, `KEYS_FORMAT_VERSION`,
+  `DOCX_TRANSFORMER_VERSION`, `WORKER_SHUTDOWN_GRACE_SECONDS`.
+  Production startup fails clearly when credentials are missing (`:?` in
+  compose). Valkey stays private to the internal network.
 - Job thresholds/limits in `.env.example`: `SYNC_MAX_TEXT_CHARS`,
   `SYNC_MAX_DOCX_BYTES`, `SYNC_MAX_DOCX_PARAGRAPHS`, `JOBS_MAX_ACTIVE`,
   `JOBS_CONCURRENCY`, `JOBS_MAX_ATTEMPTS`, `JOBS_LEASE_SECONDS`,

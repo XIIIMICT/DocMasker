@@ -152,8 +152,13 @@
       классификация ошибок с bounded backoff, TTL/GC (active не expire),
       immutable fenced result publication, graceful drain; UI Cancel вместо
       кнопки файла + sessionStorage resume. Failure-injection тесты.
-- [ ] **Phase 3** — Valkey result cache (versioned cache key, TTL/GC,
-      cache-outage fallback, metrics).
+- [x] **Phase 3** — Valkey result cache: versioned HMAC-SHA256 cache key
+      (input/keys/filename fingerprints + ruleset/config/manifest/engine
+      versions), compact artifact-reference entries (large ZIP/DOCX stay in
+      private storage), hash-verified hits, TTL/GC, metrics, cache-outage
+      fallback, PostgreSQL-side dedupe of identical active jobs; sync + job
+      paths, failed/cancelled never cached. 206 back tests incl. real-Valkey
+      integration.
 - [ ] **Phase 4** — one masking configuration + exception/lexicon files
       (убрать profile_id/registry/CRUD, `LabelMeta.order`, сохранить
       совместимость `Профиль: russian-default`).

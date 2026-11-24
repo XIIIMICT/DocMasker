@@ -150,6 +150,24 @@ the new marker and add a round-trip test. Restoring must never depend on
 metadata. (Adding `версия`/`версия_профиля` back would need an ADR — they were
 removed deliberately.)
 
+### Cache invalidation release checklist (Phase 3)
+
+Cached results are keyed by a canonical fingerprint plus these version/digest
+settings (`back/src/jobs/cache.py`). **Bump on every output-affecting change**:
+
+| Setting | Bump when |
+|---|---|
+| `CACHE_NAMESPACE_VERSION` | key construction or stored cache-entry structure changes |
+| `MASKING_RULESET_VERSION` | detection/masking semantics change the output |
+| `MASKING_CONFIG_DIGEST` | any exception/lexicon file changes (Phase 4 wires the real digest) |
+| `RESULT_MANIFEST_VERSION` | result archive/manifest contract changes |
+| `KEYS_FORMAT_VERSION` | keys YAML format changes |
+| `DOCX_TRANSFORMER_VERSION` | OOXML transformation changes |
+| `CACHE_KEY_SECRET` | intentional full invalidation (rotating the secret) |
+
+TTL alone is not an invalidation strategy. Never log a full cache key or
+fingerprint (they are HMAC'd exactly so predictable PII cannot be guessed).
+
 ### Deferred (do not implement without an ADR / maintainer decision)
 
 - User-editable profiles, CRUD endpoints, DB-stored rules (would require auth —
