@@ -170,7 +170,7 @@ Body (`MaskRequest`): `{"text": "..."}`. Response (`MaskResponse`, 200):
   back-to-front rewrite, so they follow document order.
 - `stats` is **aggregates only** — no raw values/offsets (F-09).
 - `keys` is a YAML v2 string (empty when nothing was masked). See
-  `docs/TEMPLATES.md`.
+  `docs/MASKING_CONFIGURATION.md`.
 - Empty/whitespace text → 422; over `MAX_TEXT_CHARS` → 413; unknown profile →
   422. Over `SYNC_MAX_TEXT_CHARS` → `202 + JobAccepted` (below).
 
@@ -181,7 +181,7 @@ Response (`UnmaskResponse`, 200): `{"text": "<restored>"}`.
 
 Restoration is a plain placeholder→value `str.replace` per `[LABEL_N]`
 (self-delimiting, order-independent). Unknown placeholders stay as-is. Keys are
-validated by `validate_keys_yaml` first (see `docs/TEMPLATES.md`): invalid →
+validated by `validate_keys_yaml` first (see `docs/MASKING_CONFIGURATION.md`): invalid →
 422 with a Russian `detail`. Oversized text/keys → 413. Over
 `SYNC_MAX_TEXT_CHARS` → `202 + JobAccepted`.
 
@@ -336,14 +336,15 @@ Request cancellation of a queued/running job → 204. Unknown id → 404.
 | Browser path | Next route | Backend path | Timeout |
 |---|---|---|---|
 | `/api/mask` | `app/api/mask/route.ts` | `/api/mask` | 15 s |
-| `/api/mask-file` | `app/api/mask-file/route.ts` | `/api/mask-file` | 10 min |
+| `/api/mask-file` | `app/api/mask-file/route.ts` | `/api/mask-file` | 120 s (streamed upload) |
 | `/api/unmask` | `app/api/unmask/route.ts` | `/api/unmask` | 15 s |
-| `/api/unmask-file` | `app/api/unmask-file/route.ts` | `/api/unmask-file` | 10 min |
-| `/api/jobs/*` | `app/api/jobs/[...path]/route.ts` | `/api/jobs/*` | 15 s (polling) |
+| `/api/unmask-file` | `app/api/unmask-file/route.ts` | `/api/unmask-file` | 120 s (streamed upload) |
+| `/api/jobs/*` | `app/api/jobs/[...path]/route.ts` | `/api/jobs/*` | 15 s submit/status/cancel, 300 s result download |
 | `/api/health` | `app/api/health/route.ts` | front-local | — |
 
 `front/src/instrumentation.ts` installs a global undici `Agent` with
-`headersTimeout: 60_000` / `bodyTimeout: 600_000`; `shared/api/proxy.ts`
-streams responses through `new Response(response.body)` (no `arrayBuffer` copy)
-with a per-route `AbortSignal.timeout`. Long work never depends on a held-open
+`headersTimeout: 60_000` / `bodyTimeout: 600_000` as a finite outer net only.
+The canonical map is `front/src/shared/api/timeouts.ts` (see the timeout table
+earlier in this document); `shared/api/proxy.ts::postToBackend` combines it with
+the incoming request's abort signal. Long work never depends on a held-open
 HTTP connection — it goes through `/api/jobs`.

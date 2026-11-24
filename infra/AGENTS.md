@@ -1,8 +1,8 @@
 # infra/ — deployment agent guide
 
-Compose, ports, volumes and CI invariants. Root `AGENTS.md` is the short
-index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
-`docs/WORKFLOW.md`.
+Compose, ports, volumes and CI invariants — a level-2 guide. Root `AGENTS.md`
+is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
+`docs/WORKFLOW.md`, `docs/OPERATIONS.md`, `docs/SECURITY.md`, `docs/TESTING.md`.
 
 ## Compose layout
 

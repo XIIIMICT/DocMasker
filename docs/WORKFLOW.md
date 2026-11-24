@@ -159,7 +159,7 @@ Local reproduction of the `production` job: build the images (`docker compose -f
 - **Documentation is part of the change.** Behavior, API, config, timings or a
   landmine changed → update the matching per-area `AGENTS.md` and the
   corresponding `docs/` file in the same change. Topic homes: `docs/API.md`
-  (HTTP contract), `docs/TEMPLATES.md` (keys/masking configuration),
+  (HTTP contract), `docs/MASKING_CONFIGURATION.md` (keys/masking configuration),
   `docs/PERFORMANCE.md`
   (benchmarks/limits), `docs/WORKFLOW.md` (process/CI), `docs/ARCHITECTURE.md`
   (system/pipeline), `docs/DOCX_SUPPORT.md` (OOXML coverage), `docs/adr/`

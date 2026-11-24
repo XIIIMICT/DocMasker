@@ -169,6 +169,14 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
+**Implemented in Phase 8 (2026-11-24):** API/agent-doc refresh and release
+verification. A lifecycle drill found that a transient PostgreSQL outage
+(database restart) killed the worker through an uncaught `OperationalError` in
+the poll loop; `Worker._claim_safe`/`_sweep_safe` and `Heartbeat._run` now catch
+and retry with bounded backoff (type-only logging), with regression tests.
+Clean install, empty-DB migration, prod-image build and 23/23 e2e on the
+isolated CI stack verified locally; target-hardware stress remains TODO.
+
 **Implemented in Phase 7 (2026-11-24):** bounded long-text detection
 (`masking/windowed.py`) with absolute offsets, boundary dedupe and checkpoints;
 candidate-limited `AddrExtractor` (only address-marker sentences); conservative
