@@ -15,7 +15,7 @@ dependencies = [
     # setuptools>=81 dropped `pkg_resources`, so it must be explicit AND pinned
     # below 81.
     "granian[reload]>=2.8.9",
-    "setuptools>=80.0.0,<81",
+    "setuptools>=84.2.1,<85",
     "sqlalchemy>=2.0.44",
     "psycopg[binary]>=3.2.10",
     "alembic>=1.17.0",
