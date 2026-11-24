@@ -1,9 +1,9 @@
 # TODO — DocMasker production readiness
 
 Living list of **genuinely deferred** work. Completed phases and evidence live
-in `docs/PRODUCTION_READINESS.md`; durable decisions in `docs/adr/`. Source of
-the original findings: the implementation brief in `docs/` (untracked user
-file, never commit). Legend: `todo` · `deferred` (maintainer decision) ·
+in `docs/PRODUCTION_READINESS.md`; durable decisions in `docs/adr/`. The
+implementation brief was reviewed and removed after folding its remaining items
+into this file. Legend: `todo` · `deferred` (maintainer decision) ·
 `blocked` (external step).
 
 ## Completed (index only)
@@ -25,12 +25,20 @@ and before/after benchmarks: `docs/PRODUCTION_READINESS.md`,
   handwritten DTOs. Decision (2026-11-24): «поместим в TODO».
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
   `X-Request-ID`, minimal `/ready` + `/metrics`, liveness/readiness split.
-  Remaining: structured JSON logs with `request_id`, fuller metrics
-  (latency/errors/input-output sizes/duration/concurrency), compose/CI
-  healthchecks wired to `/ready`, front readiness route, startup/shutdown
-  hooks check on the live stack, container hardening (`read_only`, `tmpfs`,
-  `cap_drop`, `no-new-privileges`, `pids_limit`, limits, internal-only network),
-  reverse-proxy/TLS example, rate limits, log rotation.
+  Remaining from Brief §11/§14: structured JSON logs with `request_id` / job ID
+  / worker ID, operation kind, safe state, durations, size buckets and error
+  codes (never untrusted filenames); essential metrics (request latency/error
+  counts, queue depth and oldest queued age, running jobs, lease losses,
+  retries, cancellations, job durations, artifact sizes, DB pool saturation,
+  worker concurrency, memory/CPU where available); `Cache-Control: no-store`
+  on every result/document/key response (file ZIPs already send it, text/keys
+  responses do not yet); readiness must also verify **artifact storage**
+  availability (currently PostgreSQL only) while Valkey failure stays a
+  degraded cache state; compose/CI healthchecks wired to `/ready`; front
+  readiness route; startup/shutdown hook check on the live stack; container
+  hardening (`read_only`, `tmpfs`, `cap_drop`, `no-new-privileges`,
+  `pids_limit`, limits, internal-only network), reverse-proxy/TLS example,
+  rate limits, log rotation.
 - **Frontend DOCX preview/highlighting performance** — explicitly deferred in
   brief §0; keep current preview behavior working.
 - **OCR of raster image pixels in DOCX** — out of scope, documented as
@@ -61,6 +69,9 @@ Valkey flush and result download; see `docs/TESTING.md` §2. Remaining:
 - full controlled crash-window matrix (staging / DB commit / processing / ZIP
   creation / before result commit), SIGTERM-with-in-flight drill, disk full,
   pool exhaustion, result expiry, 1/2/N concurrent large documents;
+- **backup/restore drill**: the PostgreSQL + artifacts + exception-config
+  procedure is documented (`docs/OPERATIONS.md` §3) but has not been executed
+  end-to-end; a consistency check for missing artifact objects should be run;
 - Clean-install → migration → prod-image build → Compose startup → e2e repeated
   on the target machine (already green on this host).
 

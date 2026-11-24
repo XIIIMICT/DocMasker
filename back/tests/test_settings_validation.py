@@ -7,6 +7,12 @@ from src.config import Settings
 
 #: Pydantic-settings uses validation_alias names as input keys.
 _ALIASES: dict[str, str] = {
+    "database_url": "DATABASE_URL",
+    "postgres_user": "POSTGRES_USER",
+    "postgres_password": "POSTGRES_PASSWORD",
+    "postgres_db": "POSTGRES_DB",
+    "postgres_host": "POSTGRES_HOST",
+    "postgres_port": "POSTGRES_PORT",
     "max_upload_mb": "UPLOAD_MAX_MB",
     "max_text_chars": "MAX_TEXT_CHARS",
     "max_keys_chars": "MAX_KEYS_CHARS",
@@ -30,7 +36,6 @@ _ALIASES: dict[str, str] = {
     "jobs_poll_seconds": "JOBS_POLL_SECONDS",
     "jobs_ttl_seconds": "JOBS_TTL_SECONDS",
     "worker_shutdown_grace_seconds": "WORKER_SHUTDOWN_GRACE_SECONDS",
-    "database_url": "DATABASE_URL",
 }
 
 
@@ -68,6 +73,19 @@ def _settings(**overrides: object) -> Settings:
 def test_non_positive_limits_are_rejected(field: str) -> None:
     with pytest.raises(ValidationError, match="положительной"):
         _settings(**{field: 0})
+
+
+def test_database_url_is_built_from_postgres_components() -> None:
+    """Host-side seed uses POSTGRES_HOST/PORT, not the docker service name."""
+    settings = _settings(
+        postgres_user="u",
+        postgres_password="p",  # noqa: S106 - synthetic test value
+        postgres_db="d",
+        postgres_host="localhost",
+        postgres_port=15433,
+    )
+    assert settings.database_url is None
+    assert settings.sqlalchemy_database_url == "postgresql+psycopg://u:p@localhost:15433/d"
 
 
 def test_negative_ttl_is_rejected() -> None:

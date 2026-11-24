@@ -42,10 +42,13 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   (loopback-only; the browser must go through the front proxy).
   `BACKEND_INTERNAL_URL` is derived from the compose service name +
   `BACKEND_PORT`; the browser calls only its own origin (no CORS).
-- New infrastructure settings in `.env.example` (ADR-0003): `DATABASE_URL`
-  (`postgresql+psycopg://…@postgres:5432/…` — the compose service name inside
-  the network), `POSTGRES_USER/PASSWORD/DB`, `POSTGRES_PORT` (loopback host
-  port for `just seed`, default **15433** — 5432 is used by ReportCollector),
+- PostgreSQL host/port are split exactly like ReportCollector: `.env` keeps
+  `POSTGRES_HOST=localhost` + `POSTGRES_PORT=15433` for **host-side** scripts
+  (`just seed`, migrations, local backend), while compose overrides
+  `DATABASE_URL` with `POSTGRES_HOST_DOCKER` (default `postgres`, the compose
+  service name) via the shared `x-db-env` anchor — also mounted into both
+  worker variants. `DATABASE_URL` is optional (CI sets it). Never rewrite
+  docker host values in `.env` just to seed. `POSTGRES_USER/PASSWORD/DB`,
   `DB_POOL_SIZE`,
   `DB_MAX_OVERFLOW`, `DB_CONNECT_TIMEOUT_SECONDS`, `VALKEY_URL`,
   `VALKEY_PASSWORD` (Valkey runs with `--requirepass`; prod `back`/`worker`

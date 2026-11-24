@@ -28,7 +28,7 @@ db-stand:
 # --host нужен при запуске с хоста, когда DATABASE_URL указывает на сервис
 # compose `postgres`; внутри контейнера хост подставляется compose.
 seed:
-    uv run --directory back -m src.scripts.seed_database --host 127.0.0.1:{{env_var_or_default("POSTGRES_PORT", "15433")}}
+    uv run --directory back -m src.scripts.seed_database
 
 # Применить миграции Alembic (явный шаг деплоя/CI, не гонка при старте).
 migrate:

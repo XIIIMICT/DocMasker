@@ -17,7 +17,7 @@ target_metadata = metadata
 
 def _database_url() -> str:
     """Prefer the explicit Alembic URL (CI/tests); fall back to Settings."""
-    return config.get_main_option("sqlalchemy.url") or get_settings().database_url
+    return config.get_main_option("sqlalchemy.url") or get_settings().sqlalchemy_database_url
 
 
 def run_migrations_offline() -> None:

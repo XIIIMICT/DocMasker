@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -28,10 +29,16 @@ class Settings(BaseSettings):
     max_keys_chars: int = Field(default=1_000_000, validation_alias="MAX_KEYS_CHARS")
     # --- Durable jobs (ADR-0002 / PostgreSQL substrate ADR-0003) -----------
     #: PostgreSQL is the authoritative job store; no SQLite fallback remains.
-    database_url: str = Field(
-        default="postgresql+psycopg://dm:dm@localhost:5432/dm",
-        validation_alias="DATABASE_URL",
-    )
+    #: ReportCollector pattern: .env keeps POSTGRES_HOST=localhost for host-side
+    #: scripts (seed/migrations); compose overrides it with POSTGRES_HOST_DOCKER
+    #: (the compose service name). DATABASE_URL is an optional explicit override
+    #: used by CI, otherwise the URL is built from the components below.
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    postgres_user: str = Field(default="dm", validation_alias="POSTGRES_USER")
+    postgres_password: str = Field(default="dm", validation_alias="POSTGRES_PASSWORD")
+    postgres_db: str = Field(default="dm", validation_alias="POSTGRES_DB")
+    postgres_host: str = Field(default="localhost", validation_alias="POSTGRES_HOST")
+    postgres_port: int = Field(default=15433, validation_alias="POSTGRES_PORT")
     db_pool_size: int = Field(default=5, validation_alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=5, validation_alias="DB_MAX_OVERFLOW")
     db_connect_timeout_seconds: float = Field(default=5.0, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
@@ -147,9 +154,23 @@ class Settings(BaseSettings):
             if getattr(self, name) <= 0:
                 msg = f"Настройка {name.upper()} должна быть положительной."
                 raise ValueError(msg)
-        if not self.database_url.startswith("postgresql"):
+        if self.database_url is not None and not self.database_url.startswith("postgresql"):
             msg = "DATABASE_URL должен указывать на PostgreSQL (SQLite больше не поддерживается)."
             raise ValueError(msg)
+        if self.database_url is None:
+            missing = [
+                name
+                for name, value in {
+                    "POSTGRES_USER": self.postgres_user,
+                    "POSTGRES_PASSWORD": self.postgres_password,
+                    "POSTGRES_DB": self.postgres_db,
+                    "POSTGRES_HOST": self.postgres_host,
+                }.items()
+                if not value
+            ]
+            if missing:
+                msg = f"Не заданы обязательные переменные: {', '.join(missing)}."
+                raise ValueError(msg)
         if self.jobs_poll_seconds >= self.jobs_lease_seconds / 3:
             msg = "Интервал опроса воркера должен быть меньше трети времени аренды."
             raise ValueError(msg)
@@ -176,6 +197,20 @@ class Settings(BaseSettings):
             msg = "CACHE_KEY_SECRET должен быть стабильным секретом длиной не менее 16 символов."
             raise ValueError(msg)
         return self
+
+    @property
+    def sqlalchemy_database_url(self) -> str:
+        """Explicit DATABASE_URL (CI) or a URL built from POSTGRES_* components."""
+        if self.database_url is not None:
+            return self.database_url
+        return URL.create(
+            drivername="postgresql+psycopg",
+            username=self.postgres_user,
+            password=self.postgres_password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        ).render_as_string(hide_password=False)
 
 
 @lru_cache
