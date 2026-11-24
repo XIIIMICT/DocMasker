@@ -97,6 +97,17 @@ class JobRepository:
         finally:
             session.close()
 
+    def count_active(self) -> int:
+        """Return the number of non-terminal jobs (safe aggregate for /metrics)."""
+        with self._session() as session:
+            return int(
+                session.execute(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.status.in_(("staging", "queued", "running", "cancelling")))
+                ).scalar_one()
+            )
+
     @staticmethod
     def _db_now(session: Session) -> datetime:
         return session.execute(select(func.clock_timestamp())).scalar_one()

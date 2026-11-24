@@ -6,11 +6,22 @@ imports `masking.router.upload_limits` — a direct router→api import would
 create a cycle.
 """
 
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING
+
 from src.config import Settings, get_settings
 
 from .dependencies import artifact_store, job_repository, should_use_job
 from .models import JobKind
 from .schemas import JobAccepted
+
+if TYPE_CHECKING:
+    from .cache import CacheFingerprint
+    from .storage import ArtifactStore
 
 
 def job_urls(job_id: str) -> tuple[str, str]:
@@ -24,15 +35,32 @@ def accepted(job_id: str) -> JobAccepted:
     return JobAccepted(job_id=job_id, status="queued", status_url=status_url, result_url=result_url)
 
 
-def enqueue(
+def _digest_of(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _digest_of_path(path: Path) -> str:
+    """Hash a staged file in bounded chunks (§8.5: no full read into RAM)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _enqueue(
     kind: JobKind,
     *,
-    input_bytes: bytes,
-    keys_bytes: bytes | None = None,
-    filename: str = "",
+    fingerprint: CacheFingerprint,
+    keys_bytes: bytes | None,
+    filename: str,
+    write_input: Callable[[ArtifactStore, str], None],
 ) -> JobAccepted:
     """
-    Staged, atomic enqueue (brief §3.3).
+    Staged, atomic enqueue (brief §3.3), shared by the bytes and path paths.
 
     1. insert a `staging` row (reserves a queue slot; worker cannot claim it);
     2. stream inputs/keys/metadata to unique private files (atomic writes);
@@ -40,21 +68,12 @@ def enqueue(
        transaction. On any failure the staging row is aborted and the artifacts
        cleaned up idempotently, so no partially staged job is ever exposed.
     """
+    from .cache import build_cache_key
+
     settings: Settings = get_settings()
     store = artifact_store()
     repo = job_repository()
-    from .cache import build_cache_key, fingerprint_for
-
-    cache_key = build_cache_key(
-        settings,
-        fingerprint_for(
-            kind,
-            input_bytes=input_bytes,
-            keys_bytes=keys_bytes,
-            filename=filename,
-        ),
-    )
-
+    cache_key = build_cache_key(settings, fingerprint)
     staged, created = repo.create_staging(
         kind,
         max_active=settings.jobs_max_active,
@@ -66,7 +85,7 @@ def enqueue(
         # instead of duplicating expensive work (§4.5).
         return accepted(staged.id)
     try:
-        store.write(staged.id, "input", input_bytes)
+        write_input(store, staged.id)
         store.write(staged.id, "name", filename.encode("utf-8"))
         store.write(staged.id, "kind", kind.encode("ascii"))
         if keys_bytes is not None:
@@ -89,6 +108,63 @@ def enqueue(
     return accepted(staged.id)
 
 
+def enqueue(
+    kind: JobKind,
+    *,
+    input_bytes: bytes,
+    keys_bytes: bytes | None = None,
+    filename: str = "",
+) -> JobAccepted:
+    """Enqueue an in-memory (small text / sync-overflow) operation."""
+    from .cache import fingerprint_for
+
+    key_material = fingerprint_for(
+        kind,
+        input_bytes=input_bytes,
+        keys_bytes=keys_bytes,
+        filename=filename,
+    )
+    return _enqueue(
+        kind,
+        fingerprint=key_material,
+        keys_bytes=keys_bytes,
+        filename=filename,
+        write_input=lambda store, job_id: store.write(job_id, "input", input_bytes),
+    )
+
+
+def enqueue_from_path(
+    kind: JobKind,
+    *,
+    input_path: Path,
+    input_digest: str,
+    keys_bytes: bytes | None = None,
+    filename: str = "",
+) -> JobAccepted:
+    """
+    Enqueue a large staged upload without ever loading it into one `bytes`.
+
+    The versioned cache key uses the streamed SHA-256 digest of the exact file
+    (§4.2); `ArtifactStore.copy_from` streams the file into the spool.
+    """
+    from .cache import fingerprint_for
+
+    key_material = fingerprint_for(
+        kind,
+        input_bytes=None,
+        input_digest=input_digest,
+        keys_bytes=keys_bytes,
+        filename=filename,
+    )
+    return _enqueue(
+        kind,
+        fingerprint=key_material,
+        keys_bytes=keys_bytes,
+        filename=filename,
+        write_input=lambda store, job_id: store.copy_from(job_id, "input", input_path),
+    )
+
+
 def needs_job(*, text: str | None = None, data: bytes | None = None, paragraph_count: int = 0) -> bool:
     """Public wrapper over the configurable threshold."""
     return should_use_job(text=text, data=data, paragraph_count=paragraph_count)
@@ -96,18 +172,43 @@ def needs_job(*, text: str | None = None, data: bytes | None = None, paragraph_c
 
 def count_docx_paragraphs(data: bytes) -> int:
     """
-    Cheap paragraph estimate before the full python-docx model is built.
+    Streaming paragraph estimate (Phase 6 §10).
 
-    Counting `<w:p ` occurrences in `word/document.xml` gives the threshold
-    check without parsing the document. A malformed package returns 0 — the
-    real validation still runs on the sync path / at job submission.
+    Opens `word/document.xml` as a `ZipExtFile` and counts `w:p` end events
+    with an incremental pull parser instead of `archive.read()` + a byte
+    `count()` over the whole (possibly huge) XML part. Parsing is hardened
+    (`resolve_entities=False`, `no_network=True`, `huge_tree=False`) since this
+    is untrusted input. This is a cheap threshold heuristic only: a malformed
+    package returns 0 and real validation still runs on the sync path / at job
+    submission. Namespace prefixes are irrelevant — the local name `p` is what
+    matters, so a custom prefix still counts correctly.
     """
     import io
     import zipfile
 
+    from lxml import etree  # ty: ignore[missing-module-member]
+
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            xml = archive.read("word/document.xml")
-    except KeyError, zipfile.BadZipFile:
+        with (
+            zipfile.ZipFile(io.BytesIO(data)) as archive,
+            archive.open("word/document.xml") as xml,
+        ):
+            count = 0
+            context = etree.iterparse(
+                xml,
+                events=("end",),
+                recover=True,
+                resolve_entities=False,
+                no_network=True,
+                huge_tree=False,
+            )
+            for _event, element in context:
+                if etree.QName(element).localname == "p":
+                    count += 1
+                # Bounded memory: release parsed nodes as we go.
+                element.clear()
+                while element.getprevious() is not None:
+                    del element.getparent()[0]
+            return count
+    except KeyError, zipfile.BadZipFile, etree.XMLSyntaxError, ValueError:
         return 0
-    return xml.count(b"<w:p ") + xml.count(b"<w:p>")

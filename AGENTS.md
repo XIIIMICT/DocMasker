@@ -51,9 +51,11 @@ text; drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
 
 ## API (one-line index; full contract — `docs/API.md`)
 
-- `GET /health` — liveness, always `ok` (no model to load). `GET /api/labels`
-  — the single canonical label catalogue (`labels.yaml`, §5); `profile_id` and
-  `GET /api/profiles` were removed in Phase 4. Setting `MASK_LABELS` fails startup.
+- `GET /health` — liveness, always `ok` (no model to load). `GET /ready` —
+  PostgreSQL readiness (503 when the store is down); `GET /metrics` — coarse
+  counters without PII. `GET /api/labels` — the single canonical label
+  catalogue (`labels.yaml`, §5); `profile_id` and `GET /api/profiles` were
+  removed in Phase 4. Setting `MASK_LABELS` fails startup.
 - `POST /api/mask` / `/api/unmask` — text → JSON (`text`, `stats` aggregates,
   `keys` YAML) / masked text + keys → restored text.
 - `POST /api/mask-file` / `/api/unmask-file` — `.docx` → a flat ZIP (masked doc
@@ -65,8 +67,16 @@ text; drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
   `DELETE /api/jobs/{id}` (cancel). The four sync endpoints transparently
   return `202 + JobAccepted` above `SYNC_MAX_TEXT_CHARS` /
   `SYNC_MAX_DOCX_BYTES` / `SYNC_MAX_DOCX_PARAGRAPHS`.
-- Errors carry a Russian `detail`; 413/415/422/429/409/404 conventions and all
-  headers are in `docs/API.md` and `back/AGENTS.md`.
+- Errors use one stable envelope `{code, detail, request_id}` + `X-Request-ID`
+  header (`back/src/errors.py`); `detail` is Russian, no PII/paths/tracebacks.
+  413/415/422/429/409/404 conventions, all headers and the canonical
+  route→timeout map (`front/src/shared/api/timeouts.ts`: 15 s JSON/job,
+  120 s upload, 300 s result) are in `docs/API.md`.
+- Execution: `run_cpu` (bounded CPU pool) and `run_blocking` (separate bounded
+  IO pool) keep DB/ZIP/XML/filesystem work off the ASGI event loop; Next streams
+  multipart unchanged, the backend stages uploads with a real byte counter and
+  validates from the path, job results are `FileResponse`. §8.2 OpenAPI→TS
+  types are deferred by maintainer decision (`TODO.md`).
 
 ## Masking pipeline (one-line index; detail — `docs/ARCHITECTURE.md`)
 

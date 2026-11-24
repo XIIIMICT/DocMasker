@@ -2,13 +2,11 @@ import JSZip from "jszip";
 
 import { JobFailedError } from "@/shared/api/jobs-types";
 import type { JobAccepted, JobResult, JobStatus } from "@/shared/api/jobs-types";
+import { JOB_WAIT_TIMEOUT_MS, POLL_BASE_MS, POLL_MAX_MS } from "@/shared/api/timeouts";
 
 export { JobFailedError } from "@/shared/api/jobs-types";
 export type { JobAccepted, JobResult, JobStatus } from "@/shared/api/jobs-types";
 
-const POLL_BASE_MS = 400;
-const POLL_MAX_MS = 4_000;
-const POLL_MAX_ATTEMPTS = 300; // ~20 min worst case, bounded
 /** sessionStorage key for resuming an active job in the same tab after reload. */
 export const ACTIVE_JOB_KEY = "docmasker.activeJob";
 
@@ -47,7 +45,8 @@ function buildResult(entries: Map<string, Blob>): JobResult {
  */
 export async function waitForJob(accepted: JobAccepted, signal?: AbortSignal): Promise<JobResult> {
     let delay = POLL_BASE_MS;
-    for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
+    const deadline = Date.now() + JOB_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
         if (signal?.aborted) throw new JobFailedError("cancelled");
         const statusResponse = await fetch(accepted.status_url, { signal, cache: "no-store" });
         if (!statusResponse.ok) throw new JobFailedError("status_unavailable");

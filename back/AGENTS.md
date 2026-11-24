@@ -133,11 +133,16 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
 
 ## API & execution
 
-16. **CPU work must leave the event loop** (`masking/executor.py::run_cpu`):
-    the four sync endpoints offload natasha/python-docx/ZIP to a bounded
-    `ThreadPoolExecutor` (`JOBS_CONCURRENCY * 2` slots, semaphore per event
-    loop); overflow → 429. `/health` stays responsive during a mask — never
-    call `mask_document`/`mask_docx_in_memory` directly in an `async def`.
+16. **CPU *and* IO work must leave the event loop** (`masking/executor.py`,
+    Phase 6 §10): `run_cpu` offloads natasha/OOXML/ZIP to a bounded CPU pool
+    (`JOBS_CONCURRENCY * 2` slots, semaphore per event loop, overflow → 429);
+    `run_blocking` offloads short DB/Valkey/ZIP/filesystem calls to a **separate**
+    bounded IO pool (`DB_POOL_SIZE + DB_MAX_OVERFLOW` slots). One semaphore must
+    not substitute for all resource limits. `/health` stays responsive during a
+    mask — never call `mask_document`/`mask_docx_in_memory`/`job_repository()`
+    DB methods directly in an `async def`. `count_docx_paragraphs` uses an
+    incremental `lxml.iterparse` over `ZipExtFile` (no `archive.read()` of a
+    large XML part), and the hard byte limit is checked before that heuristic.
 17. **Large inputs become durable jobs** (ADR-0002 / PostgreSQL substrate
     ADR-0003): PostgreSQL (`jobs/repository.py`, SQLAlchemy 2 sync + psycopg 3,
     Alembic migration `0001_jobs`, `SKIP LOCKED` claim with a fresh `uuid4()`
@@ -163,13 +168,17 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     errors non-retryable; transient/internal bounded retry with backoff), TTL
     cleanup never touches active rows, and SIGTERM keeps heartbeating while
     in-flight jobs drain. Never log inputs/keys/exception text.
-19. **Error/status conventions**: `validate_keys_yaml` raises
-    `KeysValidationError` → 422 with a Russian `detail`; malformed/oversized/
-    encrypted DOCX → 415/413; bounded queue/executor → 429; job result not
-    ready → 409; unknown job id → 404. Unknown placeholders stay as-is.
-    `GET /api/labels` publishes the canonical catalogue; `profile_id` and
-    `GET /api/profiles` were removed in Phase 4. Setting `MASK_LABELS` fails
-    startup.
+19. **Error/status conventions** (`src/errors.py`, Phase 6 §8.1): every error
+    is `{code, detail, request_id}` + `X-Request-ID`; `code` is stable and
+    machine-readable, `detail` is Russian, and no traceback/path/DB message/
+    PII/keys ever leak (validation errors never echo submitted values, 500 logs
+    only the exception *type*). `validate_keys_yaml` → 422 `invalid_keys`;
+    malformed/oversized/encrypted DOCX → 415/413; bounded queue/executor →
+    429; job result not ready → 409; unknown job id → 404. Unknown placeholders
+    stay as-is. `GET /api/labels` publishes the canonical catalogue; `profile_id`
+    and `GET /api/profiles` were removed in Phase 4. Setting `MASK_LABELS` fails
+    startup. `GET /ready` (PostgreSQL) and `GET /metrics` (coarse counters, no
+    PII, degrades on DB outage) are in `main.py`.
 20. **One immutable masking configuration** (`masking/config.py`, Phase 4):
     `back/config/masking/labels.yaml` is the single label catalogue (sequence
     = keys-section order, no `order` field); all lexicons and
@@ -199,3 +208,20 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     fenced `succeeded` transition; failed/cancelled jobs never populate it.
     Identical active jobs dedupe in PostgreSQL (`create_staging`), not in a
     Valkey lock. Never log the fingerprint, full key, inputs or keys YAML.
+22. **Streaming uploads never become one giant `bytes` object** (`uploads.py`,
+    Phase 6 §8.5): `stage_upload` copies 64 KiB chunks into a private temp file
+    with a **real byte counter** (Content-Length is not trusted), hashes as it
+    goes, and cleans up on any error/abort. `validate_docx_package_path`
+    validates from that path (`ZipFile` reads only the central directory);
+    `enqueue_from_path` streams it into the spool via `ArtifactStore.copy_from`.
+    The sync file endpoints still build a small ZIP in memory because the OPC
+    transformer needs the whole package — part-level DOM memory is documented,
+    not claimed as streaming. `/api/jobs/{id}/result` uses `FileResponse`.
+23. **Settings are cross-validated** (`config.py`, Phase 6 §10): positive
+    limits/TTLs/timeouts, PostgreSQL-only URL, lease > heartbeat/DB-connect
+    timeout, worker concurrency ≤ pool capacity, sync thresholds ≤ hard request
+    limits, cache secret when enabled. `test_settings_validation.py` covers it.
+    Never relax these into silent negative/zero values.
+24. **§8.2 (OpenAPI → TS types) is deferred by maintainer decision.** Do not
+    add `openapi-typescript`/generated `schema.ts`/CI freshness gate in this
+    phase; handwritten DTOs remain. Tracked in `TODO.md`.

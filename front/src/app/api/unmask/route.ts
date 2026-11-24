@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { proxyUnmaskRequest } from "@/shared/api/mask";
 
 export const dynamic = "force-dynamic";
@@ -13,8 +15,15 @@ export async function POST(request: Request) {
         keys?: unknown;
     } | null;
     if (!payload || typeof payload.text !== "string" || typeof payload.keys !== "string") {
-        return Response.json({ detail: "Нужны поля «text» и «keys»." }, { status: 422 });
+        return Response.json(
+            {
+                code: "validation_error",
+                detail: "Нужны поля «text» и «keys».",
+                request_id: randomUUID(),
+            },
+            { status: 422 },
+        );
     }
 
-    return proxyUnmaskRequest(payload.text, payload.keys);
+    return proxyUnmaskRequest(payload.text, payload.keys, request.signal);
 }

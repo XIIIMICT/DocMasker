@@ -1,5 +1,20 @@
 import { KEYS_SECTION_TITLES, KEYS_TITLE_LABELS } from "@/shared/api/labels.generated";
+import { JSON_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "@/shared/api/timeouts";
 import { getBackendInternalUrl } from "@/shared/config";
+
+// Re-exported for existing callers/tests; canonical values live in timeouts.ts.
+export const PROXY_JSON_TIMEOUT_MS = JSON_TIMEOUT_MS;
+export const PROXY_FILE_TIMEOUT_MS = UPLOAD_TIMEOUT_MS;
+
+/** Preserve the backend's correlation id on a proxied JSON response. */
+function passJsonHeaders(response: Response): Headers {
+    const headers = new Headers({
+        "Content-Type": response.headers.get("Content-Type") ?? "application/json",
+    });
+    const requestId = response.headers.get("X-Request-ID");
+    if (requestId) headers.set("X-Request-ID", requestId);
+    return headers;
+}
 
 export { KEYS_SECTION_TITLES, KEYS_TITLE_LABELS } from "@/shared/api/labels.generated";
 
@@ -200,17 +215,16 @@ function unquote(value: string): string {
     return value;
 }
 
-/** Short timeout for JSON job/status requests (polling must fail fast). */
-export const PROXY_JSON_TIMEOUT_MS = 15_000;
-/** Generous but bounded timeout for the synchronous file endpoints. */
-export const PROXY_FILE_TIMEOUT_MS = 600_000;
-
 /**
  * Forward a text unmask request to the backend (server-side, no CORS).
  * Used by the Next.js API route `/api/unmask`. The response body is streamed
  * through (no full arrayBuffer copy) so large payloads are not buffered twice.
  */
-export async function proxyUnmaskRequest(text: string, keys: string): Promise<Response> {
+export async function proxyUnmaskRequest(
+    text: string,
+    keys: string,
+    signal?: AbortSignal,
+): Promise<Response> {
     const targetUrl = new URL("/api/unmask", getBackendInternalUrl());
 
     const response = await fetch(targetUrl, {
@@ -218,12 +232,13 @@ export async function proxyUnmaskRequest(text: string, keys: string): Promise<Re
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ text, keys }),
-        signal: AbortSignal.timeout(PROXY_FILE_TIMEOUT_MS),
+        signal: signal ?? AbortSignal.timeout(JSON_TIMEOUT_MS),
     });
 
-    const responseContentType = response.headers.get("Content-Type") ?? "application/json";
-    const headers = new Headers({ "Content-Type": responseContentType });
-    return new Response(response.body, { headers, status: response.status });
+    return new Response(response.body, {
+        headers: passJsonHeaders(response),
+        status: response.status,
+    });
 }
 
 /**
@@ -231,7 +246,7 @@ export async function proxyUnmaskRequest(text: string, keys: string): Promise<Re
  * Used by the Next.js API route `/api/mask`. Returns the backend's HTTP
  * response verbatim (status + streamed body).
  */
-export async function proxyMaskRequest(text: string): Promise<Response> {
+export async function proxyMaskRequest(text: string, signal?: AbortSignal): Promise<Response> {
     const targetUrl = new URL("/api/mask", getBackendInternalUrl());
 
     const response = await fetch(targetUrl, {
@@ -239,10 +254,11 @@ export async function proxyMaskRequest(text: string): Promise<Response> {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ text }),
-        signal: AbortSignal.timeout(PROXY_FILE_TIMEOUT_MS),
+        signal: signal ?? AbortSignal.timeout(JSON_TIMEOUT_MS),
     });
 
-    const responseContentType = response.headers.get("Content-Type") ?? "application/json";
-    const headers = new Headers({ "Content-Type": responseContentType });
-    return new Response(response.body, { headers, status: response.status });
+    return new Response(response.body, {
+        headers: passJsonHeaders(response),
+        status: response.status,
+    });
 }

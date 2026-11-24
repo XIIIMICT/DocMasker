@@ -10,7 +10,7 @@ from httpx2 import ASGITransport, AsyncClient
 
 from src.config import Settings
 from src.main import app
-from src.masking.executor import ExecutorBusyError, reset_executor, run_cpu
+from src.masking.executor import ExecutorBusyError, reset_executor, run_blocking, run_cpu
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +38,32 @@ async def test_health_stays_responsive_during_mask() -> None:
     assert mask.status_code == 200
     # /health is pure Python; with the mask in a thread it stays fast.
     assert elapsed_ms < 500, f"/health was blocked for {elapsed_ms:.0f} ms"
+
+
+async def test_run_blocking_uses_a_separate_io_pool() -> None:
+    """Short blocking IO must run off the event loop, on the dm-io pool."""
+    loop_thread = threading.get_ident()
+
+    def blocking_io() -> tuple[int, str]:
+        time.sleep(0.05)  # a slow DB/Valkey call
+        return threading.get_ident(), threading.current_thread().name
+
+    started = time.perf_counter()
+    worker_id, thread_name = await run_blocking(blocking_io)
+    # The call did not run on the event loop thread.
+    assert worker_id != loop_thread
+    assert thread_name.startswith("dm-io")
+    # And the event loop stayed schedulable while it ran (bounded < 50 ms here).
+    assert (time.perf_counter() - started) * 1000 < 500
+
+
+async def test_run_blocking_propagates_exceptions() -> None:
+    def failing() -> None:
+        msg = "db down"
+        raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        await run_blocking(failing)
 
 
 async def test_run_cpu_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

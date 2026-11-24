@@ -63,6 +63,20 @@ describe("proxyMaskRequest", () => {
         expect(response.status).toBe(422);
         expect(await response.json()).toEqual({ detail: "Текст пуст." });
     });
+
+    it("forwards the backend X-Request-ID header", async () => {
+        process.env.BACKEND_INTERNAL_URL = "http://back:8001";
+        globalThis.fetch = mock(
+            async () =>
+                new Response("{}", {
+                    status: 200,
+                    headers: { "Content-Type": "application/json", "X-Request-ID": "rid-42" },
+                }),
+        ) as unknown as typeof fetch;
+
+        const response = await proxyMaskRequest("Иван");
+        expect(response.headers.get("X-Request-ID")).toBe("rid-42");
+    });
 });
 
 describe("proxy timeouts", () => {

@@ -143,6 +143,19 @@ class Settings(BaseSettings):
         if self.jobs_poll_seconds >= self.jobs_lease_seconds / 3:
             msg = "Интервал опроса воркера должен быть меньше трети времени аренды."
             raise ValueError(msg)
+        # §10 config validation: cross-field resource/timing sanity.
+        if self.sync_max_text_chars > self.max_text_chars:
+            msg = "SYNC_MAX_TEXT_CHARS не должен превышать жёсткий лимит MAX_TEXT_CHARS."
+            raise ValueError(msg)
+        if self.sync_max_docx_bytes > self.max_upload_mb * 1024 * 1024:
+            msg = "SYNC_MAX_DOCX_BYTES не должен превышать жёсткий лимит UPLOAD_MAX_MB."
+            raise ValueError(msg)
+        if self.jobs_lease_seconds <= self.db_connect_timeout_seconds:
+            msg = "Время аренды задания должно превышать таймаут подключения к БД."
+            raise ValueError(msg)
+        if self.jobs_concurrency > self.db_pool_size + self.db_max_overflow:
+            msg = "JOBS_CONCURRENCY не должен превышать ёмкость пула PostgreSQL."
+            raise ValueError(msg)
         if self.cache_enabled and self.cache_ttl_seconds <= 0:
             msg = "CACHE_TTL_SECONDS должен быть положительным при включённом кэше."
             raise ValueError(msg)

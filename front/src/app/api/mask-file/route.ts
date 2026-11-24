@@ -1,31 +1,41 @@
-import { FILE_TIMEOUT_MS, passThrough, postToBackend } from "@/shared/api/proxy";
+import { randomUUID } from "node:crypto";
+
+import { passThrough, postToBackend } from "@/shared/api/proxy";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Forward a DOCX mask request to the backend. The browser sends a multipart
- * form with the file; we replay it server-side and stream the resulting flat
- * ZIP (masked .docx + keys + manifest.json) back. Large inputs may be answered
- * with 202 + a job id — the body is streamed verbatim either way.
+ * Stream a DOCX mask request to the backend (§8.5).
+ *
+ * The original multipart body (content type + boundary) is forwarded unchanged
+ * as a Web Stream with duplex:"half" — no request.formData() copy and no
+ * rebuilt FormData. Filename/package validation stays on the backend (the
+ * browser proxy is not a trust boundary). Large inputs may be answered with
+ * 202 + a job id — the body is streamed verbatim either way.
  */
 export async function POST(request: Request) {
-    const formData = await request.formData();
-    const file = formData.get("file");
-    if (!(file instanceof File)) {
-        return Response.json({ detail: "Файл не передан." }, { status: 422 });
+    const contentType = request.headers.get("Content-Type");
+    if (!contentType || !contentType.toLowerCase().startsWith("multipart/form-data")) {
+        return Response.json(
+            {
+                code: "invalid_multipart",
+                detail: "Ожидается multipart-запрос с файлом.",
+                request_id: randomUUID(),
+            },
+            { status: 415 },
+        );
     }
-    if (!file.name.toLowerCase().endsWith(".docx")) {
-        return Response.json({ detail: "Файл должен иметь расширение .docx." }, { status: 422 });
-    }
-
-    const upload = new FormData();
-    upload.append("file", file, file.name);
-
     const response = await postToBackend(
         "/api/mask-file",
-        { method: "POST", body: upload },
-        FILE_TIMEOUT_MS,
+        {
+            method: "POST",
+            headers: { "Content-Type": contentType },
+            body: request.body,
+            // Required by the Fetch spec when the body is a ReadableStream.
+            duplex: "half",
+        } as RequestInit,
+        "mask-file",
+        request.signal,
     );
-
-    return passThrough(response, ["Content-Disposition", "Cache-Control"]);
+    return passThrough(response, ["Content-Disposition", "Cache-Control", "X-Request-ID"]);
 }
