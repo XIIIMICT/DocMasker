@@ -22,6 +22,7 @@ from typing import Any
 
 from src.config import Settings, get_settings
 
+from . import dependencies
 from .dependencies import artifact_store, job_repository
 from .models import Claim, JobPhase
 from .operations import JobExecutionError, execute
@@ -175,6 +176,21 @@ class Worker:
         heartbeat.start()
         try:
             self._checkpoint(job_id, claim, heartbeat)
+            cache = dependencies.result_cache()
+            cache_key = self._repo.get(job_id).cache_key
+            cached = cache.get(cache_key) if cache_key else None
+            if cached is not None:
+                # A verified cache hit still goes through the fenced publish:
+                # no cancelled/stale worker can expose it.
+                self._checkpoint(job_id, claim, heartbeat)
+                self._store.write(job_id, "result", cached)
+                self._repo.succeed(
+                    job_id,
+                    "result",
+                    ttl_seconds=self._settings.jobs_ttl_seconds,
+                    claim=claim,
+                )
+                return
             entries = execute(
                 self._store,
                 job_id,
@@ -192,6 +208,10 @@ class Worker:
                 ttl_seconds=self._settings.jobs_ttl_seconds,
                 claim=claim,
             )
+            # Populate the cache only after the fenced succeeded transition
+            # was accepted (§4.5); a stale/cancelled job never caches.
+            if cache_key:
+                cache.put(cache_key, result)
         except CancelledError, LeaseLostError:
             LOGGER.info("job %s: cancelled or lease lost, discarding result", job_id)
             self._repo.acknowledge_cancel(job_id, claim)

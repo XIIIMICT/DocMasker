@@ -8,7 +8,9 @@ x-back-env: &back-env
   AUTH_APP_ORIGIN: http://127.0.0.1:15001
   BACKEND_CORS_ORIGINS: '["http://127.0.0.1:15001"]'
   DATABASE_URL: postgresql+psycopg://dm:ci_password@postgres:5432/dm_ci
-  VALKEY_URL: redis://valkey:6379/0
+  VALKEY_URL: redis://:ci_cache_password@valkey:6379/0
+  CACHE_KEY_SECRET: ci-only-cache-secret-32-chars-long
+  CACHE_ENABLED: "true"
   DB_POOL_SIZE: "5"
   DB_MAX_OVERFLOW: "5"
   DB_CONNECT_TIMEOUT_SECONDS: "5"
@@ -28,9 +30,20 @@ services:
       retries: 30
   valkey:
     image: valkey/valkey:8-alpine
-    command: ["valkey-server", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    command:
+      [
+        "valkey-server",
+        "--appendonly",
+        "no",
+        "--maxmemory",
+        "128mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+        "--requirepass",
+        "ci_cache_password",
+      ]
     healthcheck:
-      test: [CMD, valkey-cli, ping]
+      test: [CMD, valkey-cli, -a, "ci_cache_password", ping]
       interval: 2s
       timeout: 5s
       retries: 30

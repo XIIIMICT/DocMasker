@@ -109,34 +109,55 @@ class JobRepository:
 
     # -- staging / enqueue ---------------------------------------------------
 
-    def create_staging(self, kind: JobKind, *, max_active: int, max_attempts: int, cache_key: str) -> Job:
-        """Insert a `staging` row, reserving an active-queue slot (brief §3.3)."""
+    def create_staging(self, kind: JobKind, *, max_active: int, max_attempts: int, cache_key: str) -> tuple[Job, bool]:
+        """
+        Insert a `staging` row, or attach to an identical active job (§4.5).
+
+        PostgreSQL-side de-duplication: a concurrent identical submission
+        reuses the existing staging/queued/running job instead of doing the
+        expensive work twice. Returns `(job, created)`.
+        """
         job_id = uuid.uuid4()
         now = _now()
+        attached_id: str | None = None
         with self._session() as session, session.begin():
-            active = session.execute(
-                select(func.count())
-                .select_from(jobs)
-                .where(jobs.c.status.in_(("staging", "queued", "running", "cancelling")))
-            ).scalar_one()
-            if active >= max_active:
-                msg = "Очередь заданий переполнена. Повторите позже."
-                raise JobQueueFullError(msg)
-            session.execute(
-                jobs.insert().values(
-                    id=job_id,
-                    kind=kind,
-                    status="staging",
-                    phase="queued",
-                    progress=0,
-                    attempt=0,
-                    max_attempts=max_attempts,
-                    created_at=now,
-                    updated_at=now,
-                    cache_key=cache_key,
+            existing = session.execute(
+                select(jobs.c.id)
+                .where(
+                    jobs.c.cache_key == cache_key,
+                    jobs.c.status.in_(("staging", "queued", "running", "cancelling")),
                 )
-            )
-        return self.get(str(job_id))
+                .order_by(jobs.c.created_at)
+                .limit(1)
+            ).scalar_one_or_none()
+            if existing is not None:
+                attached_id = str(existing)
+            else:
+                active = session.execute(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.status.in_(("staging", "queued", "running", "cancelling")))
+                ).scalar_one()
+                if active >= max_active:
+                    msg = "Очередь заданий переполнена. Повторите позже."
+                    raise JobQueueFullError(msg)
+                session.execute(
+                    jobs.insert().values(
+                        id=job_id,
+                        kind=kind,
+                        status="staging",
+                        phase="queued",
+                        progress=0,
+                        attempt=0,
+                        max_attempts=max_attempts,
+                        created_at=now,
+                        updated_at=now,
+                        cache_key=cache_key,
+                    )
+                )
+        if attached_id is not None:
+            return self.get(attached_id), False
+        return self.get(str(job_id)), True
 
     def publish_staging(
         self,
@@ -199,13 +220,13 @@ class JobRepository:
         replaces this with the full staged protocol. Text jobs need no staged
         input file to be claimable.
         """
-        job = self.create_staging(
+        staged, _created = self.create_staging(
             kind,
             max_active=max_active,
             max_attempts=self._settings.jobs_max_attempts,
             cache_key=str(uuid.uuid4()),
         )
-        return self.publish_staging(job.id, input_artifact="", keys_artifact=None, ttl_seconds=ttl_seconds)
+        return self.publish_staging(staged.id, input_artifact="", keys_artifact=None, ttl_seconds=ttl_seconds)
 
     def get(self, job_id: str) -> Job:
         """Read one job by opaque id (404 when unknown)."""

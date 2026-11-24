@@ -1,16 +1,17 @@
-"""Shared job infrastructure and sync/job threshold (ADR-0002)."""
+"""Shared job infrastructure, cache and sync/job threshold (ADR-0003)."""
 
 from functools import lru_cache
 
 from src.config import Settings, get_settings
 
+from .cache import CacheArtifactStore, ResultCache
 from .repository import JobRepository
 from .storage import ArtifactStore
 
 
 @lru_cache(maxsize=1)
 def job_repository() -> JobRepository:
-    """One repository per web process (state itself lives in the DB file)."""
+    """One repository per web process (state itself lives in PostgreSQL)."""
     return JobRepository(get_settings())
 
 
@@ -18,6 +19,18 @@ def job_repository() -> JobRepository:
 def artifact_store() -> ArtifactStore:
     """One artifact spool handle per process."""
     return ArtifactStore(get_settings().jobs_dir)
+
+
+@lru_cache(maxsize=1)
+def cache_artifacts() -> CacheArtifactStore:
+    """One private immutable cache-artifact store per process."""
+    return CacheArtifactStore(get_settings().jobs_dir)
+
+
+@lru_cache(maxsize=1)
+def result_cache() -> ResultCache:
+    """One bounded Valkey client per process (outage -> uncached)."""
+    return ResultCache(get_settings(), cache_artifacts())
 
 
 def should_use_job(*, text: str | None = None, data: bytes | None = None, paragraph_count: int = 0) -> bool:

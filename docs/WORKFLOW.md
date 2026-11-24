@@ -119,7 +119,7 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 | Job | What |
 |---|---|
 | `config` | actionlint + `docker compose config` for `prod`/`dev` and `infra/compose.ci.yaml` |
-| `back` | locked uv sync, ruff check/format, ty, pytest with branch coverage (artifact: coverage + JUnit) |
+| `back` | locked uv sync, ruff check/format, ty, pytest with branch coverage (real PostgreSQL + Valkey integration via job services; artifact: coverage + JUnit) |
 | `front` | Bun 1.4 + Node 26, `next typegen`, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
 | `production` | needs `config`+`back`+`front`; builds the prod images once, boots `back`+`worker`+`front` via `infra/compose.ci.yaml`, lists the smoke tests explicitly, runs Playwright `smoke`, exports images on a `v*` tag |
 | `required` | `jq -e 'all(...result == "success")'` over `needs` — the branch-protection gate |

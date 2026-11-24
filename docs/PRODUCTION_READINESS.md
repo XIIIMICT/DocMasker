@@ -71,6 +71,8 @@ shape. Latency probes for the processing steps are in `back/benchmarks/README.md
 
 | F-17 | 3.x durable-job lifecycle correctness | high | already fixed | Phase 2 (ADR-0003): staged atomic enqueue, `SKIP LOCKED` claim with fencing token/worker_id, independent heartbeat, cooperative cancellation (`cancelling` + checkpoints), classified retry/backoff, active-row-safe TTL/GC, immutable fenced result publication, graceful drain, UI Cancel + session resume. 187 back tests incl. failure-injection (stale token, cancellation without publication, long blocking operation across lease intervals) | — | done |
 
+| F-18 | 4.x result cache | medium | already fixed | Phase 3: versioned HMAC cache keys, artifact-reference entries (no large Valkey blobs), hash-verified hits, TTL/GC, outage fallback, PostgreSQL dedupe, sync+job paths, failed/cancelled never cached. 206 back tests incl. real-Valkey integration | — | done |
+
 ## Stage plan (mapping to the request's §13)
 
 1. ✅ Этап 0 — docs/toolchain sync (branch `docs/sync-toolchain`, merged into `dev`).

@@ -1,5 +1,6 @@
 """Masking and unmasking API router."""
 
+import base64
 import json
 import re
 from collections import Counter
@@ -11,6 +12,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, 
 from fastapi.responses import JSONResponse
 
 from src.config import get_settings
+from src.jobs.cache import build_cache_key, canonical_json, fingerprint_for
+from src.jobs.dependencies import result_cache
 from src.jobs.repository import JobQueueFullError
 from src.jobs.routing import count_docx_paragraphs, enqueue, needs_job
 from src.masking.profiles import ProfilesValidationError, get_profile, list_profiles
@@ -93,6 +96,42 @@ def _unsupported_header(data: bytes) -> str | None:
     return ",".join(codes) if codes else None
 
 
+def _cache_key(kind: str, *, input_bytes: bytes, keys_bytes: bytes | None, filename: str) -> str:
+    """Versioned HMAC key for a fully validated synchronous operation."""
+    return build_cache_key(
+        get_settings(),
+        fingerprint_for(kind, input_bytes=input_bytes, keys_bytes=keys_bytes, filename=filename),
+    )
+
+
+def _cache_get(key: str) -> bytes | None:
+    """Cache hit is only served after input validation (§4.5)."""
+    return result_cache().get(key)
+
+
+def _cache_put(key: str, data: bytes) -> None:
+    """Populate only after a fully successful computation."""
+    result_cache().put(key, data)
+
+
+def _pack_file_result(archive: bytes, headers: dict[str, str]) -> bytes:
+    """Cache the ZIP plus its non-semantic response headers as one artifact."""
+    return canonical_json(
+        {
+            "archive_b64": base64.b64encode(archive).decode("ascii"),
+            "headers": headers,
+        }
+    ).encode("utf-8")
+
+
+def _unpack_file_result(cached: bytes) -> tuple[bytes, dict[str, str]] | None:
+    try:
+        payload = json.loads(cached)
+        return base64.b64decode(payload["archive_b64"]), dict(payload["headers"])
+    except Exception:
+        return None
+
+
 def _busy() -> HTTPException:
     """429 for the bounded synchronous executor."""
     return HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Сервер занят. Повторите позже.")
@@ -131,21 +170,31 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONRespons
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Текст больше допустимого ({limit} символов).",
         )
+    input_bytes = request.text.encode("utf-8")
     if needs_job(text=request.text):
         return _job_overflow(
             "mask_text",
-            input_bytes=request.text.encode("utf-8"),
+            input_bytes=input_bytes,
             keys_bytes=None,
             filename="",
             profile_id=request.profile_id,
         )
+    key = _cache_key("mask_text", input_bytes=input_bytes, keys_bytes=None, filename="")
+    cached = _cache_get(key)
+    if cached is not None:
+        try:
+            return MaskResponse.model_validate_json(cached)
+        except Exception:
+            result_cache().invalidate(key)
     try:
         masked, entities, keys = await run_cpu(mask_document, request)
     except ExecutorBusyError as error:
         raise _busy() from error
     except ProfilesValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
-    return MaskResponse(text=masked, stats=mask_stats(entities), keys=keys.to_yaml())
+    response = MaskResponse(text=masked, stats=mask_stats(entities), keys=keys.to_yaml())
+    _cache_put(key, response.model_dump_json().encode("utf-8"))
+    return response
 
 
 @router.post("/mask-file")
@@ -177,16 +226,28 @@ async def mask_file_endpoint(
     except ProfilesValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
-    def _mask_file() -> tuple[bytes, list[MaskedEntity], MaskKeys]:
+    # Validate the package BEFORE a cache lookup (§4.5: a hit must not bypass
+    # input/security validation).
+    try:
         validate_docx_package(source, upload_limits())
+    except DocxValidationError as error:
+        raise HTTPException(status_code=error.http_status, detail=str(error)) from error
+    key = _cache_key("mask_file", input_bytes=source, keys_bytes=None, filename=file.filename)
+    cached = _cache_get(key)
+    if cached is not None:
+        unpacked = _unpack_file_result(cached)
+        if unpacked is not None:
+            archive, headers = unpacked
+            return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
+        result_cache().invalidate(key)
+
+    def _mask_file() -> tuple[bytes, list[MaskedEntity], MaskKeys]:
         return mask_docx_in_memory(source, get_masker_for(profile.profile_id))
 
     try:
         masked_bytes, entities, keys = await run_cpu(_mask_file)
     except ExecutorBusyError as error:
         raise _busy() from error
-    except DocxValidationError as error:
-        raise HTTPException(status_code=error.http_status, detail=str(error)) from error
 
     base = Path(file.filename).stem
     archive = mask_archive(masked_bytes, keys.to_yaml(), base)
@@ -195,6 +256,7 @@ async def mask_file_endpoint(
     unsupported = _unsupported_header(source)
     if unsupported:
         headers["X-Docx-Unsupported-Parts"] = unsupported
+    _cache_put(key, _pack_file_result(archive, headers))
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
 
 
@@ -204,31 +266,41 @@ async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse | JSONR
     if not request.text.strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Текст пуст.")
     settings = get_settings()
-    if len(request.text) > settings.max_text_chars:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Текст больше допустимого ({settings.max_text_chars} символов).",
-        )
     if len(request.keys) > settings.max_keys_chars:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Ключи больше допустимых ({settings.max_keys_chars} символов).",
         )
+    try:
+        validate_keys_yaml(request.keys)
+    except KeysValidationError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+    input_bytes = request.text.encode("utf-8")
+    keys_bytes = request.keys.encode("utf-8")
     if needs_job(text=request.text):
         return _job_overflow(
             "unmask_text",
-            input_bytes=request.text.encode("utf-8"),
-            keys_bytes=request.keys.encode("utf-8"),
+            input_bytes=input_bytes,
+            keys_bytes=keys_bytes,
             filename="",
             profile_id=None,
         )
+    key = _cache_key("unmask_text", input_bytes=input_bytes, keys_bytes=keys_bytes, filename="")
+    cached = _cache_get(key)
+    if cached is not None:
+        try:
+            return UnmaskResponse.model_validate_json(cached)
+        except Exception:
+            result_cache().invalidate(key)
     try:
         restored = await run_cpu(unmask_document, request)
     except ExecutorBusyError as error:
         raise _busy() from error
     except KeysValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
-    return UnmaskResponse(text=restored)
+    response = UnmaskResponse(text=restored)
+    _cache_put(key, response.model_dump_json().encode("utf-8"))
+    return response
 
 
 @router.post("/unmask-file")
@@ -266,9 +338,22 @@ async def unmask_file_endpoint(
         placeholders = placeholders_from_document(validate_keys_yaml(keys))
     except KeysValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+    try:
+        validate_docx_package(source, upload_limits())
+    except DocxValidationError as error:
+        raise HTTPException(status_code=error.http_status, detail=str(error)) from error
+
+    keys_bytes = keys.encode("utf-8")
+    key = _cache_key("unmask_file", input_bytes=source, keys_bytes=keys_bytes, filename=file.filename)
+    cached = _cache_get(key)
+    if cached is not None:
+        unpacked = _unpack_file_result(cached)
+        if unpacked is not None:
+            archive, headers = unpacked
+            return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
+        result_cache().invalidate(key)
 
     def _unmask_file() -> tuple[bytes, list[str]]:
-        validate_docx_package(source, upload_limits())
         return unmask_docx_in_memory(source, placeholders)
 
     try:
@@ -277,8 +362,6 @@ async def unmask_file_endpoint(
         raise _busy() from error
     except KeysValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
-    except DocxValidationError as error:
-        raise HTTPException(status_code=error.http_status, detail=str(error)) from error
 
     base = Path(file.filename).stem
     # A masked document is downloaded as "<base> (замаскированный).docx" and
@@ -291,4 +374,5 @@ async def unmask_file_endpoint(
     unsupported = _unsupported_header(source)
     if unsupported:
         headers["X-Docx-Unsupported-Parts"] = unsupported
+    _cache_put(key, _pack_file_result(archive, headers))
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)

@@ -40,6 +40,8 @@ jobs:
     env:
       COVERAGE_FILE: coverage-data
       TEST_DATABASE_URL: postgresql+psycopg://dm:ci_password@127.0.0.1:15432/dm_ci
+      TEST_VALKEY_URL: redis://127.0.0.1:16379/0
+      CACHE_KEY_SECRET: ci-only-cache-secret-32-chars-long
     services:
       postgres:
         image: postgres:18-alpine
@@ -50,6 +52,12 @@ jobs:
         ports: ["127.0.0.1:15432:5432"]
         options: >-
           --health-cmd "pg_isready -U dm -d dm_ci"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ["127.0.0.1:16379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
           --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v7

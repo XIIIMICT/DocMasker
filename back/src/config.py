@@ -37,11 +37,26 @@ class Settings(BaseSettings):
     db_connect_timeout_seconds: float = Field(default=5.0, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
     #: Private artifact spool (shared volume, single-host boundary).
     jobs_dir: str = Field(default="/app/jobs", validation_alias="JOBS_DIR")
-    #: Infrastructure settings required by the brief (Valkey logic is Phase 3).
+    #: Infrastructure settings (Valkey is a disposable cache index, Phase 3).
     valkey_url: str = Field(default="redis://valkey:6379/0", validation_alias="VALKEY_URL")
-    cache_enabled: bool = Field(default=True, validation_alias="CACHE_ENABLED")
+    cache_enabled: bool = Field(default=False, validation_alias="CACHE_ENABLED")
     cache_ttl_seconds: float = Field(default=86400.0, validation_alias="CACHE_TTL_SECONDS")
     cache_namespace_version: int = Field(default=1, validation_alias="CACHE_NAMESPACE_VERSION")
+    #: Stable HMAC secret: rotating it intentionally invalidates all entries.
+    cache_key_secret: str = Field(default="", validation_alias="CACHE_KEY_SECRET")
+    cache_connect_timeout_seconds: float = Field(default=2.0, validation_alias="CACHE_CONNECT_TIMEOUT_SECONDS")
+    cache_socket_timeout_seconds: float = Field(default=2.0, validation_alias="CACHE_SOCKET_TIMEOUT_SECONDS")
+    cache_max_entries: int = Field(default=100_000, validation_alias="CACHE_MAX_ENTRIES")
+    cache_max_memory_mb: int = Field(default=256, validation_alias="CACHE_MAX_MEMORY_MB")
+    #: Bump when detection/masking semantics change the output (§4.3).
+    masking_ruleset_version: int = Field(default=1, validation_alias="MASKING_RULESET_VERSION")
+    #: Bump when the result manifest / archive contract changes (§4.3).
+    result_manifest_version: int = Field(default=1, validation_alias="RESULT_MANIFEST_VERSION")
+    #: Validated contents of active exception/lexicon files (Phase 4 wires the
+    #: real digest; an empty default means "no exception data yet").
+    masking_config_digest: str = Field(default="none", validation_alias="MASKING_CONFIG_DIGEST")
+    keys_format_version: int = Field(default=1, validation_alias="KEYS_FORMAT_VERSION")
+    docx_transformer_version: int = Field(default=1, validation_alias="DOCX_TRANSFORMER_VERSION")
     worker_shutdown_grace_seconds: float = Field(default=30.0, validation_alias="WORKER_SHUTDOWN_GRACE_SECONDS")
     #: Inputs at or below these thresholds stay synchronous (baseline-anchored).
     sync_max_text_chars: int = Field(default=20_000, validation_alias="SYNC_MAX_TEXT_CHARS")
@@ -98,6 +113,12 @@ class Settings(BaseSettings):
             "jobs_concurrency",
             "jobs_max_attempts",
             "cache_namespace_version",
+            "cache_max_entries",
+            "cache_max_memory_mb",
+            "masking_ruleset_version",
+            "result_manifest_version",
+            "keys_format_version",
+            "docx_transformer_version",
         ):
             if getattr(self, name) <= 0:
                 msg = f"Настройка {name.upper()} должна быть положительной."
@@ -108,6 +129,8 @@ class Settings(BaseSettings):
             "jobs_poll_seconds",
             "jobs_ttl_seconds",
             "cache_ttl_seconds",
+            "cache_connect_timeout_seconds",
+            "cache_socket_timeout_seconds",
             "worker_shutdown_grace_seconds",
         ):
             if getattr(self, name) <= 0:
@@ -121,6 +144,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.cache_enabled and self.cache_ttl_seconds <= 0:
             msg = "CACHE_TTL_SECONDS должен быть положительным при включённом кэше."
+            raise ValueError(msg)
+        if self.cache_enabled and len(self.cache_key_secret) < 16:
+            msg = "CACHE_KEY_SECRET должен быть стабильным секретом длиной не менее 16 символов."
             raise ValueError(msg)
         return self
 

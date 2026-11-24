@@ -202,7 +202,8 @@ def test_no_pii_columns_in_schema(settings: Settings) -> None:
 
 def test_staging_is_not_claimable(settings: Settings) -> None:
     repo = JobRepository(settings)
-    staged = repo.create_staging("mask_text", max_active=16, max_attempts=3, cache_key="k")
+    staged, created = repo.create_staging("mask_text", max_active=16, max_attempts=3, cache_key="k")
+    assert created is True
     assert staged.status == "staging"
     assert repo.claim(lease_seconds=30, concurrency=1) is None
     assert staged.id in repo.reconcile_staging()

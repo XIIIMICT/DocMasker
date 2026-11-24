@@ -169,6 +169,18 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
+**Implemented in Phase 3 (2026-11-24):** Valkey result cache. Keys are
+`docmasker:result:v{CACHE_NAMESPACE_VERSION}:{operation}:{HMAC-SHA256}` over a
+canonical fingerprint (exact input/keys bytes, normalized output filename,
+`MASKING_RULESET_VERSION`, `MASKING_CONFIG_DIGEST`, `RESULT_MANIFEST_VERSION`,
+`KEYS_FORMAT_VERSION`, `DOCX_TRANSFORMER_VERSION`, engine/entry versions) with a
+stable `CACHE_KEY_SECRET` — no raw hashes/PII in key names or logs. Valkey holds
+only compact JSON entries pointing to immutable, hash-verified artifacts in the
+private volume; cache outages degrade to misses; writes happen only after the
+fenced `succeeded` transition; identical active jobs dedupe in PostgreSQL.
+Sync and job paths both use the cache. Bump the version settings (release
+checklist in `back/src/jobs/cache.py`) whenever output semantics change.
+
 **Implemented in Phase 2 (2026-11-24):** independent heartbeat loop
 (`lease_seconds / 3`), cooperative cancellation checkpoints + `cancelling`
 state, classified retry with bounded exponential backoff, active-job-safe

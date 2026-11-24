@@ -188,3 +188,17 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     organizations as profile data. A new label = one detector + one registry
     entry + one `LabelMeta`; a new profile = one config entry. `MASK_LABELS`
     was removed with a loud startup error.
+22. **Valkey cache is an optimization, never a correctness dependency**
+    (`jobs/cache.py`, Phase 3): keys are HMAC-SHA256 over a canonical
+    fingerprint of exact input/keys bytes + normalized filename + every
+    version/digest that can change output (`MASKING_RULESET_VERSION`,
+    `MASKING_CONFIG_DIGEST`, `RESULT_MANIFEST_VERSION`, `KEYS_FORMAT_VERSION`,
+    `DOCX_TRANSFORMER_VERSION`, `CACHE_NAMESPACE_VERSION`). **Bump those
+    versions whenever masking/keys/DOCX/manifest semantics change** or stale
+    results will be served. Valkey stores only compact artifact references
+    (large ZIP/DOCX live in the private `cache/` spool, hash-verified on
+    read); a missing/corrupt artifact is a cache miss + eviction. Cache
+    outages degrade to misses, never 500s. Writes happen **only after** the
+    fenced `succeeded` transition; failed/cancelled jobs never populate it.
+    Identical active jobs dedupe in PostgreSQL (`create_staging`), not in a
+    Valkey lock. Never log the fingerprint, full key, inputs or keys YAML.

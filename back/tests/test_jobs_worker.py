@@ -240,6 +240,35 @@ def test_cancel_before_processing_publishes_nothing(env: Settings, worker: Worke
     repo.dispose()
 
 
+def test_identical_concurrent_submissions_attach_to_one_job(env: Settings) -> None:
+    """§4.5/§4.6-12: identical inputs dedupe to one active job, no duplicate work."""
+    first = enqueue("mask_text", input_bytes=b"same-input", filename="")
+    second = enqueue("mask_text", input_bytes=b"same-input", filename="")
+    assert first.job_id == second.job_id
+    repo = JobRepository(env)
+    assert repo.get(first.job_id).status == "queued"
+    repo.dispose()
+
+
+def test_cancelled_job_never_populates_cache(env: Settings, worker: Worker) -> None:
+    """§4.6-11: a cancelled job publishes no result and writes no cache entry."""
+    from src.jobs import dependencies
+
+    accepted = enqueue("mask_text", input_bytes=b"cache-must-not-appear", filename="")
+    repo = JobRepository(env)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert claimed is not None
+    _, claim = claimed
+    repo.request_cancel(accepted.job_id)
+    worker.run_one(accepted.job_id, claim)
+    assert repo.get(accepted.job_id).status == "cancelled"
+    cache = dependencies.result_cache()
+    key = repo.get(accepted.job_id).cache_key
+    if key and cache._client is not None:
+        assert cache.get(key) is None
+    repo.dispose()
+
+
 def test_sweep_removes_expired_jobs_and_artifacts(env: Settings, worker: Worker) -> None:
     accepted = enqueue("mask_text", input_bytes=b"x", filename="")
     repo = JobRepository(env)
