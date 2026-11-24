@@ -198,16 +198,20 @@ single-tenant/private deployment (no auth — see `TODO.md`).
 ```json
 {
   "job_id": "…",
-  "status": "queued|running|succeeded|failed|cancelled|expired",
-  "phase": "queued|validation|detection|rewrite|archive|completed",
+  "status": "staging|queued|running|cancelling|succeeded|failed|cancelled|expired",
+  "phase": "queued|validation|detection|rewrite|archive|completed|cancelled",
   "progress": 0,
   "attempt": 1,
   "error_code": null,
+  "cancel_requested": false,
+  "created_at": 1795500000.0,
+  "finished_at": null,
   "result_url": "/api/jobs/<id>/result"
 }
 ```
 
-`phase`/`progress` are coarse phase indicators, **not** a percent-accurate
+`cancel_requested` is true after `DELETE` on a running job (status
+`cancelling` until the worker acknowledges it at a checkpoint). `phase`/`progress` are coarse phase indicators, **not** a percent-accurate
 widget (explicitly out of scope per maintainer decision). `error_code` is a safe
 code — never exception text or input values. Unknown id → 404. There is no PII
 in any status field. `front/src/shared/api/jobs.ts::waitForJob` polls

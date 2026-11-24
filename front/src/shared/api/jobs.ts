@@ -9,6 +9,17 @@ export type { JobAccepted, JobResult, JobStatus } from "@/shared/api/jobs-types"
 const POLL_BASE_MS = 400;
 const POLL_MAX_MS = 4_000;
 const POLL_MAX_ATTEMPTS = 300; // ~20 min worst case, bounded
+/** sessionStorage key for resuming an active job in the same tab after reload. */
+export const ACTIVE_JOB_KEY = "docmasker.activeJob";
+
+/** Request server-side cancellation. Aborting polling alone must NOT cancel it. */
+export async function cancelJob(accepted: JobAccepted): Promise<void> {
+    try {
+        await fetch(`/api/jobs/${encodeURIComponent(accepted.job_id)}`, { method: "DELETE" });
+    } catch {
+        /* best effort: the server job is still fenced by its lease/expiry */
+    }
+}
 
 function buildResult(entries: Map<string, Blob>): JobResult {
     return {

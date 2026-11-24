@@ -23,6 +23,9 @@ class JobStatusResponse(BaseModel):
     progress: int = Field(ge=0, le=100)
     attempt: int
     error_code: str | None = None
+    cancel_requested: bool = False
+    created_at: float | None = None
+    finished_at: float | None = None
     result_url: str | None = None
 
 

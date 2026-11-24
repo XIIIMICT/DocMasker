@@ -164,13 +164,26 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     (`result.json` for text jobs, `.docx` + `.yaml`/manifest for files).
     **No SQLite fallback remains.** Integration tests need a real PostgreSQL
     (`TEST_DATABASE_URL`); without it the job tests skip.
-19. **Error/status conventions**: `validate_keys_yaml` raises
+
+19. **Phase 2 job lifecycle invariants** (`jobs/worker.py`): every claim gets
+    a fresh `uuid4()` fencing token + `worker_id` (`claim_with_owner`);
+    heartbeat/phase/succeed/fail/acknowledge_cancel are all guarded by that
+    token and affected-row count, so a stale worker cannot publish a result.
+    A dedicated `Heartbeat` thread renews the lease every `lease_seconds / 3`
+    independently of the blocking masking thread. `request_cancel` makes a
+    queued job terminal immediately but only marks a running job `cancelling`;
+    the worker acknowledges at cooperative checkpoints (never pretends a
+    Python thread was killed). Failures are classified (deterministic input
+    errors non-retryable; transient/internal bounded retry with backoff), TTL
+    cleanup never touches active rows, and SIGTERM keeps heartbeating while
+    in-flight jobs drain. Never log inputs/keys/exception text.
+20. **Error/status conventions**: `validate_keys_yaml` raises
     `KeysValidationError` → 422 with a Russian `detail`; malformed/oversized/
     encrypted DOCX → 415/413; bounded queue/executor → 429; job result not
     ready → 409; unknown job id → 404. Unknown placeholders stay as-is.
     `GET /api/profiles` is read-only; `profile_id` is optional on mask
     requests (default `russian-default`). Setting `MASK_LABELS` fails startup.
-20. **Profiles are immutable & validated** (`masking/profiles.py`,
+21. **Profiles are immutable & validated** (`masking/profiles.py`,
     ADR-0001): label metadata, detector registry (`detectors.py`), always-mask
     organizations as profile data. A new label = one detector + one registry
     entry + one `LabelMeta`; a new profile = one config entry. `MASK_LABELS`

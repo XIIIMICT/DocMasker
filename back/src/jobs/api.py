@@ -79,6 +79,12 @@ async def submit_job(
         get_profile(profile_id)
     except ProfilesValidationError as error:
         raise _safe_error(str(error)) from error
+    # Operation-specific fields (§3.11): unmask_* require keys, mask_* reject
+    # keys (unless deliberately supported) — reject inappropriate fields early.
+    if kind.startswith("unmask_") and (keys is None or not keys.strip()):
+        raise _safe_error("Для демаскировки необходимы ключи демаскировки.")
+    if kind.startswith("mask_") and keys is not None and keys.strip():
+        raise _safe_error("Ключи демаскировки не применяются при маскировании.")
     keys_bytes = _validated_keys(keys)
 
     if kind.endswith("_text"):
@@ -130,6 +136,9 @@ async def job_status(job_id: str) -> JobStatusResponse:
         progress=job.progress,
         attempt=job.attempt,
         error_code=job.error_code,
+        cancel_requested=job.cancel_requested,
+        created_at=job.created_at,
+        finished_at=job.finished_at,
         result_url=result_url if job.has_result else None,
     )
 
@@ -161,9 +170,9 @@ async def job_result(job_id: str) -> Response:
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def cancel_job(job_id: str) -> Response:
-    """Request cancellation of a queued/running job (404 when unknown)."""
+    """Idempotent cancellation request (§3.7); unknown id → 404."""
     try:
-        job_repository().cancel(job_id)
+        job_repository().request_cancel(job_id)
     except JobNotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задание не найдено.") from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)

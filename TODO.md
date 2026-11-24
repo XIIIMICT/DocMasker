@@ -146,10 +146,12 @@
       новый репозиторий (staging/publish, SKIP LOCKED claim + fencing token,
       lease reclaim, transitions), Settings-валидация, интеграционные тесты
       на реальном PostgreSQL (`TEST_DATABASE_URL`), SQLite удалён полностью.
-- [ ] **Phase 2** — durable-job correctness: atomic enqueue, independent
-      heartbeat, cooperative cancellation, error classification/backoff,
-      TTL/GC, immutable result publication, graceful drain, frontend
-      cancel/resume, failure-injection tests.
+- [x] **Phase 2** — durable-job correctness: staged atomic enqueue,
+      `SKIP LOCKED` claim с fencing token + worker_id, независимый heartbeat
+      (lease/3), cooperative cancellation (`cancelling` + checkpoints),
+      классификация ошибок с bounded backoff, TTL/GC (active не expire),
+      immutable fenced result publication, graceful drain; UI Cancel вместо
+      кнопки файла + sessionStorage resume. Failure-injection тесты.
 - [ ] **Phase 3** — Valkey result cache (versioned cache key, TTL/GC,
       cache-outage fallback, metrics).
 - [ ] **Phase 4** — one masking configuration + exception/lexicon files

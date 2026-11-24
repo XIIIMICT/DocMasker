@@ -36,6 +36,7 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
                             inFileMode={w.inFileMode}
                             busy={w.busy}
                             maskEnabled={w.maskEnabled}
+                            activeJob={w.activeJob !== null}
                             drag={w.drag}
                             onTextChange={w.onTextChange}
                             onFileActionPress={w.onMaskFileActionPress}
@@ -50,6 +51,7 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
                             inFileMode={w.inFileMode}
                             busy={w.busy}
                             unmaskEnabled={w.unmaskEnabled}
+                            activeJob={w.activeJob !== null}
                             keysInvalid={w.keysInvalid}
                             demaskKeys={w.demaskKeys}
                             inputTab={w.inputTab}

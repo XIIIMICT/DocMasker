@@ -21,6 +21,16 @@ _TERMINAL_STATUSES: frozenset[JobStatus] = frozenset({"succeeded", "failed", "ca
 
 
 @dataclass(frozen=True, slots=True)
+class Claim:
+    """Ownership credentials returned by an atomic claim (fencing)."""
+
+    worker_id: str
+    lease_token: str
+    lease_until: float
+    cancel_requested: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Job:
     """One durable job row (no PII, no keys, no file contents)."""
 
@@ -36,6 +46,14 @@ class Job:
     lease_until: float | None
     expires_at: float
     result_key: str | None
+    #: Ownership of the *current* claim; empty for non-running rows.
+    worker_id: str | None = None
+    lease_token: str | None = None
+    cancel_requested: bool = False
+    max_attempts: int = 3
+    input_artifact: str | None = None
+    cache_key: str | None = None
+    finished_at: float | None = None
 
     @property
     def is_active(self) -> bool:

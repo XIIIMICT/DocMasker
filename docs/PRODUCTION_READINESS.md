@@ -69,6 +69,8 @@ shape. Latency probes for the processing steps are in `back/benchmarks/README.md
 
 | F-16 | 3.x FIO false negatives | medium | already fixed | `NamesExtractor` fails on out-of-vocabulary surnames (`Поповцев`, `Старухин`, incl. two-part `Старухин Александр`) and on role-prefixed names (`Секретарь Т.Ф. Гилязов` → role glued as surname); detector relaxes the surname guard for verified-given-name FIOs, recovers initials+surname / strict name pairs from the text, and excludes roles/greetings/toponyms/common nouns. Live `/api/mask` round-trip + regression tests | — | done |
 
+| F-17 | 3.x durable-job lifecycle correctness | high | already fixed | Phase 2 (ADR-0003): staged atomic enqueue, `SKIP LOCKED` claim with fencing token/worker_id, independent heartbeat, cooperative cancellation (`cancelling` + checkpoints), classified retry/backoff, active-row-safe TTL/GC, immutable fenced result publication, graceful drain, UI Cancel + session resume. 187 back tests incl. failure-injection (stale token, cancellation without publication, long blocking operation across lease intervals) | — | done |
+
 ## Stage plan (mapping to the request's §13)
 
 1. ✅ Этап 0 — docs/toolchain sync (branch `docs/sync-toolchain`, merged into `dev`).

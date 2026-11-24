@@ -139,11 +139,26 @@ def test_non_retryable_failure_is_final(repo: JobRepository) -> None:
 
 def test_cancel_only_affects_active_jobs(repo: JobRepository) -> None:
     job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
-    assert repo.cancel(job.id) is True
+    # Queued job: cancellation is terminal immediately and idempotent.
+    assert repo.request_cancel(job.id) == "cancelled"
     assert repo.get(job.id).status == "cancelled"
-    assert repo.cancel(job.id) is False
+    assert repo.request_cancel(job.id) == "cancelled"
     with pytest.raises(JobNotFoundError):
-        repo.cancel("00000000-0000-0000-0000-000000000000")
+        repo.request_cancel("00000000-0000-0000-0000-000000000000")
+
+
+def test_running_cancel_is_a_request_acknowledged_by_the_worker(repo: JobRepository) -> None:
+    job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert claimed is not None
+    _, claim = claimed
+    # Running job: record `cancelling`, do not pretend the thread stopped.
+    assert repo.request_cancel(job.id) == "cancelling"
+    assert repo.get(job.id).status == "cancelling"
+    assert repo.get(job.id).cancel_requested is True
+    assert repo.heartbeat(job.id, "detection", 50, lease_seconds=30, claim=claim) is False
+    repo.acknowledge_cancel(job.id, claim)
+    assert repo.get(job.id).status == "cancelled"
 
 
 def test_ttl_sweep_removes_rows_and_artifacts(repo: JobRepository, store: ArtifactStore) -> None:
@@ -196,6 +211,41 @@ def test_staging_is_not_claimable(settings: Settings) -> None:
     claimed = repo.claim(lease_seconds=30, concurrency=1)
     assert claimed is not None
     assert claimed.id == staged.id
+
+
+def test_active_jobs_are_never_swept(settings: Settings) -> None:
+    """§3.9: result TTL cleanup must never touch staging/queued/running rows."""
+    repo = JobRepository(settings)
+    job = repo.create("mask_text", max_active=16, ttl_seconds=-1)
+    assert repo.expired_jobs(time.time()) == []
+    repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert repo.expired_jobs(time.time()) == []
+    assert repo.get(job.id).status == "running"
+    repo.dispose()
+
+
+def test_result_ttl_starts_on_completion(settings: Settings) -> None:
+    """§3.9: TTL is set when the result is committed, not at enqueue."""
+    repo = JobRepository(settings)
+    job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert claimed is not None
+    _, claim = claimed
+    assert repo.get(job.id).status == "running"
+    repo.succeed(job.id, "result", ttl_seconds=60, claim=claim)
+    assert repo.expired_jobs(time.time()) == []
+    assert repo.expired_jobs(time.time() + 120) != []
+    repo.dispose()
+
+
+def test_queue_full_leaves_no_staging_row(settings: Settings) -> None:
+    """§14: a 429 admission failure leaves no orphan staging row."""
+    repo = JobRepository(settings)
+    for _ in range(2):
+        repo.create("mask_text", max_active=2, ttl_seconds=3600)
+    with pytest.raises(JobQueueFullError):
+        repo.create("mask_text", max_active=2, ttl_seconds=3600)
+    assert repo.reconcile_staging() == []
 
 
 def test_concurrent_claims_never_share_a_lease(settings: Settings) -> None:

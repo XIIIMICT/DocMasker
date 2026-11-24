@@ -32,18 +32,56 @@ def enqueue(
     filename: str = "",
     profile_id: str | None = None,
 ) -> JobAccepted:
-    """Spool inputs and enqueue a job; used by both /api/jobs and sync overflow."""
+    """
+    Staged, atomic enqueue (brief §3.3).
+
+    1. insert a `staging` row (reserves a queue slot; worker cannot claim it);
+    2. stream inputs/keys/metadata to unique private files (atomic writes);
+    3. publish `staging -> queued` with all artifact references in one short DB
+       transaction. On any failure the staging row is aborted and the artifacts
+       cleaned up idempotently, so no partially staged job is ever exposed.
+    """
+    import hashlib
+
     settings: Settings = get_settings()
-    job = job_repository().create(kind, max_active=settings.jobs_max_active, ttl_seconds=settings.jobs_ttl_seconds)
     store = artifact_store()
-    store.write(job.id, "input", input_bytes)
-    store.write(job.id, "name", filename.encode("utf-8"))
-    store.write(job.id, "kind", kind.encode("ascii"))
+    repo = job_repository()
+    digest = hashlib.sha256(input_bytes)
     if keys_bytes is not None:
-        store.write(job.id, "keys", keys_bytes)
-    if profile_id is not None:
-        store.write(job.id, "profile", profile_id.encode("ascii"))
-    return accepted(job.id)
+        digest.update(b"\0keys\0")
+        digest.update(keys_bytes)
+    cache_key = digest.hexdigest()
+
+    staged = repo.create_staging(
+        kind,
+        max_active=settings.jobs_max_active,
+        max_attempts=settings.jobs_max_attempts,
+        cache_key=cache_key,
+    )
+    try:
+        store.write(staged.id, "input", input_bytes)
+        store.write(staged.id, "name", filename.encode("utf-8"))
+        store.write(staged.id, "kind", kind.encode("ascii"))
+        if keys_bytes is not None:
+            store.write(staged.id, "keys", keys_bytes)
+        if profile_id is not None:
+            store.write(staged.id, "profile", profile_id.encode("ascii"))
+    except Exception:
+        repo.abort_staging(staged.id, "staging_failed")
+        store.delete(staged.id)
+        raise
+    try:
+        repo.publish_staging(
+            staged.id,
+            input_artifact="input",
+            keys_artifact="keys" if keys_bytes is not None else None,
+            ttl_seconds=settings.jobs_ttl_seconds,
+        )
+    except Exception:
+        repo.abort_staging(staged.id, "staging_failed")
+        store.delete(staged.id)
+        raise
+    return accepted(staged.id)
 
 
 def needs_job(*, text: str | None = None, data: bytes | None = None, paragraph_count: int = 0) -> bool:

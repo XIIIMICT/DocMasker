@@ -6,6 +6,7 @@
  * during the stage-5 frontend decomposition.
  */
 
+import type { JobAccepted } from "@/shared/api/jobs";
 import type { MaskStats } from "@/shared/mask-stats";
 import type { AppMode } from "@/shared/ui/brand";
 
@@ -58,6 +59,8 @@ export interface ModeState {
     busy: boolean;
     dragging: boolean;
     error: string | null;
+    // The 202 body of the job currently being polled (for Cancel / resume).
+    activeJob: JobAccepted | null;
 }
 
 export function emptyModeState(): ModeState {
@@ -79,6 +82,7 @@ export function emptyModeState(): ModeState {
         busy: false,
         dragging: false,
         error: null,
+        activeJob: null,
     };
 }
 

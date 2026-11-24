@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.orm import Session
 
-from .models import Job, JobKind, JobPhase
+from .models import Claim, Job, JobKind, JobPhase
 from .schema import ALLOWED_TRANSITIONS, jobs
 
 if TYPE_CHECKING:
@@ -66,6 +66,13 @@ def _row_to_job(row: Any) -> Job:  # noqa: ANN401 (SQLAlchemy Row is dynamically
         if (m["result_expires_at"] or m["expires_at"])
         else 0.0,
         result_key=m["result_artifact"],
+        worker_id=m["worker_id"],
+        lease_token=str(m["lease_token"]) if m["lease_token"] else None,
+        cancel_requested=m["cancel_requested_at"] is not None,
+        max_attempts=m["max_attempts"],
+        input_artifact=m["input_artifact"],
+        cache_key=m["cache_key"],
+        finished_at=m["finished_at"].timestamp() if m["finished_at"] else None,
     )
 
 
@@ -213,13 +220,26 @@ class JobRepository:
         return _row_to_job(row)
 
     def claim(self, *, lease_seconds: float, concurrency: int) -> Job | None:
+        """Atomically claim one job (legacy shape, for API/contract tests)."""
+        pair = self.claim_with_owner(lease_seconds=lease_seconds, concurrency=concurrency)
+        return pair[0] if pair else None
+
+    def claim_with_owner(
+        self,
+        *,
+        lease_seconds: float,
+        concurrency: int,
+        worker_id: str | None = None,
+    ) -> tuple[Job, Claim] | None:
         """
         Atomically claim the oldest eligible job with `FOR UPDATE SKIP LOCKED`.
 
         One short transaction: reclaim expired leases (fresh token on the next
         claim), bound running jobs, then lock and claim one `queued` row with a
-        new `uuid4()` fencing token. `staging` rows are never claimable.
+        new `uuid4()` fencing token + `worker_id`. `staging` rows are never
+        claimable. Returns the ownership credentials every later mutation needs.
         """
+        worker = worker_id or str(uuid.uuid4())
         with self._session() as session, session.begin():
             now = self._db_now(session)
             # Lease recovery: a crashed worker's running row returns to queued
@@ -263,7 +283,10 @@ class JobRepository:
                 return None
             row = session.execute(
                 select(jobs.c.id)
-                .where(jobs.c.status == "queued")
+                .where(
+                    jobs.c.status == "queued",
+                    (jobs.c.next_attempt_at.is_(None)) | (jobs.c.next_attempt_at <= now),
+                )
                 .order_by(jobs.c.created_at)
                 .with_for_update(skip_locked=True)
                 .limit(1)
@@ -271,6 +294,7 @@ class JobRepository:
             if row is None:
                 return None
             token = uuid.uuid4()
+            lease_until = now + timedelta(seconds=lease_seconds)
             result = session.execute(
                 update(jobs)
                 .where(jobs.c.id == row.id, jobs.c.status == "queued")
@@ -278,33 +302,64 @@ class JobRepository:
                     status="running",
                     phase="validation",
                     attempt=jobs.c.attempt + 1,
+                    worker_id=worker,
                     lease_token=token,
-                    lease_until=now + timedelta(seconds=lease_seconds),
+                    lease_until=lease_until,
                     heartbeat_at=now,
                     started_at=now,
+                    cancel_requested_at=None,
+                    error_code=None,
+                    next_attempt_at=None,
                     updated_at=now,
                 )
             )
             if _affected(result) != 1:
                 return None
             claimed_id = str(row.id)
-        return self.get(claimed_id)
+        job = self.get(claimed_id)
+        return job, Claim(
+            worker_id=worker,
+            lease_token=str(token),
+            lease_until=lease_until.timestamp(),
+            cancel_requested=False,
+        )
 
-    def heartbeat(self, job_id: str, phase: JobPhase, progress: int, *, lease_seconds: float) -> bool:
-        """Renew the lease (no token yet in Phase 1 worker wiring); guarded by status+lease."""
+    def heartbeat(
+        self,
+        job_id: str,
+        phase: JobPhase,
+        progress: int,
+        *,
+        lease_seconds: float,
+        claim: Claim | None = None,
+    ) -> bool:
+        """
+        Renew the lease, fenced by the claim token when one is supplied.
+
+        Phase/phase progress must be monotonic; a stale worker's update affects
+        0 rows and returns False. Cancellation is reported through the same
+        channel (`cancel_requested_at` set -> no renewal).
+        """
         try:
             key = uuid.UUID(job_id)
         except ValueError:
             return False
         with self._session() as session, session.begin():
             now = self._db_now(session)
+            conditions = [
+                jobs.c.id == key,
+                jobs.c.status == "running",
+                jobs.c.lease_until > now,
+            ]
+            if claim is not None:
+                conditions += [
+                    jobs.c.worker_id == claim.worker_id,
+                    jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                    jobs.c.cancel_requested_at.is_(None),
+                ]
             result = session.execute(
                 update(jobs)
-                .where(
-                    jobs.c.id == key,
-                    jobs.c.status == "running",
-                    jobs.c.lease_until > now,
-                )
+                .where(*conditions)
                 .values(
                     phase=phase,
                     progress=progress,
@@ -315,13 +370,105 @@ class JobRepository:
             )
             return _affected(result) == 1
 
-    def succeed(self, job_id: str, result_key: str, *, ttl_seconds: float) -> None:
-        """Mark the result ready and set its download TTL (ownership: running only)."""
+    def cancellation_requested(self, job_id: str, claim: Claim) -> bool:
+        """Whether a cancel request was recorded for this owner (checkpoint)."""
+        try:
+            key = uuid.UUID(job_id)
+        except ValueError:
+            return True
+        with self._session() as session:
+            value = session.execute(
+                select(jobs.c.cancel_requested_at).where(
+                    jobs.c.id == key,
+                    jobs.c.worker_id == claim.worker_id,
+                    jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                )
+            ).scalar_one_or_none()
+        return value is not None
+
+    def request_cancel(self, job_id: str) -> str:
+        """
+        Idempotent cancellation request (§3.7).
+
+        `queued` -> terminal `cancelled` immediately; `running` -> `cancelling`
+        with a timestamp, so the worker acknowledges at its next checkpoint.
+        """
+        try:
+            key = uuid.UUID(job_id)
+        except ValueError as error:
+            raise JobNotFoundError(job_id) from error
         with self._session() as session, session.begin():
             now = self._db_now(session)
+            queued = session.execute(
+                update(jobs)
+                .where(jobs.c.id == key, jobs.c.status == "queued")
+                .values(
+                    status="cancelled",
+                    cancel_requested_at=now,
+                    finished_at=now,
+                    updated_at=now,
+                )
+            )
+            if _affected(queued) == 1:
+                return "cancelled"
+            running = session.execute(
+                update(jobs)
+                .where(jobs.c.id == key, jobs.c.status.in_(("running", "cancelling")))
+                .values(
+                    status="cancelling",
+                    cancel_requested_at=now,
+                    updated_at=now,
+                )
+            )
+            if _affected(running) == 1:
+                return "cancelling"
+            row = session.execute(select(jobs.c.status).where(jobs.c.id == key)).scalar_one_or_none()
+            if row is None:
+                raise JobNotFoundError(job_id)
+            return str(row)
+
+    def acknowledge_cancel(self, job_id: str, claim: Claim) -> None:
+        """Worker acknowledged cancellation; fenced by the claim token."""
+        with self._session() as session, session.begin():
+            now = self._db_now(session)
+            session.execute(
+                update(jobs)
+                .where(
+                    jobs.c.id == uuid.UUID(job_id),
+                    jobs.c.status == "cancelling",
+                    jobs.c.worker_id == claim.worker_id,
+                    jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                )
+                .values(
+                    status="cancelled",
+                    phase="cancelled",
+                    lease_token=None,
+                    lease_until=None,
+                    finished_at=now,
+                    updated_at=now,
+                )
+            )
+
+    def succeed(self, job_id: str, result_key: str, *, ttl_seconds: float, claim: Claim | None = None) -> None:
+        """
+        Attach an immutable result and transition to `succeeded`.
+
+        Fenced by `claim` when supplied: a stale/cancelled worker affects 0 rows
+        and must NOT expose its result. TTL starts on successful completion.
+        """
+        with self._session() as session, session.begin():
+            now = self._db_now(session)
+            conditions = [jobs.c.id == uuid.UUID(job_id), jobs.c.status == "running"]
+            if claim is not None:
+                conditions += [
+                    jobs.c.worker_id == claim.worker_id,
+                    jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                    jobs.c.lease_until > now,
+                    jobs.c.cancel_requested_at.is_(None),
+                ]
             result = session.execute(
                 update(jobs)
-                .where(jobs.c.id == uuid.UUID(job_id), jobs.c.status == "running")
+                .where(*conditions)
                 .values(
                     status="succeeded",
                     phase="completed",
@@ -337,21 +484,34 @@ class JobRepository:
             )
             if _affected(result) != 1:
                 self.get(job_id)
-                raise IllegalTransitionError("succeed requires a running job")
+                raise IllegalTransitionError("succeed requires a live owned lease")
 
-    def fail(self, job_id: str, error_code: str, *, retryable: bool, max_attempts: int) -> str:
-        """Record a failure; retryable jobs with attempts left return to `queued`."""
+    def fail(
+        self,
+        job_id: str,
+        error_code: str,
+        *,
+        retryable: bool,
+        max_attempts: int,
+        claim: Claim | None = None,
+        backoff_seconds: float = 0.0,
+    ) -> str:
+        """Classified failure: bounded retry with backoff, or terminal `failed`."""
         with self._session() as session, session.begin():
             now = self._db_now(session)
-            row = session.execute(
-                select(jobs.c.attempt, jobs.c.status).where(jobs.c.id == uuid.UUID(job_id)).with_for_update()
-            ).first()
+            conditions = [jobs.c.id == uuid.UUID(job_id)]
+            if claim is not None:
+                conditions += [
+                    jobs.c.worker_id == claim.worker_id,
+                    jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                ]
+            row = session.execute(select(jobs.c.attempt, jobs.c.status).where(*conditions).with_for_update()).first()
             if row is None:
                 return "failed"
             if retryable and row.attempt < max_attempts:
                 session.execute(
                     update(jobs)
-                    .where(jobs.c.id == uuid.UUID(job_id))
+                    .where(*conditions)
                     .values(
                         status="queued",
                         phase="queued",
@@ -359,57 +519,81 @@ class JobRepository:
                         error_code=error_code,
                         lease_token=None,
                         lease_until=None,
+                        worker_id=None,
+                        next_attempt_at=now + timedelta(seconds=backoff_seconds),
                         updated_at=now,
                     )
                 )
                 return "queued"
             session.execute(
                 update(jobs)
-                .where(jobs.c.id == uuid.UUID(job_id))
+                .where(*conditions)
                 .values(
                     status="failed",
                     error_code=error_code,
                     lease_token=None,
                     lease_until=None,
+                    worker_id=None,
                     finished_at=now,
+                    result_expires_at=now + timedelta(seconds=self._settings.jobs_ttl_seconds),
+                    expires_at=now + timedelta(seconds=self._settings.jobs_ttl_seconds),
                     updated_at=now,
                 )
             )
             return "failed"
 
     def cancel(self, job_id: str) -> bool:
-        """Idempotent cancellation request for a queued/running job (404 unknown)."""
+        """Idempotent cancellation request (legacy bool shape for the API)."""
+        state = self.request_cancel(job_id)
+        return state in ("cancelled", "cancelling")
+
+    def expire_queued(self, *, queue_wait_seconds: float) -> int:
+        """Transition queued jobs past their queue deadline to `expired` (§3.9)."""
+        if queue_wait_seconds <= 0:
+            return 0
         with self._session() as session, session.begin():
             now = self._db_now(session)
             result = session.execute(
                 update(jobs)
-                .where(jobs.c.id == uuid.UUID(job_id), jobs.c.status.in_(("queued", "running", "cancelling")))
-                .values(
-                    status="cancelled",
-                    phase="cancelled",
-                    cancel_requested_at=now,
-                    lease_token=None,
-                    lease_until=None,
-                    finished_at=now,
-                    updated_at=now,
+                .where(
+                    jobs.c.status == "queued",
+                    jobs.c.created_at <= now - timedelta(seconds=queue_wait_seconds),
                 )
+                .values(status="expired", error_code="queue_timeout", updated_at=now)
             )
-            if _affected(result) == 0:
-                self.get(job_id)
-                return False
-            return True
+            return _affected(result)
 
     def expired_jobs(self, now: float) -> list[Job]:
-        """Terminal/succeeded jobs whose TTL has elapsed (for the sweeper)."""
+        """
+        Terminal rows eligible for GC (§3.9).
+
+        Active jobs are never swept: succeeded rows use `result_expires_at`
+        (set at completion), failed/cancelled rows use a separate retention
+        deadline (`expires_at` + `jobs_ttl_seconds` is applied by the worker).
+        """
         cutoff = datetime.fromtimestamp(now, UTC)
         with self._session() as session:
             rows = session.execute(
                 select(jobs).where(
-                    jobs.c.result_expires_at <= cutoff,
                     jobs.c.status.in_(("succeeded", "failed", "cancelled", "expired")),
+                    jobs.c.result_expires_at.is_not(None),
+                    jobs.c.result_expires_at <= cutoff,
                 )
             ).all()
         return [_row_to_job(row) for row in rows]
+
+    def mark_terminal_retention(self, *, retention_seconds: float) -> None:
+        """Give terminal rows without a result TTL a separate retention deadline."""
+        with self._session() as session, session.begin():
+            now = self._db_now(session)
+            session.execute(
+                update(jobs)
+                .where(
+                    jobs.c.status.in_(("failed", "cancelled", "expired")),
+                    jobs.c.result_expires_at.is_(None),
+                )
+                .values(result_expires_at=now + timedelta(seconds=retention_seconds))
+            )
 
     def remove_expired(self, job_ids: list[str]) -> None:
         """Delete expired rows after their artifacts are gone."""
