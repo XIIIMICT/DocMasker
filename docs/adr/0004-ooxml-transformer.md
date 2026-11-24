@@ -44,7 +44,9 @@ Phase 5 had added individual header/footer variants ad hoc.
 - Part-level XML still needs DOM memory; we do not claim a fully streaming DOCX
   pipeline (`docs/PERFORMANCE.md`).
 - `DOCX_TRANSFORMER_VERSION` / `RESULT_MANIFEST_VERSION` must be bumped when
-  output semantics change, or cached results become stale.
+  output semantics change, or cached results become stale. Bumped to **2** when
+  standalone docProps/relationship fields became separate containers; without
+  the bump the old cross-field key is served from Valkey.
 - Verification: `tests/test_ooxml.py` synthetic OPC fixtures (custom prefixes,
   >64 KiB text, shared parts, round-trip, strict rejection),
   `tests/test_mask_file.py`, `tests/test_unmask.py`, frontend e2e manifest
