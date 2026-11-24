@@ -1,0 +1,59 @@
+# Data services for DocMasker (mirrors ReportCollector's infra/compose.db.yaml).
+#
+# Started explicitly with `just db-stand`, NOT together with the application:
+# `just dev` / `just prod` list only app services and have no depends_on for
+# postgres/valkey. The application is designed for an already-provisioned
+# PostgreSQL/Valkey pair; schema creation is the explicit `just seed` / `just
+# migrate` step, never a startup race.
+#
+# Both services are reachable on the private compose networks (`net`, `net-dev`)
+# under their service names. PostgreSQL also publishes loopback-only 5432 so
+# host-side tools (seed, migrations, psql) can reach it.
+services:
+  postgres:
+    container_name: dm-postgres
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      PGDATA: /var/lib/postgresql/18/docker
+    volumes:
+      - postgres-data:/var/lib/postgresql/18/docker
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-15433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?} -d ${POSTGRES_DB:?}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [net, net-dev]
+
+  # Disposable TTL cache index (Phase 3). Cache loss must be safe.
+  valkey:
+    container_name: dm-valkey
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command:
+      [
+        "valkey-server",
+        "--appendonly",
+        "no",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+        "--requirepass",
+        "${VALKEY_PASSWORD:?}",
+      ]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD:?}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [net, net-dev]
+
+volumes:
+  postgres-data:
+    name: dm-postgres-data

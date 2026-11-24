@@ -41,8 +41,10 @@ text; drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
 
 | What | Command |
 |---|---|
-| Stack dev (hot-reload, compose `--watch`) | `just dev` |
-| Stack prod | `just prod` |
+| Data stand (PostgreSQL + Valkey, once) | `just db-stand` |
+| Seed / migrate PostgreSQL | `just seed` · `just migrate` · `just revision "msg"` |
+| Stack dev (hot-reload, compose `--watch`) | `just dev` (after `db-stand` + `seed`) |
+| Stack prod | `just prod` (after `db-stand` + `seed`) |
 | Back lint/format/type/test | `uv run --directory back ruff check --fix` · `ruff format` · `ty check` · `pytest -q` |
 | Front lint/format/type/test | `bun run --cwd front lint` · `format` · `typecheck` · `test` |
 | Everything at once | `just lint` · `just typecheck` · `just test` |

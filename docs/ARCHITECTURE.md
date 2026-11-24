@@ -21,14 +21,21 @@ The browser talks only to the front origin; the front proxies `/api/mask` to the
 
 ## Services and compose profiles
 
-`compose.yaml` (name: `docmasker`) defines two service pairs:
+`compose.yaml` (name: `docmasker`) defines the **application** pairs only:
 
 | Service | Container | Profile | What |
 |---|---|---|---|
 | `back` / `back-dev` | `dm-back` / `dm-back-dev` | prod / dev | FastAPI on Granian, port `BACKEND_PORT` |
 | `front` / `front-dev` | `dm-front` / `dm-front-dev` | prod / dev | Next.js standalone (prod) or `bun dev` (dev, hot-reload), port `FRONT_PORT` |
+| `worker` / `worker-dev` | `dm-worker` / `dm-worker-dev` | prod / dev | `python -m src.jobs.worker`, polls the PostgreSQL queue |
 
-The prod/dev stacks also run a dedicated worker container (`dm-worker` / `dm-worker-dev`, `python -m src.jobs.worker`) that polls the PostgreSQL job queue and executes large jobs with a bounded warm thread pool; PostgreSQL is the authoritative store, and the private `jobs-data` volume holds only id-keyed artifacts mounted into `back` and `worker`.
+PostgreSQL and Valkey are in `infra/compose.db.yaml` (included from
+`compose.yaml`) and are started **separately** with `just db-stand` — the
+ReportCollector pattern. App services have no `depends_on` for them;
+`just seed` / `just migrate` create the `jobs` schema explicitly before the
+stack starts. `DATABASE_URL`/`VALKEY_URL` use compose service names inside the
+private networks; host-side seed/migrate reach PostgreSQL via loopback
+`${POSTGRES_PORT:-15433}` (5432 belongs to ReportCollector).
 
 Key point: **ports and hosts are set once in the root `.env`** and spread into the Dockerfiles (build-arg `PORT`/`BACKEND_PORT`), port publishing, healthchecks, and internal URLs. All mandatory (`:?` in compose — fails with a clear error instead of staying silent). `BACKEND_INTERNAL_URL` is derived from the service name + `BACKEND_PORT` (e.g. `http://back-dev:8001` in dev).
 
