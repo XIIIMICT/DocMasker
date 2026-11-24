@@ -2,7 +2,6 @@
 
 import io
 import json
-import time
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,10 +20,10 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+def env(tmp_path: Path, pg_url: str, clean_jobs: None, monkeypatch: pytest.MonkeyPatch) -> Settings:
     settings = Settings.model_validate(
         {
-            "jobs_db_path": str(tmp_path / "jobs.sqlite3"),
+            "database_url": pg_url,
             "jobs_dir": str(tmp_path),
             "jobs_concurrency": 2,
             "jobs_max_attempts": 3,
@@ -181,10 +180,12 @@ def test_sweep_removes_expired_jobs_and_artifacts(env: Settings, worker: Worker)
     accepted = enqueue("mask_text", input_bytes=b"x", filename="")
     repo = JobRepository(env)
     store = ArtifactStore(env.jobs_dir)
-    # Force TTL expiry in the row.
-    with repo._connect() as conn:
-        conn.execute("UPDATE jobs SET expires_at = ? WHERE id = ?", (time.time() - 1, accepted.job_id))
+    # TTL cleanup targets terminal rows only (brief §3.9): publish a result
+    # with an already-expired TTL, then sweep.
+    repo.claim(lease_seconds=30, concurrency=1)
+    repo.succeed(accepted.job_id, "result", ttl_seconds=-1)
     worker.sweep()
     with pytest.raises(KeyError):
         repo.get(accepted.job_id)
     assert not store.exists(accepted.job_id, "input")
+    repo.dispose()

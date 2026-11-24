@@ -1,9 +1,15 @@
-"""Tests for the durable job store (ADR-0002): claims, leases, restart, TTL."""
+"""Tests for the durable job store (ADR-0003, PostgreSQL).
+
+Covers claims, leases, restart, TTL, staging and a PII-free schema. Requires
+TEST_DATABASE_URL.
+"""
 
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, inspect
 
 from src.config import Settings
 from src.jobs.repository import JobNotFoundError, JobQueueFullError, JobRepository
@@ -11,10 +17,10 @@ from src.jobs.storage import ArtifactStore, cleanup_artifacts
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def settings(tmp_path: Path, pg_url: str, clean_jobs: None) -> Settings:
     return Settings.model_validate(
         {
-            "jobs_db_path": str(tmp_path / "jobs.sqlite3"),
+            "database_url": pg_url,
             "jobs_dir": str(tmp_path),
             "jobs_concurrency": 2,
             "jobs_max_attempts": 3,
@@ -25,8 +31,12 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-def repo(settings: Settings) -> JobRepository:
-    return JobRepository(settings)
+def repo(settings: Settings) -> Iterator[JobRepository]:
+    repository = JobRepository(settings)
+    try:
+        yield repository
+    finally:
+        repository.dispose()
 
 
 @pytest.fixture
@@ -139,6 +149,10 @@ def test_cancel_only_affects_active_jobs(repo: JobRepository) -> None:
 def test_ttl_sweep_removes_rows_and_artifacts(repo: JobRepository, store: ArtifactStore) -> None:
     job = repo.create("mask_text", max_active=16, ttl_seconds=-1)
     store.write(job.id, "input", b"payload")
+    # TTL cleanup only targets terminal rows (brief §3.9): a live queued job
+    # must never be swept, even when its legacy expires_at stamp has passed.
+    repo.claim(lease_seconds=30, concurrency=1)
+    repo.succeed(job.id, "result", ttl_seconds=-1)
     expired = repo.expired_jobs(time.time())
     assert [j.id for j in expired] == [job.id]
     assert cleanup_artifacts(store, expired) == 1
@@ -148,13 +162,10 @@ def test_ttl_sweep_removes_rows_and_artifacts(repo: JobRepository, store: Artifa
         repo.get(job.id)
 
 
-def test_no_pii_columns_in_schema(repo: JobRepository) -> None:
-    import sqlite3
-    from contextlib import closing
-
-    with closing(sqlite3.connect(repo._db_path)) as conn:
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(jobs)")]
-    assert set(columns) == {
+def test_no_pii_columns_in_schema(settings: Settings) -> None:
+    inspector = inspect(create_engine(settings.database_url))
+    columns = {column["name"] for column in inspector.get_columns("jobs")}
+    assert {
         "id",
         "kind",
         "status",
@@ -165,11 +176,39 @@ def test_no_pii_columns_in_schema(repo: JobRepository) -> None:
         "created_at",
         "updated_at",
         "lease_until",
-        "expires_at",
-        "result_key",
-    }
-    for forbidden in ("text", "keys", "input", "filename", "pii"):
+        "result_artifact",
+        "lease_token",
+        "worker_id",
+        "cancel_requested_at",
+    } <= columns
+    for forbidden in ("text", "keys", "input", "filename", "pii", "payload"):
         assert forbidden not in columns
+
+
+def test_staging_is_not_claimable(settings: Settings) -> None:
+    repo = JobRepository(settings)
+    staged = repo.create_staging("mask_text", max_active=16, max_attempts=3, cache_key="k")
+    assert staged.status == "staging"
+    assert repo.claim(lease_seconds=30, concurrency=1) is None
+    assert staged.id in repo.reconcile_staging()
+    published = repo.publish_staging(staged.id, input_artifact="in", keys_artifact=None, ttl_seconds=3600)
+    assert published.status == "queued"
+    claimed = repo.claim(lease_seconds=30, concurrency=1)
+    assert claimed is not None
+    assert claimed.id == staged.id
+
+
+def test_concurrent_claims_never_share_a_lease(settings: Settings) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    repo = JobRepository(settings)
+    first = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    second = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = list(pool.map(lambda _: repo.claim(lease_seconds=30, concurrency=2), range(2)))
+    ids = [claim.id for claim in claims if claim is not None]
+    assert sorted(ids) == sorted([first.id, second.id])
+    assert len(ids) == len(set(ids))
 
 
 def test_artifact_paths_are_id_scoped(store: ArtifactStore) -> None:

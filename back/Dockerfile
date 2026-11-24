@@ -25,6 +25,8 @@ RUN addgroup -S appgroup && adduser -S -G appgroup -h /app appuser && \
     chown -R appuser:appgroup /app
 
 COPY --chown=appuser:appgroup src/ src/
+COPY --chown=appuser:appgroup migrations/ migrations/
+COPY --chown=appuser:appgroup alembic.ini ./
 COPY --chown=appuser:appgroup --from=deps /app/.venv/ ./.venv/
 USER appuser
 

@@ -1,6 +1,9 @@
 # ADR-0002: Durable job execution for large documents
 
-- Status: accepted (2026-11-23)
+- Status: **superseded by ADR-0003** (2026-11-24) — the durable-job *concept*
+  stays, but the SQLite substrate was replaced with PostgreSQL/Valkey. This
+  document is kept as the record of the 2026-11-23 decisions; SQLite-specific
+  statements below are historical.
 - Stage: production-readiness stage 4 (findings F-01, F-02, F-07, F-08 / request §6)
 - Related: ADR-0001 (profiles), `docs/PRODUCTION_READINESS.md` baseline
 

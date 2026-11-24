@@ -32,10 +32,10 @@ text; drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
   to ReportCollector — do not reuse). `compose.yaml` profiles `prod`/`dev`.
 - The browser calls only its own origin; the front proxies `/api/*` to the back
   server-side via `BACKEND_INTERNAL_URL` (no CORS for the browser).
-- Durable jobs (ADR-0002): `just dev`/`just prod` start the worker too; the
-  private `jobs-data` volume holds SQLite WAL + id-keyed artifacts, shared by
-  `back` and `worker`. Large inputs become `202` jobs; the four sync endpoints
-  stay for small ones. Never log inputs/keys.
+- Durable jobs (ADR-0002 / PostgreSQL substrate ADR-0003): `just dev`/`just prod`
+  start the worker **plus** `postgres` and `valkey`; PostgreSQL is the
+  authoritative job store, the private `jobs-data` volume holds only id-keyed
+  artifacts. Never log inputs/keys; `/api/jobs/{id}/result` is one flat ZIP.
 
 ## Commands (from the repo root)
 

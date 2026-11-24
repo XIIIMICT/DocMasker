@@ -5,6 +5,40 @@ name: docmasker
 # healthcheck. Все обязательные (:? — при отсутствии compose падает с понятной
 # ошибкой, а не молча подставляет дефолт).
 services:
+  # Authoritative job state (ADR-0003). Private: no host/network port in prod.
+  postgres:
+    profiles: [prod, dev]
+    container_name: dm-postgres
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      PGDATA: /var/lib/postgresql/18/docker
+    volumes:
+      - postgres-data:/var/lib/postgresql/18/docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?} -d ${POSTGRES_DB:?}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [net, net-dev]
+
+  # Disposable TTL cache index (Phase 3). Cache loss must be safe.
+  valkey:
+    profiles: [prod, dev]
+    container_name: dm-valkey
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [net, net-dev]
+
   back:
     profiles: [prod]
     container_name: dm-back
@@ -20,6 +54,13 @@ services:
         required: true
     environment:
       BACKEND_CORS_ORIGINS: '${BACKEND_CORS_ORIGINS:-["http://localhost:5001","http://127.0.0.1:5001","${AUTH_APP_ORIGIN:?}"]}'
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      VALKEY_URL: redis://valkey:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
     ports:
       # Loopback-only: the API stays reachable for local testing but never
       # from the network — the browser must go through the front proxy.
@@ -30,7 +71,7 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      # Private SQLite WAL + id-keyed artifact spool, shared with the worker.
+      # Private id-keyed artifact spool, shared with the worker (ADR-0003).
       - jobs-data:/app/jobs
     networks: [net]
 
@@ -49,6 +90,10 @@ services:
     volumes:
       - jobs-data:/app/jobs
     depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
       back:
         condition: service_healthy
     networks: [net]
@@ -67,6 +112,10 @@ services:
     volumes:
       - jobs-data:/app/jobs
     depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
       back-dev:
         condition: service_started
     networks: !override [net-dev]
@@ -168,7 +217,10 @@ networks:
     name: dm-net-dev
 
 volumes:
-  # Never published: job inputs/results and the SQLite WAL database stay on
-  # this private volume, shared only by back and worker (ADR-0002).
+  # Never published: job input/result artifacts stay on this private volume,
+  # shared only by back and worker (ADR-0003).
   jobs-data:
     name: dm-jobs-data
+  # PostgreSQL is the authoritative job store; this volume is backed up.
+  postgres-data:
+    name: dm-postgres-data

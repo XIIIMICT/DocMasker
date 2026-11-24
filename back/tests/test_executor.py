@@ -42,7 +42,7 @@ async def test_health_stays_responsive_during_mask() -> None:
 
 async def test_run_cpu_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     """Over the semaphore cap a sync operation fails fast with 429 semantics."""
-    settings = Settings.model_validate({"jobs_concurrency": 0})
+    settings = Settings.model_validate({"jobs_concurrency": 1})
     monkeypatch.setattr("src.config.get_settings", lambda: settings)
     monkeypatch.setattr("src.masking.executor.get_settings", lambda: settings)
     reset_executor()
@@ -59,10 +59,10 @@ async def test_run_cpu_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
         return await run_cpu(blocking)
 
-    # Acquire the only slot directly through run_cpu with a blocking fn.
-    task = asyncio.create_task(hold())
+    # Acquire every slot (limit = jobs_concurrency * 2 = 2) with blocking fns.
+    tasks = [asyncio.create_task(hold()) for _ in range(2)]
     await asyncio.sleep(0.05)
     with pytest.raises(ExecutorBusyError):
         await run_cpu(slow)
     gate.set()
-    assert await task == "held"
+    assert await asyncio.gather(*tasks) == ["held", "held"]

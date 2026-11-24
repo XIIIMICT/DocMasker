@@ -1,6 +1,7 @@
 # ADR-0003: PostgreSQL job foundation (Phase 1 design)
 
-- Status: proposed (Phase 0 design confirmation, 2026-11-24)
+- Status: **accepted** (Phase 0 design 2026-11-24; Phase 1 implemented and
+  verified the same day)
 - Implements: `docs/DocMasker_Production_Readiness_Implementation_Brief.md`
   §2 (PostgreSQL migration/infrastructure), §3.1–3.4 (job record, transitions,
   atomic enqueue, `SKIP LOCKED` claim), §13 Phase 0/1
@@ -151,15 +152,25 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
 
 ## Definition of done (Phase 1 exit, §13)
 
-- [ ] PostgreSQL + Valkey Compose services (prod/dev/CI), private in prod,
+- [x] PostgreSQL + Valkey Compose services (prod/dev/CI), private in prod,
       healthcheck-gated startup, placeholder credentials in `.env.example`,
-      startup validation of numeric settings.
-- [ ] Alembic migration creating the `jobs` table above; empty-DB smoke test.
-- [ ] New sync SQLAlchemy repository with the primitives above; no
-      `sqlite3`, `jobs.sqlite3`, `journal_mode` references remain.
-- [ ] Integration tests against real PostgreSQL: CRUD, queue capacity,
-      concurrent claim (two workers never get the same lease), restart
-      (new repository instance over the same DB), staging reconciliation.
-- [ ] Migration/backup notes in `docs/OPERATIONS.md` (or this ADR until Phase 8).
-- [ ] Existing sync endpoints + e2e smoke stay green on the live dev stack.
-- [ ] ADR-0002 marked superseded; `AGENTS.md`/`docs/*` updated in the same change.
+      startup validation of numeric settings and `DATABASE_URL`.
+- [x] Alembic migration `0001_jobs` creating the `jobs` table above; empty-DB
+      smoke test (CI `alembic upgrade head` + isolated prod-image stack).
+- [x] New sync SQLAlchemy repository with the primitives above; no
+      `sqlite3`, `jobs.sqlite3`, `journal_mode`, `JOBS_DB_PATH` references
+      remain in code/config.
+- [x] Integration tests against real PostgreSQL: CRUD, queue capacity,
+      concurrent `SKIP LOCKED` claim, restart, staging reconciliation, lease
+      reclaim (`TEST_DATABASE_URL`; 180 tests, 38 skip offline).
+- [x] Migration/backup notes in this ADR; ADR-0002 marked superseded;
+      `AGENTS.md`/`docs/*` updated in the same change.
+- [x] Existing sync endpoints + e2e smoke green on the live dev stack and on
+      the isolated CI production-image stack (22/22 each, incl. the 202 job
+      path through the PostgreSQL-backed worker).
+
+**Not in Phase 1 (Phase 2):** independent heartbeat loop, cooperative
+cancellation, error classification/backoff, full TTL/GC, immutable result
+publication, frontend cancel/resume, failure-injection crash-window tests.
+The repository already carries the columns/primitives (staging, fencing token,
+`cancelling`, separate TTL timestamps) those phases build on.

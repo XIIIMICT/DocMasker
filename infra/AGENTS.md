@@ -7,21 +7,25 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
 ## Compose layout
 
 - `compose.yaml` (name `docmasker`) has profiles `prod` and `dev`:
-  - prod: `back`, `worker`, `front` (`dm-back`, `dm-worker`, `dm-front`).
-  - dev: `back-dev`, `worker-dev`, `front-dev` (`dm-*-dev`), built with
+  - prod: `postgres`, `valkey`, `back`, `worker`, `front`.
+  - dev: the same infra + `back-dev`, `worker-dev`, `front-dev`, built with
     `develop.watch` (`--watch`) syncing `back/src` and `front/src`.
-- `just dev` / `just prod` start **all three services** (the worker is not
-  optional — large jobs need it). `just prod` = `up -d back worker front`;
-  `just dev` = `up --build --watch back-dev worker-dev front-dev`.
+- `just dev` / `just prod` start **all** services (the worker and the database
+  are not optional). `just prod` = `up -d back worker front` (compose pulls in
+  the healthy `postgres`/`valkey` dependencies); `just dev` = `up --build
+  --watch back-dev worker-dev front-dev`.
 - `infra/compose.ci.yaml` is the isolated CI stack: back **18001**, front
-  **15001** (loopback-only), never loads the developer's `.env`, and mounts the
-  private `jobs-data` volume into `back` and `worker`. CI boots
-  `back worker front` with `--wait --wait-timeout 180`.
-- A private volume `jobs-data` (`dm-jobs-data`) holds the SQLite WAL database
-  (`JOBS_DB_PATH=/app/jobs/jobs.sqlite3`) and id-keyed input/result artifacts
-  (`JOBS_DIR=/app/jobs`). It is **never published** and must stay shared by
-  `back` and `worker` only. `back/Dockerfile` creates `/app/jobs` owned by
-  `appuser` — without it the worker exits with `unable to open database file`.
+  **15001** (loopback-only); postgres/valkey are **private** (no published
+  ports), never load the developer's `.env`, and the `jobs-data` volume is
+  mounted into `back` and `worker`. CI boots `back worker front` with
+  `--wait --wait-timeout 180` after the infra healthchecks pass.
+- Two private volumes: `postgres-data` (`dm-postgres-data`) holds the
+  authoritative job state and **must be backed up**; `jobs-data`
+  (`dm-jobs-data`) holds id-keyed input/result artifacts (`JOBS_DIR=/app/jobs`),
+  shared by `back` and `worker` only. Neither is published. PostgreSQL does
+  **not** make local files distributed — multi-host workers need a shared or
+  object-storage adapter (out of scope). `back/Dockerfile` creates `/app/jobs`
+  owned by `appuser`.
 
 ## Ports & env
 
@@ -33,6 +37,13 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
   (loopback-only; the browser must go through the front proxy).
   `BACKEND_INTERNAL_URL` is derived from the compose service name +
   `BACKEND_PORT`; the browser calls only its own origin (no CORS).
+- New infrastructure settings in `.env.example` (ADR-0003): `DATABASE_URL`
+  (`postgresql+psycopg://…`), `POSTGRES_USER/PASSWORD/DB`, `DB_POOL_SIZE`,
+  `DB_MAX_OVERFLOW`, `DB_CONNECT_TIMEOUT_SECONDS`, `VALKEY_URL`,
+  `CACHE_ENABLED`, `CACHE_TTL_SECONDS`, `CACHE_NAMESPACE_VERSION`,
+  `WORKER_SHUTDOWN_GRACE_SECONDS`. Production startup fails clearly when
+  credentials are missing (`:?` in compose). Valkey has no auth/ACL yet —
+  Phase 3 will add it; it stays private to the internal network.
 - Job thresholds/limits in `.env.example`: `SYNC_MAX_TEXT_CHARS`,
   `SYNC_MAX_DOCX_BYTES`, `SYNC_MAX_DOCX_PARAGRAPHS`, `JOBS_MAX_ACTIVE`,
   `JOBS_CONCURRENCY`, `JOBS_MAX_ATTEMPTS`, `JOBS_LEASE_SECONDS`,
@@ -46,9 +57,11 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
   and readiness is deferred to stage 6** — do not claim readiness checks
   exist. Worker drains its pool on SIGTERM (see `jobs/worker.py`).
 - `--reload-ignore-dirs logs,jobs` in the dev Dockerfile is required: Granian
-  watches `/app/jobs`, and every SQLite WAL write used to trigger an endless
-  reload loop. Restart the dev stack with `just dev` (compose `--watch`),
-  never `docker cp`.
+  watches `/app/jobs` and the artifact spool changes on every job write.
+  Restart the dev stack with `just dev` (compose `--watch`), never `docker cp`.
+- `back`/`worker` depend on **healthy** `postgres`/`valkey`, not merely started
+  containers. Alembic migrations are an explicit CI/deployment step
+  (`uv run --directory back alembic upgrade head`), never a startup race.
 
 ## Containers & TLS (current state, stage 6 deferred)
 
