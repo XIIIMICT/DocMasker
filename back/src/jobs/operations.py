@@ -3,9 +3,8 @@ Execute one job's operation over its spool artifacts (ADR-0002).
 
 This is the single place that reuses the existing masking services for the
 worker: no detection logic is duplicated, and the sync endpoints keep their
-thin orchestration. Each call runs in a worker thread with its own warm
-per-thread masker (`get_masker_for` is lru_cached, but we pass an explicit
-one so thread isolation is guaranteeable).
+thin orchestration. Each call runs in a worker thread; the masker itself is a
+process-wide cached singleton built from one immutable config snapshot.
 """
 
 import json
@@ -16,8 +15,7 @@ from typing import Any
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from src.masking.docx_validation import upload_limits, validate_docx_package
 from src.masking.mapping import placeholders_from_document, validate_keys_yaml
-from src.masking.profiles import get_profile
-from src.masking.rule_based import get_masker_for
+from src.masking.rule_based import get_masker
 from src.masking.schemas import MaskRequest, UnmaskRequest
 from src.masking.service import mask_document, mask_stats, unmask_document
 
@@ -32,14 +30,6 @@ class JobExecutionError(Exception):
         super().__init__(code)
         self.code = code
         self.retryable = retryable
-
-
-def _read_text(store: ArtifactStore, job_id: str, suffix: str) -> str:
-    return store.read(job_id, suffix).decode("utf-8")
-
-
-def _profile_id(store: ArtifactStore, job_id: str) -> str | None:
-    return _read_text(store, job_id, "profile") if store.exists(job_id, "profile") else None
 
 
 def execute(
@@ -67,18 +57,13 @@ def execute(
             raise JobExecutionError("artifact_io", retryable=True) from error
 
     kind = safe_read("kind").decode("utf-8")
-    profile_id = _read_text(store, job_id, "profile") if store.exists(job_id, "profile") else None
-    try:
-        profile = get_profile(profile_id)
-        masker = get_masker_for(profile.profile_id)
-    except Exception as error:
-        raise JobExecutionError("invalid_configuration") from error
+    masker = get_masker()
 
     progress("validation", 10)
 
     if kind == "mask_text":
         text = safe_read("input").decode("utf-8")
-        request = MaskRequest(text=text, profile_id=profile_id)
+        request = MaskRequest(text=text)
         masked, entities, keys = mask_document(request)
         check()
         progress("detection", 60)

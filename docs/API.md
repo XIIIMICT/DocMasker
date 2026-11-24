@@ -51,36 +51,29 @@ Liveness probe used by the Docker healthcheck. `{"status": "ok"}`, always 200 �
 the masker is deterministic, there is no model to load or warm up. Splitting
 liveness/readiness is deferred to stage 6.
 
-## `GET /api/profiles`
+## `GET /api/labels`
 
-Read-only profile registry (ADR-0001). No mutation endpoint; profiles are
-code-configured. Response (`ProfilesResponse`):
+The single canonical label catalogue (Phase 4). Read-only; loaded from
+`back/config/masking/labels.yaml`, no `order` field (the sequence defines
+keys-section order). Response (`LabelsResponse`):
 
 ```json
 {
-  "profiles": [
-    {
-      "profile_id": "russian-default",
-      "version": 1,
-      "display_name": "Русский по умолчанию",
-      "labels": [
-        {"id": "person", "title": "Физлица", "order": 0}
-      ]
-    }
+  "schema_version": 1,
+  "labels": [
+    {"id": "person", "title": "Физлица"},
+    {"id": "phone", "title": "Номера телефонов"}
   ]
 }
 ```
 
-The built-in profile reports labels `person, phone, email, link, address,
-organization` with Russian section titles (keys-file order) `Физлица, Номера
-телефонов, Email, Ссылки, Организации, Адреса`. Mask endpoints accept an
-optional `profile_id` (omitted → `russian-default`). Setting `MASK_LABELS` in
-the environment now fails backend startup with a Russian error.
+`GET /api/profiles` and `profile_id` were removed; setting `MASK_LABELS` in the
+environment still fails backend startup. The frontend consumes a generated
+copy of this catalogue (`gen:labels`, CI freshness check).
 
 ## `POST /api/mask`
 
-Body (`MaskRequest`): `{"text": "...", "profile_id": "…"}` (`profile_id`
-optional). Response (`MaskResponse`, 200):
+Body (`MaskRequest`): `{"text": "..."}`. Response (`MaskResponse`, 200):
 
 ```json
 {
@@ -116,7 +109,7 @@ validated by `validate_keys_yaml` first (see `docs/TEMPLATES.md`): invalid →
 
 ## `POST /api/mask-file`
 
-Multipart: `file` (`.docx`) + optional `profile_id` form field. Response is a
+Multipart: `file` (`.docx`). Response is a
 **ZIP** (200, `application/zip`, `Content-Disposition: attachment`) — not a bare
 `.docx` — containing:
 
@@ -172,7 +165,6 @@ polls and downloads the result with the *same* result panes/download UX.
 | `text` | input for `*_text` kinds (UTF-8) |
 | `file` | `.docx` for `*_file` kinds |
 | `keys` | demasking keys YAML for `unmask_*` kinds |
-| `profile_id` | optional masking profile |
 | `filename` | original file name for the result archive |
 
 Response 202 (`JobAccepted`):

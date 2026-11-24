@@ -1,6 +1,11 @@
 # ADR-0001: Masking profiles, detector registry, and keys schema v2
 
-- Status: accepted (2026-11-23)
+- Status: **superseded by Phase 4** (2026-11-24) — the profile abstraction was
+  removed in favor of one immutable masking configuration plus validated
+  exception files (`docs/adr/0003-postgres-job-foundation.md`, §5 of the
+  implementation brief). Kept as the record of the 2026-11-23 decisions;
+  profile-specific statements below are historical. The keys-file `Профиль`
+  marker survives as ignored legacy metadata (§5.2).
 - Stage: production-readiness stage 3 (finding F-12 / request §3.8, §5)
 
 ## Context

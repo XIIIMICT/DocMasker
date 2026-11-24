@@ -1,0 +1,6 @@
+schema_version: 1
+# Literal character sets consumed by the algorithms (not code).
+url_trim_chars: ".,;:!?)]}»”’\"'"
+organization_separators: " \t\n,;.-–—"
+address_trim_chars: " \t\n,.;:-"
+# Tuning constants (algorithm parameters, not vocabulary) stay in Python.

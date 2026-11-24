@@ -73,7 +73,8 @@ services:
       CACHE_NAMESPACE_VERSION: ${CACHE_NAMESPACE_VERSION:-1}
       MASKING_RULESET_VERSION: ${MASKING_RULESET_VERSION:-1}
       RESULT_MANIFEST_VERSION: ${RESULT_MANIFEST_VERSION:-1}
-      MASKING_CONFIG_DIGEST: ${MASKING_CONFIG_DIGEST:-none}
+      MASKING_CONFIG_DIGEST: ${MASKING_CONFIG_DIGEST:-auto}
+      MASKING_CONFIG_DIR: ${MASKING_CONFIG_DIR:-/app/config/masking}
       KEYS_FORMAT_VERSION: ${KEYS_FORMAT_VERSION:-1}
       DOCX_TRANSFORMER_VERSION: ${DOCX_TRANSFORMER_VERSION:-1}
     depends_on:
@@ -93,6 +94,8 @@ services:
     volumes:
       # Private id-keyed artifact spool, shared with the worker (ADR-0003).
       - jobs-data:/app/jobs
+      # Private runtime exceptions: mounted read-only, never baked into the image.
+      - ./back/config/masking/exceptions.yaml:/app/config/masking/exceptions.yaml:ro
     networks: [net]
 
   worker:
@@ -109,6 +112,8 @@ services:
     command: ["python", "-m", "src.jobs.worker"]
     volumes:
       - jobs-data:/app/jobs
+      # Private runtime exceptions: mounted read-only, never baked into the image.
+      - ./back/config/masking/exceptions.yaml:/app/config/masking/exceptions.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,6 +136,8 @@ services:
     command: ["python", "-m", "src.jobs.worker"]
     volumes:
       - jobs-data:/app/jobs
+      # Private runtime exceptions: mounted read-only, never baked into the image.
+      - ./back/config/masking/exceptions.yaml:/app/config/masking/exceptions.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy

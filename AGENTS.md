@@ -51,9 +51,9 @@ text; drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
 
 ## API (one-line index; full contract — `docs/API.md`)
 
-- `GET /health` — liveness, always `ok` (no model to load). `GET /api/profiles`
-  — read-only profile registry (ADR-0001); mask endpoints accept an optional
-  `profile_id` (omitted = `russian-default`). Setting `MASK_LABELS` fails startup.
+- `GET /health` — liveness, always `ok` (no model to load). `GET /api/labels`
+  — the single canonical label catalogue (`labels.yaml`, §5); `profile_id` and
+  `GET /api/profiles` were removed in Phase 4. Setting `MASK_LABELS` fails startup.
 - `POST /api/mask` / `/api/unmask` — text → JSON (`text`, `stats` aggregates,
   `keys` YAML) / masked text + keys → restored text.
 - `POST /api/mask-file` / `/api/unmask-file` — `.docx` → a ZIP (masked doc + keys
@@ -123,7 +123,7 @@ plain placeholder→value substitution. **Landmines for all of this live in
   (landmines, commands, exact versions).
 - `docs/ARCHITECTURE.md` — system diagram, env vars, pipeline, canonical
   toolchain version table. `docs/API.md` — HTTP contract. `docs/TEMPLATES.md`
-  — keys/profiles/recipes. `docs/PERFORMANCE.md` — benchmarks and limits.
+  — keys/masking configuration/exception recipes. `docs/PERFORMANCE.md` — benchmarks and limits.
 - `docs/WORKFLOW.md` — environment, quality commands, languages,
   commits/branching, CI, definition of done, working principles.
 - `docs/PRODUCTION_READINESS.md` — living findings matrix (statuses, evidence,

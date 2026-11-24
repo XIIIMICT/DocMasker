@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import api_router
 from .config import get_settings
+from .masking.config import get_config
 
 settings = get_settings()
 LOGGER = logging.getLogger("docmasker.application")
@@ -17,8 +18,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    """No warm-up is needed: the masker is deterministic and starts instantly."""
-    LOGGER.info("DocMasker starting.")
+    """Load the immutable masking config snapshot (fail fast on invalid data)."""
+    config = get_config()
+    LOGGER.info(
+        "DocMasker starting (masking labels=%d, config digest=%s).",
+        len(config.labels.entries),
+        config.digest[:12],
+    )
     yield
     LOGGER.info("DocMasker stopped.")
 

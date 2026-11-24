@@ -1,0 +1,33 @@
+schema_version: 1
+# Literal vocabulary only. Never regex/code.
+legal_form_abbreviations:
+  - ООО
+  - ОАО
+  - ЗАО
+  - ПАО
+  - АО
+  - ИП
+  - ФГБУ
+  - ГБУ
+  - МБУ
+  - ФГУП
+  - ГУП
+  - МУП
+  - НКО
+  - ОО
+# Flat lemma sequences (nominative phrase lemmatised once); matched in any case.
+legal_form_phrases:
+  - [акционерный, общество]
+  - [публичный, акционерный, общество]
+  - [закрытый, акционерный, общество]
+  - [открытый, акционерный, общество]
+  - [общество, с, ограниченный, ответственность]
+  - [унитарный, предприятие]
+  - [индивидуальный, предприниматель]
+lead_words:
+  - организация
+  - компания
+  - фирма
+  - предприятие
+  - учреждение
+# Structural separators / quote styles / thresholds stay in Python (algorithm).

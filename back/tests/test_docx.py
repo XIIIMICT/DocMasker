@@ -146,22 +146,9 @@ def test_hyperlinked_email_collapses_to_plain_mask() -> None:
     assert [entity.label for entity in entities] == ["email"]
 
 
-def test_alternative_profile_masks_only_its_labels_and_keys_still_restore() -> None:
-    # ADR-0001 extensibility criterion: a profile with fewer detectors works
-    # without touching the orchestrator, and its keys v2 file restores via the
-    # default registered titles.
-    from src.masking.profiles import LabelMeta, MaskingProfile
-
-    profile = MaskingProfile(
-        profile_id="emails-only",
-        version=1,
-        display_name="Только email",
-        labels=(
-            LabelMeta(id="email", title="Email", order=0),
-            LabelMeta(id="person", title="Физлица", order=1),
-        ),
-        detectors=("email",),
-    )
+def test_label_subset_masks_only_its_labels_and_keys_still_restore() -> None:
+    # Phase 4: one configuration, but tests can narrow the label set without
+    # touching the orchestrator; the keys file still restores via the catalogue.
     doc = DocxDocument()
     p = doc.add_paragraph()
     p.add_run("Автор Иван Петров, почта ")
@@ -169,15 +156,15 @@ def test_alternative_profile_masks_only_its_labels_and_keys_still_restore() -> N
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, entities, keys = mask_docx_in_memory(out.getvalue(), RuleBasedMasker(profile))
+    masked_bytes, entities, keys = mask_docx_in_memory(out.getvalue(), RuleBasedMasker.for_labels(["email"]))
 
     # The person is untouched (no person detector); the email is masked.
     assert [entity.label for entity in entities] == ["email"]
     document = DocxDocument(io.BytesIO(masked_bytes))
     assert "Иван Петров" in document.paragraphs[0].text
     assert "[EMAIL_1]" in document.paragraphs[0].text
-    # The keys file records the producing profile.
-    assert "Профиль: emails-only" in keys.to_yaml()
+    # The legacy marker is still written (one runtime configuration now).
+    assert "Профиль: russian-default" in keys.to_yaml()
     # Restoring works through the default registered titles.
     placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
     restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)

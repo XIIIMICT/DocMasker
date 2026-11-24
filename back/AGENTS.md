@@ -13,9 +13,10 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
 - `uv run --directory back ruff check --fix` · `ruff format` · `ty check` ·
   `pytest -q`. Tests are offline/deterministic, `filterwarnings=error`,
   **≥80% branch coverage** enforced in CI. Test files: `test_rule_based.py`,
-  `test_mask.py`, `test_mapping.py`, `test_keys_v2.py`, `test_profiles.py`,
-  `test_profile_api.py`, `test_docx.py`, `test_mask_file.py`,
-  `test_unmask.py`, `test_jobs_*.py`, `test_executor.py`.
+  `test_mask.py`, `test_mapping.py`, `test_keys_v2.py`, `test_config.py`,
+  `test_labels_api.py`, `test_docx.py`, `test_mask_file.py`, `test_unmask.py`,
+  `test_jobs_*.py`, `test_cache.py`, `test_executor.py`. Config validation CLI:
+  `uv run --directory back python -m src.masking.validate_config`.
 
 ## Critical landmines
 
@@ -29,8 +30,8 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
    build.** `MorphVocab()` + extractors load the pymorphy2 dictionary on
    first construction, so the masker is cached (`get_masker`, `lru_cache`) —
    never build a `RuleBasedMasker` per request. Tests construct one per test
-   on purpose (isolated, still fast). The worker keeps one warm masker per
-   thread (`get_masker_for` per profile).
+   on purpose (isolated, still fast). Phase 4 removed profiles: there is exactly
+   one configuration and one process-wide warm masker (`get_masker`, `cache`).
 3. **`natasha` extractors are not wired the way the docs imply.** In 1.6 the
    *multi-match* API is `extractor(text)` (calling the instance) —
    `extractor.find(text)` returns only the **first** `Match` (and `Match` is
@@ -122,13 +123,12 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     reverses a parsed keys file.
 14. **Keys YAML uses `yaml12` (the `py-yaml12` package), not PyYAML.** YAML
     1.2 preserves quoting (`АО "Росхим"` stays quoted); PyYAML 1.1 would
-    mangle it. Writers emit one `Профиль: <id>` marker (default
-    `russian-default` when no profile is supplied) ahead of the Russian
-    sections; readers accept that shape and the legacy envelope-less one (a
-    file without the marker restores as the default profile). **No
-    `версия`/`версия_профиля` keys** are written or read — the pre-prod v2
-    envelope was retired, those keys are now unknown sections. Section titles
-    come from the profile registry (`profiles.py::registered_titles`); empty
+    mangle it. Writers emit the legacy `Профиль: russian-default` marker ahead
+    of the Russian sections; readers accept that shape (including a foreign
+    marker value), the legacy envelope-less one, and ignore the marker as
+    metadata. **No `версия`/`версия_профиля` keys** are written or read — the
+    pre-prod v2 envelope was retired, those keys are now unknown sections.
+    Section titles come from the canonical `labels.yaml` catalogue; empty
     sections are omitted.
 15. **The `/api/mask-file` response is a ZIP, not a `.docx`.** It bundles
     `<base> (замаскированный).docx` + `<base> (ключи демаскировки).yaml`;
@@ -181,13 +181,24 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     `KeysValidationError` → 422 with a Russian `detail`; malformed/oversized/
     encrypted DOCX → 415/413; bounded queue/executor → 429; job result not
     ready → 409; unknown job id → 404. Unknown placeholders stay as-is.
-    `GET /api/profiles` is read-only; `profile_id` is optional on mask
-    requests (default `russian-default`). Setting `MASK_LABELS` fails startup.
-21. **Profiles are immutable & validated** (`masking/profiles.py`,
-    ADR-0001): label metadata, detector registry (`detectors.py`), always-mask
-    organizations as profile data. A new label = one detector + one registry
-    entry + one `LabelMeta`; a new profile = one config entry. `MASK_LABELS`
-    was removed with a loud startup error.
+    `GET /api/labels` publishes the canonical catalogue; `profile_id` and
+    `GET /api/profiles` were removed in Phase 4. Setting `MASK_LABELS` fails
+    startup.
+21. **One immutable masking configuration** (`masking/config.py`, Phase 4):
+    `back/config/masking/labels.yaml` is the single label catalogue (sequence
+    = keys-section order, no `order` field); all lexicons and
+    `always_mask`/`never_mask` exceptions are literal typed YAML loaded into
+    one validated snapshot at startup. Invalid YAML/duplicate/conflicting/
+    unknown entries fail startup (`MaskingConfigError`). The snapshot digest
+    feeds the cache key, so config changes invalidate cached results. The
+    private `exceptions.yaml` is gitignored; only synthetic values go into
+    `exceptions.example.yaml`. Validate without the app:
+    `uv run --directory back python -m src.masking.validate_config`.
+    `never_mask` suppresses only an exact whole detected span (never a larger
+    overlapping one); `always_mask` spans go through the normal overlap policy
+    and key numbering. Adding a label = one detector + one registry entry +
+    one `labels.yaml` row (and regenerate the front catalogue).
+    `MASK_LABELS` was removed with a loud startup error.
 22. **Valkey cache is an optimization, never a correctness dependency**
     (`jobs/cache.py`, Phase 3): keys are HMAC-SHA256 over a canonical
     fingerprint of exact input/keys bytes + normalized filename + every

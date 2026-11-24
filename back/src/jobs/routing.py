@@ -30,7 +30,6 @@ def enqueue(
     input_bytes: bytes,
     keys_bytes: bytes | None = None,
     filename: str = "",
-    profile_id: str | None = None,
 ) -> JobAccepted:
     """
     Staged, atomic enqueue (brief §3.3).
@@ -72,8 +71,6 @@ def enqueue(
         store.write(staged.id, "kind", kind.encode("ascii"))
         if keys_bytes is not None:
             store.write(staged.id, "keys", keys_bytes)
-        if profile_id is not None:
-            store.write(staged.id, "profile", profile_id.encode("ascii"))
     except Exception:
         repo.abort_staging(staged.id, "staging_failed")
         store.delete(staged.id)

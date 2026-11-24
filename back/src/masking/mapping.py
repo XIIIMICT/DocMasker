@@ -32,18 +32,15 @@ profile.
 
 import re
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING
 
 import yaml12
 
+from .config import get_config
 from .constants import mask_marker
-from .profiles import DEFAULT_PROFILE, registered_titles
 
-#: Id written into the `Профиль` marker when no profile was supplied.
-DEFAULT_PROFILE_ID = DEFAULT_PROFILE.profile_id
-
-if TYPE_CHECKING:
-    from .profiles import MaskingProfile
+#: The `Профиль` marker is legacy metadata (one runtime config now); it is
+#: still written for compatibility with existing keys files and ignored on read.
+LEGACY_PROFILE_MARKER = "russian-default"
 
 #: A top-level section header line (`Физлица:`), used to spot duplicate sections.
 _SECTION_RE = re.compile(r"^([^\s#][^:]*):\s*$")
@@ -59,8 +56,8 @@ KeysSection = list[str]
 #: The whole keys document: Russian title -> ordered values.
 KeysDocument = dict[str, KeysSection]
 
-#: Reverse of the registered section titles: a Russian title back to its label.
-TITLE_LABELS: dict[str, str] = {title: label for label, title in registered_titles().items()}
+#: Reverse of the canonical catalogue: Russian keys-section title → label id.
+TITLE_LABELS: dict[str, str] = get_config().title_to_label()
 
 
 class MaskKeys:
@@ -73,12 +70,10 @@ class MaskKeys:
     wordings stay separate — `АО «Росхим»` and `Акционерного общества «Росхим»`
     are two keys, which is what preserves the original case forms on restoring.
 
-    The YAML writer emits one `Профиль` marker from the profile the masker ran
-    with (default `russian-default` when no profile is supplied; ADR-0001).
+    The YAML writer emits the legacy `Профиль` marker (one runtime config now).
     """
 
-    def __init__(self, profile: MaskingProfile | None = None) -> None:
-        self._profile = profile
+    def __init__(self) -> None:
         self._counters: dict[str, int] = {}
         self._numbers: dict[tuple[str, str], int] = {}
 
@@ -98,31 +93,21 @@ class MaskKeys:
         return mask_marker(label, self.number(label, text))
 
     def document(self) -> KeysDocument:
-        """
-        Return the keys as a title→values mapping, in profile-title order.
-
-        Empty sections are omitted; the values are ordered by their number.
-        Titles come from the attached profile when there is one, else from the
-        registered union — the format stays profile-independent.
-        """
+        """Return the keys as a title→values mapping, in catalogue order."""
         by_label: dict[str, list[tuple[int, str]]] = {}
         for (label, text), number in self._numbers.items():
             by_label.setdefault(label, []).append((number, text))
 
-        titles = self._profile.titles() if self._profile is not None else registered_titles()
         document: KeysDocument = {}
-        for label, title in titles.items():
+        for label, title in get_config().titles().items():
             entries = sorted(by_label.get(label, []))
             if entries:
                 document[title] = [value for _number, value in entries]
         return document
 
     def to_yaml(self) -> str:
-        """Render the keys with a `Профиль` marker (empty string when there are none)."""
-        return format_keys_yaml_with_profile(
-            self.document(),
-            profile_id=self._profile.profile_id if self._profile is not None else None,
-        )
+        """Render the keys with the legacy `Профиль` marker (empty when none)."""
+        return format_keys_yaml_with_marker(self.document())
 
     def placeholders(self) -> dict[str, str]:
         """Placeholder→original map, e.g. ``{"[PERSON_1]": "Иван Петров"}``."""
@@ -141,22 +126,18 @@ def format_keys_yaml(document: Mapping[str, Iterable[str]]) -> str:
     return yaml12.format_yaml(sections)
 
 
-def format_keys_yaml_with_profile(
-    document: Mapping[str, Iterable[str]],
-    profile_id: str | None,
-) -> str:
+def format_keys_yaml_with_marker(document: Mapping[str, Iterable[str]]) -> str:
     """
-    Serialize a keys document with a `Профиль` marker, or `""` when empty.
+    Serialize a keys document with the legacy `Профиль` marker, or `""` when empty.
 
-    `None` means the default profile (restore never needs the producing
-    profile, so an omitted marker is equivalent). No version keys are written
-    or read: the format defines one current shape and acting on the latest is
-    the rule. The marker is metadata, never the restore authority.
+    The marker is metadata only (there is one runtime configuration now); it is
+    written for compatibility with existing keys files and ignored on read.
+    No version keys are written or read.
     """
     sections = format_keys_yaml(document)
     if not sections:
         return ""
-    marker: dict[str, object] = {_ENVELOPE_PROFILE_KEY: profile_id or DEFAULT_PROFILE_ID}
+    marker: dict[str, object] = {_ENVELOPE_PROFILE_KEY: LEGACY_PROFILE_MARKER}
     parsed_sections = yaml12.parse_yaml(sections)
     merged: dict[str, object] = dict(marker)
     if isinstance(parsed_sections, dict):

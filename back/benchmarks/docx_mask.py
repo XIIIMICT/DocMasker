@@ -4,7 +4,6 @@ import io
 import time
 
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
-from src.masking.profiles import ProfilesValidationError as LabelsValidationError
 from src.masking.rule_based import RuleBasedMasker
 
 from .synthetic import DocxShape, build_docx
@@ -71,8 +70,8 @@ def repro_unknown_label() -> None:
     """3.15: unknown labels must be a loud configuration error, not silent."""
     try:
         RuleBasedMasker.for_labels(["person", "banana"])
-    except LabelsValidationError:
-        print("3.15 unknown label: rejected with LabelsValidationError as required")
+    except ValueError:
+        print("3.15 unknown label: rejected with ValueError as required")
         _repro_finding(bug_present=False, finding="3.15 unknown label")
         return
     _repro_finding(

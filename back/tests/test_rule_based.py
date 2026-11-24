@@ -10,8 +10,8 @@ from itertools import pairwise
 
 import pytest
 
-from src.masking.profiles import DEFAULT_LABELS, ProfilesValidationError
-from src.masking.rule_based import Entity, RuleBasedMasker, _merge_spans
+from src.masking.config import get_config
+from src.masking.rule_based import DETECTOR_ORDER, Entity, RuleBasedMasker, _merge_spans
 
 
 def _masker() -> RuleBasedMasker:
@@ -258,21 +258,18 @@ def test_labels_override_limits_detection() -> None:
 
 
 def test_unknown_label_is_rejected() -> None:
-    # An unknown label must be a loud configuration error, not a silently
-    # ignored token (it would produce placeholders without keys sections).
-    with pytest.raises(ProfilesValidationError, match="banana"):
+    with pytest.raises(ValueError, match="banana"):
         RuleBasedMasker.for_labels(["person", "banana"])
 
 
 def test_duplicate_labels_are_rejected() -> None:
-    with pytest.raises(ProfilesValidationError, match="больше одного раза"):
+    with pytest.raises(ValueError, match="больше одного раза"):
         RuleBasedMasker.for_labels(["person", "phone", "person"])
 
 
-def test_blank_label_input_falls_back_to_defaults() -> None:
-    assert RuleBasedMasker().labels == DEFAULT_LABELS
-    assert RuleBasedMasker().labels == DEFAULT_LABELS
-    assert RuleBasedMasker().labels == DEFAULT_LABELS
+def test_default_labels_come_from_the_canonical_catalogue() -> None:
+    assert RuleBasedMasker().labels == get_config().label_ids()
+    assert DETECTOR_ORDER == ("email", "link", "phone", "person", "address", "organization")
 
 
 def _entity(label: str, start: int, end: int, score: float = 1.0) -> Entity:

@@ -39,11 +39,12 @@ Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
 - `oxlint --fix`, `oxfmt` (oxc formatter), `bun check` (Bun's built-in type checker — needs **bun ≥ 1.4.3**).
 - **Attention:** `bun format` (oxfmt) may rewrite line breaks in untouched files. After format, check `git status`/`git diff`; restore foreign files with `git checkout -- <file>`.
 - Unit tests — `bun test` with happy-dom (`front/src/test-setup.ts`, wired via `bunfig.toml`); they live in `__tests__` next to the code and run from `src` only.
+- `bun run --cwd front gen:labels` regenerates `src/shared/api/labels.generated.ts` from the backend's canonical `back/config/masking/labels.yaml`; CI verifies the committed file is fresh. Never edit it by hand.
 - e2e — Playwright (`front/playwright.config.ts`, `front/e2e/`). The `smoke` project hits a running stack; see below.
 
 ### e2e (Playwright)
 
-The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (**21 scenarios in 3 files**, including the `rerender-smoke.spec.ts` regression — the `smoke` project's `testMatch` regex is unanchored, and CI asserts all three spec files are discovered): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
+The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (**23 scenarios in 3 files**, including the `rerender-smoke.spec.ts` regression and the job Cancel control — the `smoke` project's `testMatch` regex is unanchored, and CI asserts all three spec files are discovered): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
 
 ### Live UI checks (browser)
 
@@ -120,7 +121,7 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 |---|---|
 | `config` | actionlint + `docker compose config` for `prod`/`dev` and `infra/compose.ci.yaml` |
 | `back` | locked uv sync, ruff check/format, ty, pytest with branch coverage (real PostgreSQL + Valkey integration via job services; artifact: coverage + JUnit) |
-| `front` | Bun 1.4 + Node 26, `next typegen`, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
+| `front` | Bun 1.4 + Node 26, `next typegen`, `gen:labels` + freshness check, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
 | `production` | needs `config`+`back`+`front`; builds the prod images once, boots `back`+`worker`+`front` via `infra/compose.ci.yaml`, lists the smoke tests explicitly, runs Playwright `smoke`, exports images on a `v*` tag |
 | `required` | `jq -e 'all(...result == "success")'` over `needs` — the branch-protection gate |
 
@@ -147,7 +148,8 @@ Local reproduction of the `production` job: build the images (`docker compose -f
 - **Documentation is part of the change.** Behavior, API, config, timings or a
   landmine changed → update the matching per-area `AGENTS.md` and the
   corresponding `docs/` file in the same change. Topic homes: `docs/API.md`
-  (HTTP contract), `docs/TEMPLATES.md` (keys/profiles), `docs/PERFORMANCE.md`
+  (HTTP contract), `docs/TEMPLATES.md` (keys/masking configuration),
+  `docs/PERFORMANCE.md`
   (benchmarks/limits), `docs/WORKFLOW.md` (process/CI), `docs/ARCHITECTURE.md`
   (system/pipeline), `docs/DOCX_SUPPORT.md` (OOXML coverage), `docs/adr/`
   (decisions), `TODO.md` (living status).

@@ -11,6 +11,9 @@
 !pyproject.toml
 !uv.lock
 
+!/config/
+!/config/**
+
 # Source, migrations and tests
 !/src/
 !/src/**
@@ -27,3 +30,5 @@ __pycache__/
 .venv/
 .ruff_cache/
 .pytest_cache/
+# Private runtime exception data must never be committed.
+config/masking/exceptions.yaml

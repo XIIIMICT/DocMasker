@@ -1,0 +1,39 @@
+schema_version: 1
+# Lower-case abbreviations that end with a period but do NOT end an address.
+abbreviations:
+  - г
+  - ул
+  - д
+  - кв
+  - вн
+  - тер
+  - наб
+  - пер
+  - просп
+  - пр
+  - обл
+  - р
+  - н
+  - пом
+  - помещ
+  - ком
+  - эт
+  - этаж
+  - оф
+  - стр
+  - корп
+  - ш
+  - б
+# Keywords that make a span look like an address (checked as substrings in code).
+keywords:
+  - "г."
+  - "г "
+  - ул
+  - "д."
+  - "д "
+  - просп
+  - пер
+  - шоссе
+  - обл
+  - р-н
+  - кв

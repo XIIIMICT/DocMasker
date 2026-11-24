@@ -49,6 +49,13 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
   `DOCX_TRANSFORMER_VERSION`, `WORKER_SHUTDOWN_GRACE_SECONDS`.
   Production startup fails clearly when credentials are missing (`:?` in
   compose). Valkey stays private to the internal network.
+- Phase 4 config: `MASKING_CONFIG_DIR=/app/config/masking` (default in the
+  image), `MASKING_CONFIG_DIGEST=auto` (computed from the loaded snapshot).
+  `back/config/masking/` is copied into the image **except** the private
+  `exceptions.yaml` (`back/.dockerignore`); compose mounts
+  `./back/config/masking/exceptions.yaml` read-only into `back`/`worker` in
+  prod and dev. CI uses the synthetic `exceptions.example.yaml` fallback.
+  No hot reload: restart to pick up config changes.
 - Job thresholds/limits in `.env.example`: `SYNC_MAX_TEXT_CHARS`,
   `SYNC_MAX_DOCX_BYTES`, `SYNC_MAX_DOCX_PARAGRAPHS`, `JOBS_MAX_ACTIVE`,
   `JOBS_CONCURRENCY`, `JOBS_MAX_ATTEMPTS`, `JOBS_LEASE_SECONDS`,

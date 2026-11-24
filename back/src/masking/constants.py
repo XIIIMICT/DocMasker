@@ -1,25 +1,10 @@
 """
-Base data for the masking pipeline.
+Minimal structural helpers for the masking pipeline (Phase 4).
 
-The default label set and the project-specific always-masked organizations.
-Structural metadata (titles, display order, profiles) lives in `profiles.py`;
-detection lives in `rule_based.py`.
+Curated vocabulary, label titles and exceptions now live in validated data
+files (`config/masking/`, see `masking/config.py`). Only pure functions remain
+here.
 """
-
-#: The canonical label ids of the default profile (see `profiles.py`).
-DEFAULT_LABELS: tuple[str, ...] = (
-    "person",
-    "phone",
-    "email",
-    "link",
-    "address",
-    "organization",
-)
-
-#: Organization names masked unconditionally — case-insensitively and with or
-#: without a legal-form prefix. Project-specific exclusions (brands that must
-#: never leak); consumed by the default profile's `always_mask_organizations`.
-ALWAYS_MASK_ORGANIZATIONS: tuple[str, ...] = ("Росхим",)
 
 
 def mask_marker(label: str, index: int) -> str:

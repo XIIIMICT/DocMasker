@@ -159,9 +159,14 @@
       fallback, PostgreSQL-side dedupe of identical active jobs; sync + job
       paths, failed/cancelled never cached. 206 back tests incl. real-Valkey
       integration.
-- [ ] **Phase 4** — one masking configuration + exception/lexicon files
-      (убрать profile_id/registry/CRUD, `LabelMeta.order`, сохранить
-      совместимость `Профиль: russian-default`).
+- [x] **Phase 4** — one masking configuration + exception files: profiles
+      (`MaskingProfile/PROFILES/get_profile`, `GET /api/profiles`, `profile_id`
+      everywhere) удалены; `labels.yaml` — единый каталог (без `order`) +
+      `GET /api/labels` + сгенерированный TS-файл (`gen:labels`, CI freshness);
+      все лексиконы (org/person/address/common) и `always_mask`/`never_mask`
+      вынесены в типизированные YAML с жёсткой валидацией старта, digest
+      инвалидирует кэш; CLI `validate_config`; приватный `exceptions.yaml`
+      в .gitignore; legacy `Профиль` marker читается/пишется как metadata.
 - [ ] **Phase 5** — namespace-aware DOCX coverage + общий manifest
       (убрать warning-only поведение).
 - [ ] **Phase 6** — API contracts/timeouts/streaming/event-loop safety

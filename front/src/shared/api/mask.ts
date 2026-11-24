@@ -1,4 +1,7 @@
+import { KEYS_SECTION_TITLES, KEYS_TITLE_LABELS } from "@/shared/api/labels.generated";
 import { getBackendInternalUrl } from "@/shared/config";
+
+export { KEYS_SECTION_TITLES, KEYS_TITLE_LABELS } from "@/shared/api/labels.generated";
 
 /** Aggregate counts the backend sends instead of raw entity values. */
 export interface MaskStatsPayload {
@@ -19,31 +22,8 @@ export interface UnmaskResponse {
     text: string;
 }
 
-/**
- * Russian section titles accepted in a demasking keys file. Must match the
- * backend's registered titles (see `docs/adr/0001-masking-profiles.md`).
- */
-export const KEYS_SECTION_TITLES = [
-    "Физлица",
-    "Номера телефонов",
-    "Email",
-    "Ссылки",
-    "Организации",
-    "Адреса",
-] as const;
-
 /** The single metadata key of a keys file (`Профиль`); not a section. */
 const KEYS_ENVELOPE_KEYS = ["Профиль"] as const;
-
-/** Russian keys section title → entity label (mirrors the backend `LABEL_TITLES`). */
-export const KEYS_TITLE_LABELS: Record<string, string> = {
-    Физлица: "person",
-    "Номера телефонов": "phone",
-    Email: "email",
-    Ссылки: "link",
-    Организации: "organization",
-    Адреса: "address",
-};
 
 /**
  * The placeholders a keys document stands for, e.g. `["[PERSON_1]", …]`.

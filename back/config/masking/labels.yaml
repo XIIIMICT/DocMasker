@@ -1,0 +1,15 @@
+schema_version: 1
+# The sequence defines the keys-file section order (no separate `order` field).
+labels:
+  - id: person
+    title: Физлица
+  - id: phone
+    title: Номера телефонов
+  - id: email
+    title: Email
+  - id: link
+    title: Ссылки
+  - id: organization
+    title: Организации
+  - id: address
+    title: Адреса
