@@ -72,7 +72,11 @@ def _simple_part(tag: str, uri: str, value: str, *, prefix: str = "w") -> str:
 
 
 def _build_package(
-    *, default_ns: bool = False, big_marker: bool = False, extra: dict[str, bytes] | None = None
+    *,
+    default_ns: bool = False,
+    big_marker: bool = False,
+    extra: dict[str, bytes] | None = None,
+    core_xml: str | None = None,
 ) -> bytes:
     """Minimal but structurally valid OPC package with all required parts."""
     buf = io.BytesIO()
@@ -117,9 +121,12 @@ def _build_package(
         z.writestr("word/header1.xml", _simple_part("hdr", W, _PERSON, prefix="w"))
         z.writestr(
             "docProps/core.xml",
-            f'<cp:coreProperties xmlns:cp="{CP}" xmlns:dc="{DC}">'
-            f"<dc:creator>{_PERSON}</dc:creator><dc:title>{_EMAIL}</dc:title>"
-            "<cp:lastModifiedBy>Иван Петров</cp:lastModifiedBy></cp:coreProperties>",
+            core_xml
+            or (
+                f'<cp:coreProperties xmlns:cp="{CP}" xmlns:dc="{DC}">'
+                f"<dc:creator>{_PERSON}</dc:creator><dc:title>{_EMAIL}</dc:title>"
+                "<cp:lastModifiedBy>Иван Петров</cp:lastModifiedBy></cp:coreProperties>"
+            ),
         )
         z.writestr(
             "docProps/app.xml",
@@ -189,6 +196,35 @@ def test_marker_after_64kib_is_still_found() -> None:
     masked, _entities, _keys, _coverage = mask_docx_in_memory(source)
     assert _EMAIL not in _all_text(masked)
     assert "[EMAIL_1]" in _all_text(masked)
+
+
+def test_metadata_fields_do_not_form_cross_field_entities() -> None:
+    """Adjacent docProps values must not be concatenated into one fake person.
+
+    Regression: dc:creator + cp:lastModifiedBy with the same FIO produced the
+    key «Иван ПетровИван» because both standalone refs shared one container.
+    """
+    core = (
+        f'<cp:coreProperties xmlns:cp="{CP}" xmlns:dc="{DC}">'
+        f"<dc:creator>{_PERSON}</dc:creator>"
+        f"<cp:lastModifiedBy>{_PERSON}</cp:lastModifiedBy>"
+        "</cp:coreProperties>"
+    )
+    source = _build_package(core_xml=core)
+    masked, _entities, keys, _coverage = mask_docx_in_memory(source)
+    values = parse_keys_yaml(keys.to_yaml()).get("Физлица", [])
+    assert values == [_PERSON]
+    with zipfile.ZipFile(io.BytesIO(masked)) as z:
+        masked_core = z.read("docProps/core.xml").decode("utf-8")
+    assert _PERSON not in masked_core
+    assert masked_core.count("[PERSON_1]") == 2
+
+    restored, _unused, _coverage = unmask_docx_in_memory(
+        masked, placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
+    )
+    with zipfile.ZipFile(io.BytesIO(restored)) as z:
+        restored_core = z.read("docProps/core.xml").decode("utf-8")
+    assert restored_core.count(_PERSON) == 2
 
 
 def test_relationship_target_and_metadata_are_masked() -> None:

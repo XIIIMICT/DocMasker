@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     masking_config_digest: str = Field(default="auto", validation_alias="MASKING_CONFIG_DIGEST")
     masking_config_dir: str = Field(default="/app/config/masking", validation_alias="MASKING_CONFIG_DIR")
     keys_format_version: int = Field(default=1, validation_alias="KEYS_FORMAT_VERSION")
-    docx_transformer_version: int = Field(default=1, validation_alias="DOCX_TRANSFORMER_VERSION")
+    docx_transformer_version: int = Field(default=2, validation_alias="DOCX_TRANSFORMER_VERSION")
     worker_shutdown_grace_seconds: float = Field(default=30.0, validation_alias="WORKER_SHUTDOWN_GRACE_SECONDS")
     #: Inputs at or below these thresholds stay synchronous (baseline-anchored).
     sync_max_text_chars: int = Field(default=20_000, validation_alias="SYNC_MAX_TEXT_CHARS")

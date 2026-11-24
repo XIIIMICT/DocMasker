@@ -345,8 +345,13 @@ def _containers(root: etree._Element, part_name: str, category: str) -> list[_Co
     for refs in by_para.values():
         if refs:
             result.append(_Container(refs=refs, part_name=part_name, category=category))
-    if standalone:
-        result.append(_Container(refs=standalone, part_name=part_name, category=category))
+    # Standalone refs are INDEPENDENT values (docProps fields, external
+    # relationship targets, paragraph-less text). Concatenating them into one
+    # container would create false entities that span field boundaries — e.g.
+    # dc:creator «Иван Петров» + cp:lastModifiedBy «Иван Петров» becomes
+    # «Иван ПетровИван», producing a nonsensical key. One ref = one container.
+    for ref in standalone:
+        result.append(_Container(refs=[ref], part_name=part_name, category=category))
     return result
 
 

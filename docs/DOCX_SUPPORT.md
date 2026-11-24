@@ -23,8 +23,12 @@ entries are copied byte-for-byte**. `python-docx` is no longer used for masking.
 | Alt text / title / description | explicit attribute allowlist on `wp:docPr` (`descr`, `title`, `name`) |
 | Other text-bearing XML parts | found through the package inventory; processed when they carry one of the supported text QNames |
 
-One entity spanning several runs/text nodes becomes **one** placeholder. Key
-numbering is document-wide across every processed part (`MaskKeys`). Masking and
+One entity spanning several runs/text nodes within one paragraph becomes
+**one** placeholder. Independent document-property fields (creator, title,
+lastModifiedBy, Company, Manager…) and external relationship targets are each
+processed as their own container — they are never concatenated, so two fields
+with the same FIO cannot merge into a false cross-field entity. Key numbering is
+document-wide across every processed part (`MaskKeys`). Masking and
 restoration use the same inverse text-node rewrite.
 
 Each text-bearing container is passed to the detector with `prefilter=True`
