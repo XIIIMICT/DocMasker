@@ -169,8 +169,11 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
-**Not in Phase 1 (Phase 2):** independent heartbeat loop, cooperative
-cancellation, error classification/backoff, full TTL/GC, immutable result
-publication, frontend cancel/resume, failure-injection crash-window tests.
-The repository already carries the columns/primitives (staging, fencing token,
-`cancelling`, separate TTL timestamps) those phases build on.
+**Implemented in Phase 2 (2026-11-24):** independent heartbeat loop
+(`lease_seconds / 3`), cooperative cancellation checkpoints + `cancelling`
+state, classified retry with bounded exponential backoff, active-job-safe
+TTL/GC, immutable fenced result publication, graceful SIGTERM drain, frontend
+Cancel (replaces the file button) + session-scoped resume. Failure-injection
+tests cover stale fencing, cancellation without publication, long blocking
+operations across lease intervals, queue-full staging cleanup and active-row
+retention. Target-hardware crash/restart stress remains a Phase 8 item.

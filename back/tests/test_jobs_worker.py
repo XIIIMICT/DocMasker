@@ -2,6 +2,7 @@
 
 import io
 import json
+import time
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,7 +11,7 @@ import pytest
 from test_docx import _build_docx
 
 from src.config import Settings
-from src.jobs.repository import JobRepository
+from src.jobs.repository import IllegalTransitionError, JobRepository
 from src.jobs.routing import enqueue
 from src.jobs.storage import ArtifactStore
 from src.jobs.worker import Worker
@@ -54,10 +55,11 @@ def worker(env: Settings) -> Worker:
 
 def _run(worker: Worker, env: Settings, accepted_id: str) -> Job:
     repo = JobRepository(env)
-    claimed = repo.claim(lease_seconds=30, concurrency=1)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
     assert claimed is not None
-    assert claimed.id == accepted_id
-    worker.run_one(accepted_id)
+    job, claim = claimed
+    assert job.id == accepted_id
+    worker.run_one(accepted_id, claim)
     return repo.get(accepted_id)
 
 
@@ -145,12 +147,16 @@ def test_failed_job_is_retried_then_final(env: Settings, worker: Worker) -> None
     store = ArtifactStore(env.jobs_dir)
     store.write(accepted.job_id, "input", b"\xff\xfe")
     for attempt in range(3):
-        claimed = repo.claim(lease_seconds=30, concurrency=1)
+        claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
         assert claimed is not None
-        worker.run_one(accepted.job_id)
+        _, claim = claimed
+        worker.run_one(accepted.job_id, claim)
         status = repo.get(accepted.job_id).status
         if attempt < 2:
             assert status == "queued"
+            # Later retries carry a bounded exponential backoff; wait it out.
+            if attempt == 1:
+                time.sleep(1.2)
     assert status == "failed"
     assert repo.get(accepted.job_id).attempt == 3
 
@@ -158,22 +164,80 @@ def test_failed_job_is_retried_then_final(env: Settings, worker: Worker) -> None
 def test_lease_loss_stops_execution(env: Settings, worker: Worker) -> None:
     accepted = enqueue("mask_text", input_bytes=b"x", filename="")
     repo = JobRepository(env)
-    repo.cancel(accepted.job_id)  # no longer claimable
-    with pytest.raises(AssertionError):
-        _run(worker, env, accepted.job_id)
+    repo.request_cancel(accepted.job_id)  # queued -> terminal, not claimable
+    assert repo.claim_with_owner(lease_seconds=30, concurrency=1) is None
+
+
+def test_stale_token_cannot_publish_a_result(env: Settings) -> None:
+    """§3.5: a stale worker's succeed/heartbeat/fail affect 0 rows."""
+    repo = JobRepository(env)
+    job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    first = repo.claim_with_owner(lease_seconds=-1, concurrency=1)
+    assert first is not None
+    _, stale = first
+    second = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert second is not None
+    _, current = second
+    # Fresh token owns the row; the stale one cannot heartbeat or publish.
+    assert repo.heartbeat(job.id, "detection", 50, lease_seconds=30, claim=stale) is False
+    with pytest.raises(IllegalTransitionError):
+        repo.succeed(job.id, "result", ttl_seconds=3600, claim=stale)
+    assert repo.get(job.id).status == "running"
+    assert repo.succeed(job.id, "result", ttl_seconds=3600, claim=current) is None
+    assert repo.get(job.id).status == "succeeded"
+    repo.dispose()
 
 
 def test_progress_callback_detects_cancellation(env: Settings, worker: Worker) -> None:
-    from src.jobs.worker import LeaseLostError
+    from src.jobs.worker import Heartbeat, LeaseLostError
 
     accepted = enqueue("mask_text", input_bytes=b"x", filename="")
     repo = JobRepository(env)
-    claimed = repo.claim(lease_seconds=30, concurrency=1)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
     assert claimed is not None
-    report = worker._progress(accepted.job_id)
-    repo.cancel(accepted.job_id)
-    with pytest.raises(LeaseLostError):
+    _, claim = claimed
+    heartbeat = Heartbeat(repo, accepted.job_id, claim, env)
+    report = worker._progress(accepted.job_id, claim, heartbeat)
+    repo.request_cancel(accepted.job_id)
+    heartbeat.mark_lost()
+    with pytest.raises((LeaseLostError, RuntimeError)):
         report("detection", 50)
+
+
+def test_heartbeat_keeps_a_long_operation_owned(env: Settings) -> None:
+    """§3.6/§14: lease survives a blocking operation longer than one interval."""
+    from src.jobs.worker import Heartbeat
+
+    repo = JobRepository(env)
+    job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    claimed = repo.claim_with_owner(lease_seconds=0.4, concurrency=1)
+    assert claimed is not None
+    _, claim = claimed
+    heartbeat = Heartbeat(repo, job.id, claim, env)
+    heartbeat.start()
+    time.sleep(1.0)  # > 2 lease intervals: only the heartbeat can keep it owned
+    heartbeat.stop()
+    assert not heartbeat.lost()
+    assert repo.get(job.id).status == "running"
+    # A second worker cannot claim the still-owned job.
+    assert repo.claim_with_owner(lease_seconds=30, concurrency=2) is None
+    repo.dispose()
+
+
+def test_cancel_before_processing_publishes_nothing(env: Settings, worker: Worker) -> None:
+    """§3.7: a cancelled job never produces a result or cache entry."""
+    accepted = enqueue("mask_text", input_bytes=b"x", filename="")
+    repo = JobRepository(env)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert claimed is not None
+    _, claim = claimed
+    assert repo.request_cancel(accepted.job_id) == "cancelling"
+    worker.run_one(accepted.job_id, claim)
+    job = repo.get(accepted.job_id)
+    assert job.status == "cancelled"
+    assert job.result_key is None
+    assert not ArtifactStore(env.jobs_dir).exists(accepted.job_id, "result")
+    repo.dispose()
 
 
 def test_sweep_removes_expired_jobs_and_artifacts(env: Settings, worker: Worker) -> None:

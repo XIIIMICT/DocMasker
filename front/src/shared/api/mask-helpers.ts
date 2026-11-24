@@ -53,9 +53,12 @@ export function parseBreakdown(header: string | null): Record<string, number> {
 }
 
 /** Convert a text-mask job's result.json into the sync MaskResponse shape. */
-export async function jobToMaskResponse(accepted: JobAccepted): Promise<MaskResponse> {
+export async function jobToMaskResponse(
+    accepted: JobAccepted,
+    signal?: AbortSignal,
+): Promise<MaskResponse> {
     const payload = await (
-        await waitForJob(accepted)
+        await waitForJob(accepted, signal)
     ).json<{
         text: string;
         keys: string;
@@ -64,8 +67,11 @@ export async function jobToMaskResponse(accepted: JobAccepted): Promise<MaskResp
     return { text: payload.text, keys: payload.keys, stats: payload.stats };
 }
 
-export async function jobToUnmaskResponse(accepted: JobAccepted): Promise<UnmaskResponse> {
-    const payload = await (await waitForJob(accepted)).json<{ text: string }>();
+export async function jobToUnmaskResponse(
+    accepted: JobAccepted,
+    signal?: AbortSignal,
+): Promise<UnmaskResponse> {
+    const payload = await (await waitForJob(accepted, signal)).json<{ text: string }>();
     return { text: payload.text };
 }
 
@@ -102,8 +108,11 @@ export interface RestoreBundle {
 }
 
 /** Build the restored-file bundle from an unmask_file job result ZIP. */
-export async function jobRestoreBundle(accepted: JobAccepted): Promise<RestoreBundle> {
-    const result = await waitForJob(accepted);
+export async function jobRestoreBundle(
+    accepted: JobAccepted,
+    signal?: AbortSignal,
+): Promise<RestoreBundle> {
+    const result = await waitForJob(accepted, signal);
     const docx = result.entry(".docx");
     const manifest = result.entry(".json");
     if (!docx || !manifest) throw new Error("Не удалось получить результат задания.");

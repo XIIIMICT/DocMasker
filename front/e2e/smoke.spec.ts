@@ -374,6 +374,56 @@ test("текстовая маскировка через job (202) показы�
     });
 });
 
+test("активное задание показывает «Отменить задание» вместо «Выбрать файл» и шлёт DELETE", async ({
+    page,
+}) => {
+    const jobId = "abcdefab-1234-4234-8234-abcdefabcdef";
+    let cancelled = false;
+    await page.route("**/api/mask", async (route) => {
+        await route.fulfill({
+            status: 202,
+            contentType: "application/json",
+            body: JSON.stringify({
+                job_id: jobId,
+                status: "queued",
+                status_url: `/api/jobs/${jobId}`,
+                result_url: `/api/jobs/${jobId}/result`,
+            }),
+        });
+    });
+    // Keep the job pending so the Cancel control stays visible.
+    await page.route(`**/api/jobs/${jobId}`, async (route) => {
+        if (route.request().method() === "DELETE") {
+            cancelled = true;
+            await route.fulfill({ status: 204, body: "" });
+            return;
+        }
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+                job_id: jobId,
+                status: "running",
+                phase: "detection",
+                progress: 30,
+                attempt: 1,
+                error_code: null,
+                result_url: null,
+            }),
+        });
+    });
+
+    await page.goto("/");
+    await page.getByRole("textbox", { name: MASK_DATA }).fill("Иван Петров");
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    const cancel = page.getByRole("button", { name: "Отменить задание" });
+    await expect(cancel).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("button", { name: "Выбрать файл" })).toHaveCount(0);
+    await cancel.click();
+    await expect(cancel).toHaveCount(0);
+    expect(cancelled).toBe(true);
+});
+
 test("предупреждение о неподдерживаемых частях DOCX показывается в результате", async ({
     page,
 }) => {

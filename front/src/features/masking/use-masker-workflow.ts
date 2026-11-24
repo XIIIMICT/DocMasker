@@ -8,7 +8,7 @@ import {
     MODE_STORAGE_KEY,
     type ModeState,
 } from "@/features/masking/types";
-import { type JobAccepted, waitForJob } from "@/shared/api/jobs";
+import { ACTIVE_JOB_KEY, cancelJob, type JobAccepted, waitForJob } from "@/shared/api/jobs";
 import {
     keyEntries,
     type MaskResponse,
@@ -62,6 +62,46 @@ export function useMaskerWorkflow() {
     const update = (patch: Partial<ModeState>) =>
         setStateByMode((current) => ({ ...current, [mode]: { ...current[mode], ...patch } }));
 
+    /** Remember the active job so Cancel and reload-resume can find it. */
+    async function trackAccepted(response: Response): Promise<JobAccepted> {
+        const accepted = (await response.json()) as JobAccepted;
+        update({ activeJob: accepted });
+        try {
+            window.sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ mode, accepted }));
+        } catch {
+            /* private mode: in-memory state still supports Cancel this session */
+        }
+        return accepted;
+    }
+
+    /** Drop the active job after a terminal state or explicit dismissal. */
+    function endJob() {
+        update({ activeJob: null });
+        try {
+            window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
+        } catch {
+            /* ignore */
+        }
+    }
+
+    /** Release polling state after any run (success, failure or cancellation). */
+    function finish() {
+        pollingController.current = null;
+        endJob();
+        update({ busy: false });
+    }
+
+    /** Cancel the server-side job (AbortController only stops polling). */
+    async function onCancelJob() {
+        if (!activeJob) return;
+        await cancelJob(activeJob);
+        pollingController.current?.abort();
+        endJob();
+        update({ busy: false, error: "Задание отменено." });
+    }
+
+    const pollingController = useRef<AbortController | null>(null);
+
     const {
         input,
         selectedFile,
@@ -79,6 +119,7 @@ export function useMaskerWorkflow() {
         resultTab,
         busy,
         error,
+        activeJob,
     } = state;
     const dragging = state.dragging;
 
@@ -94,6 +135,96 @@ export function useMaskerWorkflow() {
     const sourceDocRef = useRef<HTMLDivElement>(null);
     const maskedDocRef = useRef<HTMLDivElement>(null);
     const restoredDocRef = useRef<HTMLDivElement>(null);
+
+    // Resume an active job after a reload in the same tab (§3.11). Only the
+    // opaque job id lives in sessionStorage — never input documents, keys or
+    // PII. A 404/expired/failed/cancelled job is handled by waitForJob.
+    useEffect(() => {
+        let stored: { mode: AppMode; accepted: JobAccepted } | null = null;
+        try {
+            const raw = window.sessionStorage.getItem(ACTIVE_JOB_KEY);
+            if (raw) stored = JSON.parse(raw) as { mode: AppMode; accepted: JobAccepted };
+        } catch {
+            /* ignore malformed/private-mode storage */
+        }
+        if (!stored) return;
+        const { mode: jobMode, accepted } = stored;
+        setStateByMode((current) => ({
+            ...current,
+            [jobMode]: { ...current[jobMode], activeJob: accepted, busy: true },
+        }));
+        const controller = new AbortController();
+        void waitForJob(accepted, controller.signal)
+            .then(async (result) => {
+                // File jobs return a ZIP without result.json; resume can only
+                // repopulate text results — clear the active job and let the
+                // user download from the result URL if they need the file.
+                const jsonEntry = result.entry(".json");
+                if (!jsonEntry) {
+                    setStateByMode((current) => ({
+                        ...current,
+                        [jobMode]: {
+                            ...current[jobMode],
+                            activeJob: null,
+                            busy: false,
+                            error: "Задание завершено. Повторите операцию, чтобы скачать файл.",
+                        },
+                    }));
+                    try {
+                        window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
+                    } catch {
+                        /* ignore */
+                    }
+                    return;
+                }
+                const payload = JSON.parse(await jsonEntry.text()) as {
+                    text?: string;
+                    keys?: string;
+                    stats?: MaskResponse["stats"];
+                    kind?: string;
+                };
+                setStateByMode((current) => {
+                    const slice = { ...current[jobMode], activeJob: null, busy: false };
+                    if (jobMode === "mask" && payload.stats !== undefined) {
+                        return {
+                            ...current,
+                            [jobMode]: {
+                                ...slice,
+                                result: payload.text ?? "",
+                                keys: payload.keys ?? "",
+                                stats: statsFromAggregate(payload.stats),
+                            },
+                        };
+                    }
+                    return { ...current, [jobMode]: { ...slice, restored: payload.text ?? "" } };
+                });
+                try {
+                    window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
+                } catch {
+                    /* ignore */
+                }
+            })
+            .catch((error: unknown) => {
+                setStateByMode((current) => ({
+                    ...current,
+                    [jobMode]: {
+                        ...current[jobMode],
+                        activeJob: null,
+                        busy: false,
+                        error:
+                            error instanceof Error
+                                ? error.message
+                                : "Не удалось обработать задание.",
+                    },
+                }));
+                try {
+                    window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
+                } catch {
+                    /* ignore */
+                }
+            });
+        return () => controller.abort();
+    }, []);
 
     const hasText = input.trim().length > 0;
     const hasFile = selectedFile !== null;
@@ -254,10 +385,16 @@ export function useMaskerWorkflow() {
             if (!response.ok) {
                 throw new Error(await readErrorDetail(response));
             }
-            const data =
-                response.status === 202
-                    ? await jobToMaskResponse((await response.json()) as JobAccepted)
-                    : ((await response.json()) as MaskResponse);
+            const controller = new AbortController();
+            pollingController.current = controller;
+            let data: MaskResponse;
+            if (response.status === 202) {
+                const accepted = await trackAccepted(response);
+                data = await jobToMaskResponse(accepted, controller.signal);
+                endJob();
+            } else {
+                data = (await response.json()) as MaskResponse;
+            }
             update({
                 result: data.text,
                 keys: data.keys,
@@ -274,7 +411,7 @@ export function useMaskerWorkflow() {
                         : "Не удалось выполнить маскирование.",
             });
         } finally {
-            update({ busy: false });
+            finish();
         }
     }
 
@@ -299,7 +436,11 @@ export function useMaskerWorkflow() {
             let byLabel: Record<string, number>;
             if (response.status === 202) {
                 update({ docxWarning: null });
-                const jobResult = await waitForJob((await response.json()) as JobAccepted);
+                const accepted = await trackAccepted(response);
+                const controller = new AbortController();
+                pollingController.current = controller;
+                const jobResult = await waitForJob(accepted, controller.signal);
+                endJob();
                 bundle = await jobBundle(jobResult, ".docx", ".yaml");
                 const keysText = await bundle.keys.text();
                 total = 0;
@@ -344,7 +485,7 @@ export function useMaskerWorkflow() {
                         : "Не удалось обработать файл.",
             });
         } finally {
-            update({ busy: false });
+            finish();
         }
     }
 
@@ -366,10 +507,16 @@ export function useMaskerWorkflow() {
                     throw new Error(await readErrorDetail(response));
                 }
                 // The backend returns a ZIP: restored .docx + a report manifest.
-                const bundle =
-                    response.status === 202
-                        ? await jobRestoreBundle((await response.json()) as JobAccepted)
-                        : await unpackRestoreArchive(await response.blob());
+                let bundle: Awaited<ReturnType<typeof unpackRestoreArchive>>;
+                if (response.status === 202) {
+                    const accepted = await trackAccepted(response);
+                    const controller = new AbortController();
+                    pollingController.current = controller;
+                    bundle = await jobRestoreBundle(accepted, controller.signal);
+                    endJob();
+                } else {
+                    bundle = await unpackRestoreArchive(await response.blob());
+                }
                 update({
                     restoredFile: { blob: bundle.docx, name: bundle.docxName },
                     demaskUnused: bundle.manifest.unused_keys,
@@ -379,10 +526,16 @@ export function useMaskerWorkflow() {
                 if (!response.ok) {
                     throw new Error(await readErrorDetail(response));
                 }
-                const data =
-                    response.status === 202
-                        ? await jobToUnmaskResponse((await response.json()) as JobAccepted)
-                        : ((await response.json()) as UnmaskResponse);
+                let data: UnmaskResponse;
+                if (response.status === 202) {
+                    const accepted = await trackAccepted(response);
+                    const controller = new AbortController();
+                    pollingController.current = controller;
+                    data = await jobToUnmaskResponse(accepted, controller.signal);
+                    endJob();
+                } else {
+                    data = (await response.json()) as UnmaskResponse;
+                }
                 update({ restored: data.text });
             }
         } catch (requestError) {
@@ -395,7 +548,7 @@ export function useMaskerWorkflow() {
                         : "Не удалось выполнить демаскирование.",
             });
         } finally {
-            update({ busy: false });
+            finish();
         }
     }
 
@@ -512,8 +665,12 @@ export function useMaskerWorkflow() {
     /** Drag-and-drop props shared by the input panes (both modes). */
     const drag: DragHandlers = { dragging, onDragEnter, onDragOver, onDragLeave, onDrop };
 
-    /** Masking file button: remove the selected file, or open the picker. */
+    /** Masking file button: Cancel an active job, else remove/pick a file. */
     function onMaskFileActionPress() {
+        if (activeJob) {
+            void onCancelJob();
+            return;
+        }
         if (busy) return;
         if (inFileMode) {
             // Removing the input must also drop the previous result (including
@@ -528,8 +685,12 @@ export function useMaskerWorkflow() {
         }
     }
 
-    /** Demasking data-file button: remove the selected file, or open the picker. */
+    /** Demasking data-file button: Cancel an active job, else remove/pick. */
     function onDataFileActionPress() {
+        if (activeJob) {
+            void onCancelJob();
+            return;
+        }
         if (busy) return;
         if (inFileMode) {
             resetResult();
@@ -556,6 +717,7 @@ export function useMaskerWorkflow() {
         selectedFile,
         inFileMode,
         busy,
+        activeJob,
         maskEnabled,
         unmaskEnabled,
         keysInvalid,
@@ -567,6 +729,7 @@ export function useMaskerWorkflow() {
         onMaskFileActionPress,
         onDataFileActionPress,
         onKeysFileActionPress,
+        onCancelJob,
         handleMask,
         handleUnmask,
         update,

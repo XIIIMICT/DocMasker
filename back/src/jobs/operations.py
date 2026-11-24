@@ -47,30 +47,44 @@ def execute(
     job_id: str,
     *,
     progress: Callable[[JobPhase, int], None],
+    checkpoint: Callable[[], None] | None = None,
 ) -> dict[str, bytes]:
     """
     Run the operation for `job_id` and return the result-archive entries.
 
-    `progress` is a callable(phase, percent) that renews the lease; it raises
-    `LeaseLost` when the job was cancelled or its lease expired, so a stale
-    worker stops promptly. No exception text is ever persisted or logged.
+    `progress` reports a fenced phase/progress; `checkpoint` is a cooperative
+    cancellation hook called before each expensive stage (§3.7). Every failure
+    is raised as a safe `JobExecutionError` — no input values, keys or
+    exception text are persisted or logged.
     """
-    kind = _read_text(store, job_id, "kind")
-    profile_id = _profile_id(store, job_id)
-    profile = get_profile(profile_id)
-    masker = get_masker_for(profile.profile_id)
+    check = checkpoint or (lambda: None)
+
+    def safe_read(suffix: str) -> bytes:
+        check()
+        try:
+            return store.read(job_id, suffix)
+        except Exception as error:
+            raise JobExecutionError("artifact_io", retryable=True) from error
+
+    kind = safe_read("kind").decode("utf-8")
+    profile_id = _read_text(store, job_id, "profile") if store.exists(job_id, "profile") else None
+    try:
+        profile = get_profile(profile_id)
+        masker = get_masker_for(profile.profile_id)
+    except Exception as error:
+        raise JobExecutionError("invalid_configuration") from error
 
     progress("validation", 10)
 
     if kind == "mask_text":
-        text = _read_text(store, job_id, "input")
+        text = safe_read("input").decode("utf-8")
         request = MaskRequest(text=text, profile_id=profile_id)
         masked, entities, keys = mask_document(request)
+        check()
         progress("detection", 60)
         progress("rewrite", 85)
-        result = masked
         payload: dict[str, Any] = {
-            "text": result,
+            "text": masked,
             "kind": kind,
             "keys": keys.to_yaml(),
             "stats": mask_stats(entities).model_dump(),
@@ -79,20 +93,30 @@ def execute(
         return {"result.json": json.dumps(payload, ensure_ascii=False).encode("utf-8")}
 
     if kind == "unmask_text":
-        text = _read_text(store, job_id, "input")
-        keys_yaml = _read_text(store, job_id, "keys")
+        text = safe_read("input").decode("utf-8")
+        keys_yaml = safe_read("keys").decode("utf-8")
+        try:
+            validate_keys_yaml(keys_yaml)
+        except Exception as error:
+            raise JobExecutionError("invalid_keys") from error
         request = UnmaskRequest(text=text, keys=keys_yaml)
         restored = unmask_document(request)
+        check()
         progress("rewrite", 85)
         return {"result.json": json.dumps({"text": restored, "kind": kind}, ensure_ascii=False).encode("utf-8")}
 
     if kind == "mask_file":
-        data = store.read(job_id, "input")
-        validate_docx_package(data, upload_limits())
+        data = safe_read("input")
+        try:
+            validate_docx_package(data, upload_limits())
+        except Exception as error:
+            raise JobExecutionError("invalid_package") from error
+        check()
         progress("detection", 40)
         masked_bytes, _entities, keys = mask_docx_in_memory(data, masker)
+        check()
         progress("rewrite", 80)
-        name = _read_text(store, job_id, "name") or "document.docx"
+        name = safe_read("name").decode("utf-8") or "document.docx"
         base = Path(name).stem
         progress("archive", 95)
         return {
@@ -101,14 +125,22 @@ def execute(
         }
 
     if kind == "unmask_file":
-        data = store.read(job_id, "input")
-        validate_docx_package(data, upload_limits())
-        keys_yaml = _read_text(store, job_id, "keys")
-        placeholders = placeholders_from_document(validate_keys_yaml(keys_yaml))
+        data = safe_read("input")
+        try:
+            validate_docx_package(data, upload_limits())
+        except Exception as error:
+            raise JobExecutionError("invalid_package") from error
+        keys_yaml = safe_read("keys").decode("utf-8")
+        try:
+            placeholders = placeholders_from_document(validate_keys_yaml(keys_yaml))
+        except Exception as error:
+            raise JobExecutionError("invalid_keys") from error
+        check()
         progress("detection", 40)
         restored, unused = unmask_docx_in_memory(data, placeholders)
+        check()
         progress("rewrite", 80)
-        name = _read_text(store, job_id, "name") or "document.docx"
+        name = safe_read("name").decode("utf-8") or "document.docx"
         base = Path(name).stem.removesuffix(" (замаскированный)")
         progress("archive", 95)
         return {

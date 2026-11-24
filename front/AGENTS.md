@@ -204,6 +204,16 @@ Rules:
    go through `/api/jobs`; `waitForJob` polls `status_url` with backoff
    (bounded attempts, AbortSignal) and unpacks the flat result ZIP.
 
+10. **Job Cancel / resume (Phase 2).** `use-masker-workflow.ts` tracks the
+    active `JobAccepted` in `ModeState` and
+    `sessionStorage["docmasker.activeJob"]` (only the opaque id — never
+    input/keys/PII). While a job runs, the file button in both modes becomes
+    «Отменить задание» and calls `DELETE /api/jobs/{id}` (`cancelJob`); an
+    `AbortController` only stops polling, it does NOT cancel the server job.
+    On reload the active job is resumed; file-job results (ZIP without
+    `result.json`) clear cleanly with a message. `endJob()` clears the id on
+    terminal state or explicit dismissal.
+
 ## Commands (from `front/`)
 
 | What                             | Command                                                                                 |

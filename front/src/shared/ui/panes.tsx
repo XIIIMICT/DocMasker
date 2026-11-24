@@ -366,6 +366,7 @@ export function MaskInputPane({
     inFileMode,
     busy,
     maskEnabled,
+    activeJob,
     drag,
     onTextChange,
     onFileActionPress,
@@ -378,6 +379,7 @@ export function MaskInputPane({
     inFileMode: boolean;
     busy: boolean;
     maskEnabled: boolean;
+    activeJob: boolean;
     drag: DragHandlers;
     onTextChange: (value: string) => void;
     onFileActionPress: () => void;
@@ -412,12 +414,16 @@ export function MaskInputPane({
             <div className="editor-pane__actions">
                 <ButtonGroup fullWidth>
                     <Button
-                        variant={inFileMode ? "danger" : "tertiary"}
-                        isDisabled={busy}
+                        variant={activeJob ? "danger" : inFileMode ? "danger" : "tertiary"}
+                        isDisabled={busy && !activeJob}
                         onPress={onFileActionPress}
                         fullWidth
                     >
-                        {inFileMode ? "Удалить файл" : "Выбрать файл"}
+                        {activeJob
+                            ? "Отменить задание"
+                            : inFileMode
+                              ? "Удалить файл"
+                              : "Выбрать файл"}
                     </Button>
                     <Button
                         variant="primary"
@@ -447,6 +453,7 @@ export function DemaskInputPane({
     inFileMode,
     busy,
     unmaskEnabled,
+    activeJob,
     keysInvalid,
     demaskKeys,
     inputTab,
@@ -467,6 +474,7 @@ export function DemaskInputPane({
     inFileMode: boolean;
     busy: boolean;
     unmaskEnabled: boolean;
+    activeJob: boolean;
     keysInvalid: boolean;
     demaskKeys: string;
     inputTab: string;
@@ -554,12 +562,16 @@ export function DemaskInputPane({
             <div className="editor-pane__actions">
                 <ButtonGroup fullWidth>
                     <Button
-                        variant={inFileMode ? "danger" : "tertiary"}
-                        isDisabled={busy}
+                        variant={activeJob ? "danger" : inFileMode ? "danger" : "tertiary"}
+                        isDisabled={busy && !activeJob}
                         onPress={onDataFilePress}
                         fullWidth
                     >
-                        {inFileMode ? "Удалить файл" : "Выбрать файл данных"}
+                        {activeJob
+                            ? "Отменить задание"
+                            : inFileMode
+                              ? "Удалить файл"
+                              : "Выбрать файл данных"}
                     </Button>
                     <Button
                         variant="tertiary"

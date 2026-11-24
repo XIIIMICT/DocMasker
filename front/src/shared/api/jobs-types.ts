@@ -9,11 +9,22 @@ export interface JobAccepted {
 /** Client-visible job state (safe metadata only — no PII). */
 export interface JobStatus {
     job_id: string;
-    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
+    status:
+        | "staging"
+        | "queued"
+        | "running"
+        | "cancelling"
+        | "succeeded"
+        | "failed"
+        | "cancelled"
+        | "expired";
     phase: string;
     progress: number;
     attempt: number;
     error_code: string | null;
+    cancel_requested: boolean;
+    created_at: number | null;
+    finished_at: number | null;
     result_url: string | null;
 }
 
