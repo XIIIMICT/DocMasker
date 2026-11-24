@@ -24,7 +24,7 @@ from src.config import Settings, get_settings
 
 from . import dependencies
 from .dependencies import artifact_store, job_repository
-from .models import Claim, JobPhase
+from .models import Claim, Job, JobPhase
 from .operations import JobExecutionError, execute
 from .repository import JobRepository
 from .storage import ArtifactStore, cleanup_artifacts
@@ -112,14 +112,20 @@ class Heartbeat:
 
     def _run(self) -> None:
         # Renew immediately: a slow first claim must not start with a stale lease.
+        # A transient DB outage must not silently kill the heartbeat thread —
+        # retry on the same interval; fencing will reject a stale worker.
         while not self._stop.is_set():
-            ok = self._repo.heartbeat(
-                self._job_id,
-                "detection",
-                0,
-                lease_seconds=self._lease_seconds,
-                claim=self._claim,
-            )
+            try:
+                ok = self._repo.heartbeat(
+                    self._job_id,
+                    "detection",
+                    0,
+                    lease_seconds=self._lease_seconds,
+                    claim=self._claim,
+                )
+            except Exception as error:  # noqa: BLE001 - log only the exception type
+                LOGGER.warning("heartbeat failed (error_type=%s)", type(error).__name__)
+                ok = True  # a transient DB failure is not proof of lost ownership
             if not ok:
                 self._lost.set()
                 return
@@ -251,20 +257,38 @@ class Worker:
             self._repo.remove_expired([job.id for job in expired])
             LOGGER.info("swept %d expired jobs", len(expired))
 
+    def _sweep_safe(self) -> None:
+        """GC must never kill the worker on a transient DB outage (§3.9)."""
+        try:
+            self.sweep()
+        except Exception as error:  # noqa: BLE001 - log only the exception type
+            LOGGER.warning("worker sweep failed (error_type=%s)", type(error).__name__)
+
+    def _claim_safe(self) -> tuple[Job, Claim] | None:
+        """One poll attempt; transient PostgreSQL errors become an empty poll."""
+        try:
+            return self._repo.claim_with_owner(
+                lease_seconds=self._settings.jobs_lease_seconds,
+                concurrency=self._settings.jobs_concurrency,
+                worker_id=self._worker_id,
+            )
+        except Exception as error:  # noqa: BLE001 - never log DB messages or PII
+            LOGGER.warning("worker claim failed (error_type=%s)", type(error).__name__)
+            return None
+
     def run(self) -> None:
         """Poll loop until SIGTERM; bounded by JOBS_CONCURRENCY."""
         LOGGER.info("worker %s started (concurrency=%d)", self._worker_id[:8], self._settings.jobs_concurrency)
         next_sweep = time.monotonic() + min(self._settings.jobs_ttl_seconds, 60.0)
         while not self._stop.is_set():
             if time.monotonic() >= next_sweep:
-                self.sweep()
+                self._sweep_safe()
                 next_sweep = time.monotonic() + min(self._settings.jobs_ttl_seconds, 60.0)
-            claimed = self._repo.claim_with_owner(
-                lease_seconds=self._settings.jobs_lease_seconds,
-                concurrency=self._settings.jobs_concurrency,
-                worker_id=self._worker_id,
-            )
+            claimed = self._claim_safe()
             if claimed is None:
+                # Also the backoff after a DB outage: no tight hot loop, and a
+                # database restart is recovered by the next poll (fencing
+                # protects jobs already running).
                 self._stop.wait(self._settings.jobs_poll_seconds)
                 continue
             job, claim = claimed
@@ -281,7 +305,7 @@ class Worker:
                 future.result(timeout=0)
             except Exception:  # noqa: BLE001 - outcome already recorded in run_one
                 LOGGER.warning("in-flight job finished with an error while draining")
-        self.sweep()
+        self._sweep_safe()
         LOGGER.info("worker stopped")
 
 

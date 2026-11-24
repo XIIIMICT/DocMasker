@@ -5,7 +5,7 @@ import json
 import time
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from test_docx import _build_docx
@@ -14,10 +14,10 @@ from src.config import Settings
 from src.jobs.repository import IllegalTransitionError, JobRepository
 from src.jobs.routing import enqueue
 from src.jobs.storage import ArtifactStore
-from src.jobs.worker import Worker
+from src.jobs.worker import Heartbeat, Worker
 
 if TYPE_CHECKING:
-    from src.jobs.models import Job
+    from src.jobs.models import Claim, Job
 
 
 @pytest.fixture
@@ -65,6 +65,34 @@ def _run(worker: Worker, env: Settings, accepted_id: str) -> Job:
 
 def _result_zip(store: ArtifactStore, job_id: str) -> zipfile.ZipFile:
     return zipfile.ZipFile(io.BytesIO(store.read(job_id, "result")))
+
+
+def test_worker_poll_survives_transient_db_error(worker: Worker) -> None:
+    """A PostgreSQL restart must not kill the poll loop (stress finding, Phase 8)."""
+
+    class _FailingRepo:
+        def claim_with_owner(self, **_kwargs: object) -> None:
+            msg = "db down"
+            raise RuntimeError(msg)
+
+    worker._repo = cast("JobRepository", _FailingRepo())
+    assert worker._claim_safe() is None
+
+
+def test_heartbeat_survives_transient_db_error(env: Settings) -> None:
+    """A transient heartbeat error must not kill the renewal thread."""
+
+    class _FailingRepo:
+        def heartbeat(self, *_args: object, **_kwargs: object) -> bool:
+            msg = "db down"
+            raise RuntimeError(msg)
+
+    claim = cast("Claim", type("C", (), {})())  # Heartbeat only stores the claim object
+    heartbeat = Heartbeat(cast("JobRepository", _FailingRepo()), "00000000-0000-0000-0000-000000000000", claim, env)
+    heartbeat.start()
+    time.sleep(0.05)
+    heartbeat.stop()
+    assert not heartbeat.lost()  # a DB failure is not proof of lost ownership
 
 
 def test_mask_text_job_round_trip(env: Settings, worker: Worker) -> None:

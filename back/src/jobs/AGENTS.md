@@ -1,0 +1,46 @@
+# jobs/ — durable jobs hot-path guide
+
+Level-2 guide for the PostgreSQL-backed job system. Durable decisions and
+contracts live in `docs/` — link, do not duplicate:
+`docs/adr/0003-postgres-job-foundation.md`, `docs/ARCHITECTURE.md`, `docs/API.md`,
+`docs/OPERATIONS.md`. Shared backend commands and safety rules are in `back/AGENTS.md`.
+
+## Substrate & schema
+
+- PostgreSQL only (ADR-0003 supersedes ADR-0002's SQLite decision): `repository.py` uses SQLAlchemy 2 sync + psycopg 3 and Alembic `0001_jobs`. **No SQLite fallback**, no `create_all()`. Integration tests need a real `TEST_DATABASE_URL`; without it the job tests skip.
+- One shared `MetaData` (`schema.py`) backs the migration and the repository, so they cannot drift. The `jobs` table stores only opaque artifact ids and a safe `error_code` — no PII, keys, entity values, filenames or raw exception text in rows, logs or metrics.
+- State machine: `staging → queued → running → succeeded | failed | cancelled | expired`, plus `cancelling` for in-flight cancellation. `ALLOWED_TRANSITIONS` is enforced centrally in the repository; the DB CHECK only guards the status vocabulary. Terminal states may only go to `expired` (GC); nothing leaves `expired`.
+
+## Enqueue & claim
+
+- Atomic enqueue: `create_staging` inserts a `staging` row in a short transaction (counts `staging|queued|running|cancelling` as active; `JobQueueFullError` → 429; attaches to an identical active job by `cache_key`), then `publish_staging` moves `staging → queued` **only after** input/keys artifacts are durable; `abort_staging` moves to `failed` with idempotent cleanup. Staging rows are never claimable.
+- Claim (`claim_with_owner`): one transaction reclaims expired leases (fresh token, `attempt += 1`, `worker_lost`/`attempts_exhausted`), then `SELECT … FOR UPDATE SKIP LOCKED` the oldest eligible `queued` row, sets `running`, and assigns a fresh `uuid4()` fencing token plus `worker_id`.
+- One pooled engine, short sessions; never hold a transaction while masking/DOCX/ZIP/filesystem work runs. Ownership checks use PostgreSQL `clock_timestamp()` to avoid app-clock skew.
+
+## Fencing, heartbeat, cancellation, failure
+
+- Every mutation (`heartbeat`, phase, `succeed`, `fail`, `acknowledge_cancel`) is guarded by `worker_id + lease_token + lease_until > now` and checked by affected-row count, so a stale worker cannot transition or publish anything.
+- Independent `Heartbeat` thread renews the lease at `lease_seconds / 3` (floor 0.1 s), separate from the blocking masking thread. A transient DB error in the heartbeat is logged by exception **type** and retried; it does not kill the thread or mark ownership lost. `run()` polls via `_claim_safe()` / `_sweep_safe()`: a transient PostgreSQL outage (e.g. a database restart) yields an empty poll with bounded backoff instead of killing the worker (`test_jobs_worker.py::test_worker_poll_survives_transient_db_error`, `::test_heartbeat_survives_transient_db_error`). In-flight jobs are still recovered by lease expiry/fencing. `SIGTERM` stops new claims but keeps heartbeating in-flight jobs while they drain; forced termination is recovered by lease expiry with bounded attempts.
+- `request_cancel` makes a `queued` job terminal immediately; a running job is only marked `cancelling` and the worker acknowledges at cooperative checkpoints (between windows) — never pretend a Python thread was killed. Cancelled jobs never publish a result.
+- `worker.py::classify`: deterministic input/format/config errors (`invalid_input`, `invalid_keys`, `invalid_package`, …) are non-retryable; transient `dependency_unavailable`, `artifact_io`, `worker_lost`, `internal_error` get bounded retry with exponential backoff (`next_attempt_at`, `attempt < max_attempts`). Unexpected internal errors get at most one retry.
+
+## TTL / GC
+
+- Active jobs never expire. The TTL clock starts when the job reaches a terminal state (`succeed` / terminal `fail` set `result_expires_at = now + jobs_ttl_seconds`); `expired_jobs` sweeps only terminal rows past that deadline and `remove_expired` deletes rows after their artifacts are gone. GC never touches active rows.
+- Queued jobs past their queue deadline transition to `expired` with `error_code = queue_timeout`. Failed/cancelled rows get a bounded retention before sweep.
+
+## Artifacts & cache ownership
+
+- Private `jobs-data` volume; `storage.py::ArtifactStore` owns `<jobs_dir>/<job_id>.input|.keys|.result` — id-keyed suffixes only, uuid4-validated keys (no path traversal), atomic temp-file + `os.replace` writes. TTL sweep removes artifacts of expired jobs; results are served via `FileResponse`. Large ZIP/DOCX never enter Valkey or job rows.
+- `cache.py` owns Valkey: versioned HMAC-SHA256 key `docmasker:result:v{N}:{operation}:{HMAC}` over a canonical fingerprint of exact input/keys bytes, normalized output name and every version/digest that can change output (`MASKING_RULESET_VERSION`, `MASKING_CONFIG_DIGEST`, `RESULT_MANIFEST_VERSION`, `KEYS_FORMAT_VERSION`, `DOCX_TRANSFORMER_VERSION`, `CACHE_NAMESPACE_VERSION`). **Bump these whenever output semantics change** or stale results will be served.
+- Valkey stores only compact artifact references (immutable, hash-verified blobs in the private `cache/` spool); missing/corrupt artifact = miss + eviction, outage = miss, never 500. Writes happen **only after** the fenced `succeeded` transition — failed/cancelled jobs never populate the cache. Dedupe identical active jobs in PostgreSQL (`create_staging`), not a Valkey lock. Never log the fingerprint, full key, inputs or keys.
+
+## Required tests
+
+`test_jobs_*.py` (`test_jobs_store.py`, `test_jobs_worker.py`, `test_jobs_api.py`,
+`test_jobs_routing.py`), `test_cache.py`, `test_executor.py`, `test_uploads.py`,
+`test_settings_validation.py`. Cross-field settings validation: positive limits/TTLs/timeouts,
+PostgreSQL-only URL, lease > heartbeat/DB-connect timeout, concurrency ≤ pool capacity,
+sync thresholds ≤ hard limits, cache secret when enabled — never relax these to silent
+zero/negative values. Failure-injection tests cover stale fencing, cancellation without
+publication, long jobs across lease intervals, queue-full staging cleanup and active-row retention.

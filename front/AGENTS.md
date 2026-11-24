@@ -2,8 +2,11 @@
 
 This file owns the frontend landmines: exact stack versions, commands, the
 HeroUI rules every agent must follow when touching UI code, and the state/UI
-invariants. The root `AGENTS.md` is a short index; deployment facts live in
-`infra/AGENTS.md`, backend facts in `back/AGENTS.md`.
+invariants. It is a level-2 guide: contracts live in `docs/API.md`, testing in
+`docs/TESTING.md`, architecture in `docs/ARCHITECTURE.md`. Deployment facts live
+in `infra/AGENTS.md`, backend facts in `back/AGENTS.md` and its nested guides.
+OpenAPI→TS client generation is **deferred** (`TODO.md`); `labels.generated.ts`
+is generated from the backend catalogue and is the only generated API file.
 
 ## Stack (exact installed versions, resolved from `bun.lock`)
 

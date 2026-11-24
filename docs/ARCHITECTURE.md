@@ -1,6 +1,6 @@
 # DocMasker Architecture
 
-Sensitive-information masking in text via a deterministic rule-based pipeline. Monorepo: `front/` (Next.js), `back/` (FastAPI), `docs/`. Topic docs: `docs/API.md` (HTTP contract), `docs/TEMPLATES.md` (keys/profiles), `docs/PERFORMANCE.md` (benchmarks/limits).
+Sensitive-information masking in text via a deterministic rule-based pipeline. Monorepo: `front/` (Next.js), `back/` (FastAPI), `docs/`. Topic docs: `docs/API.md` (HTTP contract), `docs/MASKING_CONFIGURATION.md` (keys/profiles), `docs/PERFORMANCE.md` (benchmarks/limits).
 
 ## System diagram
 
@@ -109,7 +109,7 @@ Masking:
 There is no env-var label override: `MASK_LABELS` was removed with the
 profile registry (setting it now fails backend startup). Entity types come
 from the single canonical catalogue `back/config/masking/labels.yaml` —
-see `docs/TEMPLATES.md` and `GET /api/labels`.
+see `docs/MASKING_CONFIGURATION.md` and `GET /api/labels`.
 
 ## Masking pipeline (`back/src/masking/`)
 
@@ -208,8 +208,8 @@ result TextArea. No traceback/path/DB message/PII/keys ever leaves the API.
   large synchronous DOCX round-trip is generous-but-finite; `connectTimeout`
   keeps its default so a dead backend still fails fast. `shared/api/proxy.ts`
   streams backend responses through `new Response(response.body)` (no
-  `arrayBuffer` copy) with `AbortSignal.timeout` per route (15 s JSON/job
-  polling, 10 min files). The old `0`/`0` unbounded dispatcher and
+  `arrayBuffer` copy) with the canonical per-route map in `front/src/shared/api/timeouts.ts
+  (15 s JSON/job, 120 s upload, 300 s result). The old `0`/`0` unbounded dispatcher and
   `maxDuration = 3600` were removed in stage 4 (F-08) — long work goes through
   the durable job API, never a held-open connection.
 
