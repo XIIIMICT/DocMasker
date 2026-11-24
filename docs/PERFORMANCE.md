@@ -64,7 +64,7 @@ per-paragraph cost dominates:
 | Finding | Fix | Status |
 |---|---|---|
 | F-01 event loop blocked | `masking/executor.py::run_cpu` offloads natasha/python-docx/ZIP to a bounded `ThreadPoolExecutor` (`JOBS_CONCURRENCY * 2` slots, semaphore per event loop, overflow → 429); `/health` stays responsive | done |
-| F-02 detect() super-linear on large texts | **Not algorithmically fixed.** Large inputs are redirected to durable jobs (ADR-0002), which bounds one request's blast radius but does not speed up natasha. Windowing/batching is deferred (`TODO.md`) | open |
+| F-02 detect() super-linear on large texts | **Phase 7 fixed algorithmically**: bounded overlapping windows with absolute offsets and boundary dedupe (`masking/windowed.py`), candidate-limited `AddrExtractor` (address markers only), DOCX prefilter and thread-local masker. 360 KB: 211.7 s / ~10 GB → 28.3 s / 144 MB; DOCX 5,000 paragraphs: 115 s → 7.4 s (before/after above) | done |
 | F-03 DOCX cross-paragraph dedupe undercount | dedupe removed; 5,000 identical occurrences report 5,000 | done |
 | F-04 upload validation | `docx_validation.py`: OPC/ZIP structure, entry count, uncompressed size, compression ratio, encryption → 413/415 with Russian details; text/keys char limits | done |
 | F-05 unused keys in header | restore ZIP manifest `{"unused_keys": [...]}` in the body | done |
@@ -101,14 +101,53 @@ ones to the worker. They are **estimates**, to be re-anchored by benchmarks
 for JSON/job polling, 10 min for the synchronous file endpoints. Long work
 never depends on a held-open connection.
 
+### Phase 7 — after (2026-11-24, host toolchain)
+
+`benchmarks/profile_detection.py --size N` (one process per size, so peak RSS
+reflects the real `detect()` pipeline; raw extractor diagnostics moved behind
+`--raw`). Same synthetic generator and fixed seed as the baseline:
+
+| Input | Detect (before → after) | Peak RSS (before → after) | Entities |
+|---|---|---|---|
+| ~4 KB | 739 ms → **188 ms** | 231 MB → **131 MB** | 88 |
+| ~36 KB | 9.9 s → **2.0 s** | 1325 MB → **139 MB** | 803 |
+| ~360 KB | 211.7 s → **28.3 s** | ~10 GB → **144 MB** | 7960 |
+
+The ~4.6–7.5× speedup and flat ~144 MB RSS come from three changes:
+1. `masking/windowed.py` splits long text into overlapping structural windows
+   (8 KB min / 4096 chars / 512 overlap), re-bases spans to absolute offsets,
+   never cuts through a token and deduplicates boundary spans deterministically
+   (§9.1). `checkpoint` runs between windows.
+2. `_find_addresses` feeds `AddrExtractor` only sentence-sized ranges carrying
+   an anchored address marker (abbreviations/postcode/`адрес:`), instead of
+   the whole document. Abbreviation dots are not treated as sentence ends.
+3. DOCX OOXML containers use `detect(text, prefilter=True)`: detectors whose
+   cheap precondition cannot match are skipped; `always_mask` still runs over
+   the full text. `get_masker()` is thread-local (natasha extractors are not
+   proven thread-safe); each thread pays ~110 MB once — keep
+   `JOBS_CONCURRENCY` conservative.
+
+`benchmarks.docx_mask` (after):
+
+| Document | Mask (before → after) | Unmask (before → after) | Peak RSS |
+|---|---|---|---|
+| 100 paragraphs | 1.8 s → **207 ms** | 36 ms → **24 ms** | 142 MB |
+| 1,000 paragraphs | 20.1 s → **1.13 s** | 215 ms → **53 ms** | 147 MB |
+| 5,000 paragraphs | 115 s → **7.4 s** | 997 ms → **209 ms** | 165 MB |
+| 200 + nested table | 10.5 s → **842 ms** | 152 ms → **59 ms** | 165 MB |
+
+Baseline entity counts differ because stage 2 fixed the cross-paragraph
+dedupe undercount; the wall-time comparison is still valid (same input shapes).
+
 ## Remaining hotspots (deferred, see `TODO.md`)
 
-- **F-02** window/batch long texts before natasha `AddrExtractor`; re-measure
-  `text_mask`. 91% of detect time is address chart parsing on the whole text.
-- **F-07** `python-docx` DOM in memory; streaming upload / OOXML streaming
-  transformer is a separate design decision.
-- **7.2** cache the prefix lexicon `_suspicious_positions`; cost of
-  `SequenceMatcher` / repeated morphology on large texts.
+- **F-02** — **closed in Phase 7** (windowing + candidate-limited
+  `AddrExtractor` + prefilter); see the before/after table above.
+- **F-07** obsolete: Phase 5 replaced python-docx DOM traversal with the OPC
+  transformer; the remaining part-level DOM cost is documented in
+  `docs/DOCX_SUPPORT.md`.
+- **7.2** `_suspicious_positions` is now a bounded `lru_cache(256)`; remaining
+  `SequenceMatcher` / repeated morphology cost on large texts is unmeasured.
 - **7.3** accuracy corpus: versioned precision/recall/F1 per label, false
   positives/negatives. `score = 1.0` is a constant, **not** a confidence — the
   span-overlap policy uses it only as a tiebreaker (see `back/AGENTS.md`).
@@ -120,10 +159,11 @@ never depends on a held-open connection.
 
 ## Capacity facts worth keeping
 
-- natasha's `MorphVocab` + extractors cost ~170 MB of in-memory dictionary per
-  instance and are not proven thread-safe: Phase 4 uses **one process-wide warm
-  masker** (`get_masker`, `cache`) built from the single immutable config
-  snapshot; worker threads share it and each call runs read-only detection.
+- natasha's `MorphVocab` + extractors cost ~110–170 MB of in-memory dictionary
+  per instance and are not proven thread-safe. Since Phase 7 `get_masker()`
+  returns **one masker per thread** (`threading.local()`), not one process-wide
+  `@cache` instance; the sync CPU pool and worker use their own. Keep
+  `JOBS_CONCURRENCY` conservative and measure peak RSS when changing it.
   Never construct a `RuleBasedMasker` per request.
 - DOCX masking is two-pass over all paragraphs (document-wide numbering), so a
   5,000-paragraph document is ~2 min of CPU — exactly the case the job path

@@ -11,17 +11,21 @@ is literal data only, never executable code or regex.
 
 import difflib
 import re
+import threading
 import unicodedata
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
-from functools import cache
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Protocol
 
 import phonenumbers
 from natasha import AddrExtractor, MorphVocab, NamesExtractor
 
+from src.config import get_settings
+
 from .config import ExceptionValue, MaskingConfig, get_config
 from .detectors import DETECTORS
+from .windowed import dedupe_boundary_spans, iter_windows
 
 # --- Label vocabulary --------------------------------------------------------
 PERSON = "person"
@@ -64,6 +68,59 @@ _INITIALS_SURNAME_RE = re.compile(rf"(?<!\w){_INITIAL}{_INITIAL}(?P<surname>[А-
 _SURNAME_INITIALS_RE = re.compile(rf"(?<!\w)(?P<surname>[А-ЯЁ][а-яё]+)\s+{_INITIAL}{_INITIAL}")
 _NAME_PAIR_RE = re.compile(r"(?=(?P<first>[А-ЯЁ][а-яё]+)[ \t]+(?P<last>[А-ЯЁ][а-яё]+))")
 _ADDRESS_LINE_RE = re.compile(r"(?im)\bадрес\w*\s*:\s*(?P<value>[^\n]+)")
+_ADDRESS_SENTENCE_END_RE = re.compile(r"[.!?\n]+\s*")
+
+
+@lru_cache(maxsize=1)
+def _address_candidate_re() -> re.Pattern[str]:
+    """
+    Cheap structural markers worth sending to the expensive `AddrExtractor`.
+
+    Anchored abbreviations (from `lexicons/addresses.yaml`), a postcode and
+    the `адрес:` marker. Short tokens are never loose substrings, so «ш»
+    inside «Строймонтаж» cannot make a whole sentence a candidate. Built
+    lazily so importing this module never requires the config snapshot.
+    """
+    abbreviations = "|".join(re.escape(word) for word in sorted(_cfg().address_abbreviations, key=len, reverse=True))
+    return re.compile(rf"(?i)(?:\b(?:{abbreviations})\s*\.|\bадрес\w*\s*:|\b\d{{6}}\b)")
+
+
+def _address_candidate_ranges(text: str) -> Iterator[tuple[int, int]]:
+    """
+    Sentence-sized ranges that may contain an AddrExtractor match.
+
+    `AddrExtractor` costs ~0.2 ms per character; on a 500 KB document that is
+    ~100 s and ~10 GB peak RSS. Only sentences carrying an address marker are
+    fed to it (the `адрес:` line path is handled separately and in full).
+    Touching ranges are merged, so an address split across two markers stays
+    one contiguous input. Text with NO marker causes no AddrExtractor call —
+    the intended fast path for PII-free paragraphs (§9.2).
+    """
+    candidate_re = _address_candidate_re()
+    abbreviations = {f"{word}." for word in _cfg().address_abbreviations}
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    for match in _ADDRESS_SENTENCE_END_RE.finditer(text):
+        # Include the dot itself so «кв.» is recognised as an abbreviation,
+        # not as a sentence end that would truncate the address.
+        prefix = text[max(0, match.start() - 6) : match.start() + 1].lower().strip()
+        # «г.», «ул.», «д.», «кв.» … are NOT sentence ends; splitting there
+        # would feed AddrExtractor a collection of unrecognisable fragments.
+        if any(prefix.endswith(abbr) for abbr in abbreviations):
+            continue
+        end = match.end()
+        if candidate_re.search(text[start:end]):
+            if ranges and start <= ranges[-1][1]:
+                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+            else:
+                ranges.append((start, end))
+        start = end
+    if start < len(text) and candidate_re.search(text[start:]):
+        if ranges and start <= ranges[-1][1]:
+            ranges[-1] = (ranges[-1][0], len(text))
+        else:
+            ranges.append((start, len(text)))
+    yield from ranges
 
 
 def _cfg() -> MaskingConfig:
@@ -132,9 +189,9 @@ def _legal_lexicon() -> frozenset[str]:
     return frozenset(lemma for form in _cfg().org_legal_phrases for lemma in form if len(lemma) >= 4)
 
 
-@cache
+@lru_cache(maxsize=256)
 def _suspicious_positions(text: str) -> tuple[int, ...]:
-    """Cheap trigram pre-filter before the costly lemmatiser."""
+    """Cheap trigram pre-filter before the costly lemmatiser (bounded cache)."""
     lexicon = _legal_lexicon()
     prefixes = {word[:3] for word in lexicon}
     return tuple(
@@ -256,6 +313,26 @@ def _suppressed(entity: Entity, patterns: dict[str, re.Pattern[str] | None]) -> 
     return any(match.group(0).casefold() == normalized.casefold() for match in pattern.finditer(normalized))
 
 
+#: Conservative cheap preconditions (Phase 7 §9.2). A detector is skipped only
+#: when its input cannot possibly contain a matching pattern. `always_mask`
+#: values bypass this entirely (they run over the full text afterwards), and
+#: `never_mask` suppression is unaffected. Keep these WEAK: a false "skip"
+#: would silently lose PII, a false "run" only costs time.
+_DETECTOR_PRECONDITIONS: dict[str, Callable[[str], bool]] = {
+    "email": lambda text: "@" in text,
+    "link": lambda text: "://" in text,
+    "phone": lambda text: any(char.isdigit() for char in text),
+    "person": lambda text: any(char.isupper() for char in text),
+    "address": lambda text: any(char.isdigit() for char in text) or "адрес" in text.lower(),
+    "organization": lambda text: any(char.isupper() for char in text),
+}
+
+
+def _cheap_prefilter(text: str) -> frozenset[str]:
+    """Detector ids whose cheap precondition passes for this short text."""
+    return frozenset(detector_id for detector_id, allows in _DETECTOR_PRECONDITIONS.items() if allows(text))
+
+
 class RuleBasedMasker:
     """
     Deterministic Russian PII masker built from one immutable config snapshot.
@@ -356,7 +433,10 @@ class RuleBasedMasker:
     def _find_addresses(self, text: str) -> Iterator[Entity]:
         if ADDRESS not in self.labels:
             return
-        yield from _merge_address_parts(self._addresses(text), text)
+        for start, end in _address_candidate_ranges(text):
+            fragment = text[start:end]
+            for entity in _merge_address_parts(self._addresses(fragment), fragment):
+                yield replace(entity, start=entity.start + start, end=entity.end + start)
         for match in _ADDRESS_LINE_RE.finditer(text):
             start, end = match.start("value"), match.end("value")
             end = _address_value_end(text, start, end)
@@ -391,13 +471,66 @@ class RuleBasedMasker:
 
     # -- public API -----------------------------------------------------------
 
-    def detect(self, text: str) -> list[Entity]:
-        """Non-overlapping entities, with never_mask suppression and force-mask."""
+    def _detect_window(self, text: str, allowed: frozenset[str] | None = None) -> list[Entity]:
+        """Run the detector registry once over one window (local offsets)."""
         raw: list[Entity] = []
         for detector_id in DETECTOR_ORDER:
+            if allowed is not None and detector_id not in allowed:
+                continue
             raw.extend(DETECTORS[detector_id].run(self, text))
-        merged = _merge_spans(raw)
+        return raw
+
+    def _detect_long(
+        self,
+        text: str,
+        checkpoint: Callable[[], None] | None,
+    ) -> list[Entity]:
+        """
+        Windowed detection for large text (Phase 7 §9.1).
+
+        `AddrExtractor` is superlinear on a whole document, so each window is
+        bounded; spans are re-based to absolute offsets and exact boundary
+        duplicates are dropped before the shared overlap merge. Cancellation
+        is checked between windows (worker cooperative checkpoints).
+        """
+        settings = get_settings()
+        raw: list[Entity] = []
+        for offset, window in iter_windows(
+            text,
+            min_chars=settings.detection_min_chars,
+            chunk_chars=settings.detection_chunk_chars,
+            overlap_chars=settings.detection_overlap_chars,
+        ):
+            if checkpoint is not None:
+                checkpoint()
+            for entity in self._detect_window(window):
+                raw.append(replace(entity, start=entity.start + offset, end=entity.end + offset))
+        unique = dedupe_boundary_spans(raw, lambda e: (e.label, e.start, e.end, e.text))
+        return _merge_spans(unique)
+
+    def detect(
+        self,
+        text: str,
+        *,
+        checkpoint: Callable[[], None] | None = None,
+        prefilter: bool = False,
+    ) -> list[Entity]:
+        """
+        Non-overlapping entities, with never_mask suppression and force-mask.
+
+        For text at/below `DETECTION_MIN_CHARS` this is the original single-pass
+        path; `prefilter=True` (OOXML per-paragraph calls) additionally skips
+        detectors whose input cannot possibly match. Larger text uses bounded
+        overlapping windows. `checkpoint` is invoked between windows (§9.1).
+        """
+        if len(text) > get_settings().detection_min_chars:
+            merged = self._detect_long(text, checkpoint)
+        else:
+            allowed = _cheap_prefilter(text) if prefilter else None
+            merged = _merge_spans(self._detect_window(text, allowed))
         kept = [entity for entity in merged if not _suppressed(entity, self._never_patterns)]
+        # always_mask runs over the FULL text, never a window / prefiltered
+        # subset: a configured value must never be suppressed by this shortcut.
         return _merge_spans([*kept, *self._find_always_masked(text)])
 
     def mask(self, text: str, entities: list[Entity] | None = None) -> str:
@@ -457,7 +590,31 @@ def _looks_like_address(raw: str) -> bool:
     return has_letters and has_digits
 
 
-@cache
+_THREAD_LOCAL = threading.local()
+
+
+def _new_masker() -> RuleBasedMasker:
+    masker = RuleBasedMasker()
+    _THREAD_LOCAL.masker = masker
+    return masker
+
+
 def get_masker() -> RuleBasedMasker:
-    """Process-wide masker (one immutable config snapshot)."""
-    return RuleBasedMasker()
+    """
+    One masker **per thread** (Phase 7 §9.2).
+
+    `natasha`'s `NamesExtractor`/`AddrExtractor` (yargy) keep mutable parser
+    state and are not proven thread-safe, while the sync CPU pool and the
+    worker run detection concurrently. A process-wide `@cache` instance was a
+    latent race. `threading.local()` gives each worker thread its own
+    `MorphVocab` — the memory tradeoff is explicit: ~110 MB per instance, so
+    keep `JOBS_CONCURRENCY` conservative (default 2 → 3 instances).
+    """
+    masker = getattr(_THREAD_LOCAL, "masker", None)
+    return masker if masker is not None else _new_masker()
+
+
+def reset_masker() -> None:
+    """Drop this thread's cached masker (tests / config reload)."""
+    if hasattr(_THREAD_LOCAL, "masker"):
+        del _THREAD_LOCAL.masker

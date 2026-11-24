@@ -31,7 +31,10 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
    first construction, so the masker is cached (`get_masker`, `lru_cache`) —
    never build a `RuleBasedMasker` per request. Tests construct one per test
    on purpose (isolated, still fast). Phase 4 removed profiles: there is exactly
-   one configuration and one process-wide warm masker (`get_masker`, `cache`).
+   one configuration. `get_masker()` is **one masker per thread** since Phase 7
+   (`threading.local()`), not a process-wide `@cache`: natasha extractors hold
+   mutable yargy state and are not proven thread-safe. Each thread pays ~110 MB
+   once — keep `JOBS_CONCURRENCY` conservative.
 3. **`natasha` extractors are not wired the way the docs imply.** In 1.6 the
    *multi-match* API is `extractor(text)` (calling the instance) —
    `extractor.find(text)` returns only the **first** `Match` (and `Match` is
@@ -225,3 +228,15 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
 24. **§8.2 (OpenAPI → TS types) is deferred by maintainer decision.** Do not
     add `openapi-typescript`/generated `schema.ts`/CI freshness gate in this
     phase; handwritten DTOs remain. Tracked in `TODO.md`.
+25. **Large-text detection is windowed, not whole-document (Phase 7 §9.1).**
+    `masking/windowed.py::iter_windows` yields bounded overlapping windows
+    aligned to structural boundaries and never cutting a token; spans from
+    `RuleBasedMasker._detect_long` are re-based to absolute offsets and exact
+    boundary duplicates are removed before `_merge_spans`. `checkpoint` runs
+    between windows. `_find_addresses` sends `AddrExtractor` only sentences
+    with an anchored address marker (abbreviation dots are not sentence ends)
+    — feeding it the whole document caused the recorded 92.8 s / 7.3 GB
+    baseline. OOXML containers call `detect(text, prefilter=True)`; the cheap
+    per-detector preconditions can never suppress `always_mask`.
+    `_suspicious_positions` is a bounded `lru_cache(256)`. See
+    `docs/PERFORMANCE.md` for before/after numbers.

@@ -169,6 +169,16 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
+**Implemented in Phase 7 (2026-11-24):** bounded long-text detection
+(`masking/windowed.py`) with absolute offsets, boundary dedupe and checkpoints;
+candidate-limited `AddrExtractor` (only address-marker sentences); conservative
+per-detector prefilter for OOXML containers; thread-local masker (natasha
+extractors are not thread-safe); bounded `_suspicious_positions` cache;
+validated chunk/overlap settings. Before/after in `docs/PERFORMANCE.md`:
+360 KB detect 211.7 s / ~10 GB → 28.3 s / 144 MB; DOCX 5,000 paragraphs
+115 s → 7.4 s. Job concurrency stays conservative because each thread owns
+its own `MorphVocab`.
+
 **Implemented in Phase 6 (2026-11-24):** API contracts, timeouts, streaming
 and event-loop safety. One stable error envelope (`{code, detail, request_id}`
 + `X-Request-ID`) with sanitized handlers; canonical `timeouts.ts` route map
