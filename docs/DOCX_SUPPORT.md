@@ -27,6 +27,11 @@ One entity spanning several runs/text nodes becomes **one** placeholder. Key
 numbering is document-wide across every processed part (`MaskKeys`). Masking and
 restoration use the same inverse text-node rewrite.
 
+Each text-bearing container is passed to the detector with `prefilter=True`
+(Phase 7): detectors whose cheap precondition cannot match are skipped, while
+`always_mask` literals still run over the full text. This makes documents with
+thousands of PII-free paragraphs cheap; see `docs/PERFORMANCE.md`.
+
 ## Not processed (documented limitations)
 
 - **Raster/vector image pixels** — no OCR in this scope. `raster_image_ocr:

@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     sync_max_text_chars: int = Field(default=20_000, validation_alias="SYNC_MAX_TEXT_CHARS")
     sync_max_docx_bytes: int = Field(default=1024 * 1024, validation_alias="SYNC_MAX_DOCX_BYTES")
     sync_max_docx_paragraphs: int = Field(default=200, validation_alias="SYNC_MAX_DOCX_PARAGRAPHS")
+    #: Phase 7 §9.1: bounded windowing for long-text detection. `AddrExtractor`
+    #: is superlinear on a whole document, so text above `detection_min_chars`
+    #: is split into overlapping structural windows and spans are re-based to
+    #: absolute offsets. Values are tuned via `benchmarks/profile_detection.py`.
+    detection_min_chars: int = Field(default=8_000, validation_alias="DETECTION_MIN_CHARS")
+    detection_chunk_chars: int = Field(default=4_096, validation_alias="DETECTION_CHUNK_CHARS")
+    detection_overlap_chars: int = Field(default=512, validation_alias="DETECTION_OVERLAP_CHARS")
     #: Bounded queue / worker (one warm masker per thread).
     jobs_max_active: int = Field(default=16, validation_alias="JOBS_MAX_ACTIVE")
     jobs_concurrency: int = Field(default=2, validation_alias="JOBS_CONCURRENCY")
@@ -110,6 +117,9 @@ class Settings(BaseSettings):
             "sync_max_text_chars",
             "sync_max_docx_bytes",
             "sync_max_docx_paragraphs",
+            "detection_min_chars",
+            "detection_chunk_chars",
+            "detection_overlap_chars",
             "jobs_max_active",
             "jobs_concurrency",
             "jobs_max_attempts",
@@ -149,6 +159,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.sync_max_docx_bytes > self.max_upload_mb * 1024 * 1024:
             msg = "SYNC_MAX_DOCX_BYTES не должен превышать жёсткий лимит UPLOAD_MAX_MB."
+            raise ValueError(msg)
+        if self.detection_overlap_chars >= self.detection_chunk_chars:
+            msg = "DETECTION_OVERLAP_CHARS должен быть меньше DETECTION_CHUNK_CHARS."
             raise ValueError(msg)
         if self.jobs_lease_seconds <= self.db_connect_timeout_seconds:
             msg = "Время аренды задания должно превышать таймаут подключения к БД."

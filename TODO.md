@@ -105,12 +105,8 @@
 
 ## Отдельные незакрытые технические долги (изbaseline и ТЗ)
 
-- [ ] **F-02** `detect()` сверхлинеен на больших текстах: 360 КБ → 92.8 с /
-      7.3 ГБ RSS, 91% времени — natasha `AddrExtractor` (yargy). Нужны
-      окна/батчинг детекции и повторные замеры `back/benchmarks/`; порог
-      sync→job сейчас уводит большие входы в воркер, но сам алгоритм не ускорен.
-- [ ] **F-07** `python-docx` строит DOM в памяти (стриминг ответа и spool уже
-      есть); streaming upload / OOXML streaming transformer — отдельное решение.
+- [x] **F-02** `detect()` сверхлинеен на больших текстах (360 КБ → 92.8 с / 7.3 ГБ RSS): Phase 7 добавил windowing с абсолютными офсетами и boundary dedupe, candidate-limited `AddrExtractor`, DOCX-префильтр и thread-local masker. After: 360 КБ → **28.3 с / 144 МБ**, DOCX 5000 абзацев → **7.4 с**. См. `docs/PERFORMANCE.md`.
+- [x] **F-07** `python-docx` DOM в памяти: Phase 5 заменил обход на OPC-трансформер (`back/src/masking/ooxml/`); часть XML-узлов остаётся в DOM — ограничение задокументировано в `docs/DOCX_SUPPORT.md`.
 - [ ] **Точность (7.3)**: версионируемый regression corpus, precision/recall/F1
       по label, false positives/negatives; `score=1.0` — константа, не confidence.
 - [ ] **Горячие точки (7.2)**: кэш prefix-лексикона `_suspicious_positions`,
@@ -200,8 +196,18 @@
       CI, коммит `front/src/shared/api/generated/schema.ts`, проверка свежести
       в CI, замена рукописных DTO. Решение: «поместим в TODO» — не делается в
       Phase 6, чтобы не смешивать с error-contract/streaming работой.
-- [ ] **Phase 7** — performance/capacity (long-text windowing, DOCX prefilters,
-      re-run benchmarks).
+- [x] **Phase 7** — performance/capacity: long-text windowing with absolute
+      offsets + deterministic boundary dedupe + cancellation checkpoints
+      (`masking/windowed.py`), candidate-limited `AddrExtractor` (address
+      markers only, abbreviation dots are not sentence ends), conservative
+      per-detector prefilter for DOCX containers (always_mask bypasses it),
+      thread-local masker (natasha extractors not thread-safe), bounded
+      `_suspicious_positions` lru_cache, validated chunk/overlap settings.
+      Before→after: 360 KB detect 211.7 s / ~10 GB → 28.3 s / 144 MB; DOCX
+      5,000 paragraphs 115 s → 7.4 s. `test_windowed.py` covers every entity
+      type crossing chunk boundaries. Means of verification:
+      `benchmarks/profile_detection.py --size N`, `benchmarks.docx_mask`.
+      Remaining before/after detail in `docs/PERFORMANCE.md`.
 - [ ] **Phase 8** — final agent-doc refresh + release readiness
       (clean install, migrations, stress, CI protection checklist).
 

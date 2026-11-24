@@ -426,7 +426,7 @@ def transform_package(
                     continue
                 local: list[tuple[int, int, str]] = []
                 if mode == "mask":
-                    for item in masker.detect(text):
+                    for item in masker.detect(text, prefilter=True):
                         marker = keys.placeholder(item.label, item.text)
                         local.append((item.start, item.end, marker))
                         all_entities.append(
