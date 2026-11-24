@@ -3,7 +3,6 @@
 import base64
 import json
 import re
-from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import quote
@@ -19,15 +18,11 @@ from src.jobs.routing import count_docx_paragraphs, enqueue, needs_job
 from src.masking.config import SCHEMA_VERSION, get_config
 
 from .archives import mask_archive, restore_archive
-from .docx_service import mask_docx_in_memory, unmask_docx_in_memory
-from .docx_validation import (
-    DocxValidationError,
-    unsupported_docx_parts,
-    upload_limits,
-    validate_docx_package,
-)
+from .docx_service import CoverageReport, OoxmlPackageError, mask_docx_in_memory, unmask_docx_in_memory
+from .docx_validation import DocxValidationError, upload_limits, validate_docx_package
 from .executor import ExecutorBusyError, run_cpu
 from .mapping import KeysValidationError, MaskKeys, placeholders_from_document, validate_keys_yaml
+from .ooxml.manifest import build_mask_manifest, build_unmask_manifest
 from .rule_based import get_masker
 from .schemas import (
     LabelsResponse,
@@ -64,29 +59,28 @@ def _ascii_attachment_name(name: str) -> str:
     return ascii_name or "masked.docx"
 
 
-def _label_breakdown(entities: list[MaskedEntity]) -> str:
-    """Per-label counts as a JSON object, e.g. ``{"person": 2, "phone": 1}``."""
-    return json.dumps(dict(Counter(entity.label for entity in entities)))
-
-
 def _content_disposition(download_name: str) -> str:
     """RFC 5987 attachment header (ASCII fallback + UTF-8 name for Cyrillic)."""
     return f"attachment; filename=\"{_ascii_attachment_name(download_name)}\"; filename*=UTF-8''{quote(download_name)}"
 
 
-def _attachment_headers(download_name: str, entities: list[MaskedEntity]) -> dict[str, str]:
-    """Download headers shared by every masked-file response (name + counts)."""
+def _download_headers(download_name: str) -> dict[str, str]:
+    """Transport-only headers: semantic metadata lives in `manifest.json` (§7.3)."""
     return {
         "Content-Disposition": _content_disposition(download_name),
-        "X-Masked-Count": str(len(entities)),
-        "X-Masked-Breakdown": _label_breakdown(entities),
+        "Content-Type": _ZIP_CONTENT_TYPE,
+        "Cache-Control": "no-store",
     }
 
 
-def _unsupported_header(data: bytes) -> str | None:
-    """Build a short, safe warning code list (no values, no filenames)."""
-    codes = unsupported_docx_parts(data)
-    return ",".join(codes) if codes else None
+def _manifest_ctx() -> tuple[int, str, int]:
+    """Version/digest fields shared by sync and job manifests."""
+    settings = get_settings()
+    return (
+        settings.masking_ruleset_version,
+        get_config().digest,
+        settings.cache_namespace_version,
+    )
 
 
 def _cache_key(kind: str, *, input_bytes: bytes, keys_bytes: bytes | None, filename: str) -> str:
@@ -222,21 +216,34 @@ async def mask_file_endpoint(
             return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
         result_cache().invalidate(key)
 
-    def _mask_file() -> tuple[bytes, list[MaskedEntity], MaskKeys]:
+    def _mask_file() -> tuple[bytes, list[MaskedEntity], MaskKeys, CoverageReport]:
         return mask_docx_in_memory(source, get_masker())
 
     try:
-        masked_bytes, entities, keys = await run_cpu(_mask_file)
+        masked_bytes, entities, keys, coverage = await run_cpu(_mask_file)
     except ExecutorBusyError as error:
         raise _busy() from error
+    except OoxmlPackageError as error:
+        # Strict blocking error for genuinely unprocessable content (§6.5).
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
     base = Path(file.filename).stem
-    archive = mask_archive(masked_bytes, keys.to_yaml(), base)
-    headers = _attachment_headers(f"{base} (замаскированный).zip", entities)
-    headers["Content-Type"] = _ZIP_CONTENT_TYPE
-    unsupported = _unsupported_header(source)
-    if unsupported:
-        headers["X-Docx-Unsupported-Parts"] = unsupported
+    document_name = f"{base} (замаскированный).docx"
+    keys_name = f"{base} (ключи демаскировки).yaml"
+    ruleset, digest, namespace = _manifest_ctx()
+    manifest = build_mask_manifest(
+        source_bytes=source,
+        document_name=document_name,
+        keys_name=keys_name,
+        entities=[entity.model_dump() for entity in entities],
+        coverage=coverage.as_manifest(),
+        cache_hit=False,
+        namespace_version=namespace,
+        masking_ruleset_version=ruleset,
+        exception_config_digest=digest,
+    )
+    archive = mask_archive(masked_bytes, keys.to_yaml(), base, manifest)
+    headers = _download_headers(f"{base} (замаскированный).zip")
     _cache_put(key, _pack_file_result(archive, headers))
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
 
@@ -332,26 +339,30 @@ async def unmask_file_endpoint(
             return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
         result_cache().invalidate(key)
 
-    def _unmask_file() -> tuple[bytes, list[str]]:
+    def _unmask_file() -> tuple[bytes, list[str], CoverageReport]:
         return unmask_docx_in_memory(source, placeholders)
 
     try:
-        restored, unused = await run_cpu(_unmask_file)
+        restored, unused, coverage = await run_cpu(_unmask_file)
     except ExecutorBusyError as error:
         raise _busy() from error
-    except KeysValidationError as error:
+    except OoxmlPackageError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
-    base = Path(file.filename).stem
-    # A masked document is downloaded as "<base> (замаскированный).docx" and
-    # uploaded back for restoring; drop that suffix so the restored file is
-    # named "<base> (демаскированный).docx", not "... (замаскированный) (...)".
-    base = base.removesuffix(" (замаскированный)")
-    archive = restore_archive(restored, unused, base)
-    download_name = f"{base} (демаскированный).zip"
-    headers = {"Content-Disposition": _content_disposition(download_name), "Content-Type": _ZIP_CONTENT_TYPE}
-    unsupported = _unsupported_header(source)
-    if unsupported:
-        headers["X-Docx-Unsupported-Parts"] = unsupported
+    base = Path(file.filename).stem.removesuffix(" (замаскированный)")
+    document_name = f"{base} (демаскированный).docx"
+    ruleset, digest, namespace = _manifest_ctx()
+    manifest = build_unmask_manifest(
+        source_bytes=source,
+        document_name=document_name,
+        unused_keys=unused,
+        coverage=coverage.as_manifest(),
+        cache_hit=False,
+        namespace_version=namespace,
+        masking_ruleset_version=ruleset,
+        exception_config_digest=digest,
+    )
+    archive = restore_archive(restored, base, manifest)
+    headers = _download_headers(f"{base} (демаскированный).zip")
     _cache_put(key, _pack_file_result(archive, headers))
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)

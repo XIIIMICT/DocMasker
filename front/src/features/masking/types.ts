@@ -53,8 +53,6 @@ export interface ModeState {
     // Keys the backend reported as unused after a file demasking (a `.docx`
     // text is only known server-side). `null` → derive live from the input.
     demaskUnused: string[] | null;
-    // Safe backend codes for OOXML parts that were NOT masked.
-    docxWarning: string[] | null;
     // Shared UI state.
     busy: boolean;
     dragging: boolean;
@@ -78,7 +76,6 @@ export function emptyModeState(): ModeState {
         restored: "",
         restoredFile: null,
         demaskUnused: null,
-        docxWarning: null,
         busy: false,
         dragging: false,
         error: null,

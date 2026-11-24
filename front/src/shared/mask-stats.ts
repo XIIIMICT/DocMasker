@@ -1,5 +1,6 @@
 import { LABEL_CATALOGUE } from "@/shared/api/labels.generated";
 import { keyEntries, type MaskStatsPayload } from "@/shared/api/mask";
+import type { ResultManifest } from "@/shared/api/mask-archive";
 
 /**
  * Masking / demasking totals for the result-label tooltip.
@@ -90,6 +91,17 @@ export function statsFromAggregate(stats: MaskStatsPayload): MaskStats {
         byLabel: stats.occurrences_by_label,
         uniqueByLabel: stats.unique_by_label,
         unused: [],
+    };
+}
+
+/** Build stats from the versioned file manifest (§7.3 — no header parsing). */
+export function statsFromManifest(manifest: ResultManifest): MaskStats {
+    const statistics = manifest.statistics;
+    return {
+        total: statistics.total_occurrences ?? 0,
+        byLabel: statistics.occurrences_by_label ?? {},
+        uniqueByLabel: statistics.unique_by_label ?? {},
+        unused: statistics.unused_keys ?? [],
     };
 }
 

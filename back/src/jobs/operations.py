@@ -12,15 +12,32 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from src.config import get_settings
+from src.masking.config import get_config
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from src.masking.docx_validation import upload_limits, validate_docx_package
 from src.masking.mapping import placeholders_from_document, validate_keys_yaml
+from src.masking.ooxml.manifest import (
+    MANIFEST_NAME,
+    build_mask_manifest,
+    build_unmask_manifest,
+)
 from src.masking.rule_based import get_masker
 from src.masking.schemas import MaskRequest, UnmaskRequest
 from src.masking.service import mask_document, mask_stats, unmask_document
 
 from .models import JobPhase
 from .storage import ArtifactStore
+
+
+def _manifest_ctx() -> dict[str, Any]:
+    """Version/digest fields shared by sync and job manifests (§7.2)."""
+    settings = get_settings()
+    return {
+        "masking_ruleset_version": settings.masking_ruleset_version,
+        "exception_config_digest": get_config().digest,
+        "namespace_version": settings.cache_namespace_version,
+    }
 
 
 class JobExecutionError(Exception):
@@ -70,7 +87,6 @@ def execute(
         progress("rewrite", 85)
         payload: dict[str, Any] = {
             "text": masked,
-            "kind": kind,
             "keys": keys.to_yaml(),
             "stats": mask_stats(entities).model_dump(),
         }
@@ -88,7 +104,7 @@ def execute(
         restored = unmask_document(request)
         check()
         progress("rewrite", 85)
-        return {"result.json": json.dumps({"text": restored, "kind": kind}, ensure_ascii=False).encode("utf-8")}
+        return {"result.json": json.dumps({"text": restored}, ensure_ascii=False).encode("utf-8")}
 
     if kind == "mask_file":
         data = safe_read("input")
@@ -98,15 +114,30 @@ def execute(
             raise JobExecutionError("invalid_package") from error
         check()
         progress("detection", 40)
-        masked_bytes, _entities, keys = mask_docx_in_memory(data, masker)
+        masked_bytes, entities, keys, coverage = mask_docx_in_memory(data, masker)
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
         base = Path(name).stem
+        document_name = f"{base} (замаскированный).docx"
+        keys_name = f"{base} (ключи демаскировки).yaml"
+        ctx = _manifest_ctx()
+        manifest = build_mask_manifest(
+            source_bytes=data,
+            document_name=document_name,
+            keys_name=keys_name,
+            entities=[entity.model_dump() for entity in entities],
+            coverage=coverage.as_manifest(),
+            cache_hit=False,
+            namespace_version=ctx["namespace_version"],
+            masking_ruleset_version=ctx["masking_ruleset_version"],
+            exception_config_digest=ctx["exception_config_digest"],
+        )
         progress("archive", 95)
         return {
-            f"{base} (замаскированный).docx": masked_bytes,
-            f"{base} (ключи демаскировки).yaml": keys.to_yaml().encode("utf-8"),
+            document_name: masked_bytes,
+            keys_name: keys.to_yaml().encode("utf-8"),
+            MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
         }
 
     if kind == "unmask_file":
@@ -122,17 +153,27 @@ def execute(
             raise JobExecutionError("invalid_keys") from error
         check()
         progress("detection", 40)
-        restored, unused = unmask_docx_in_memory(data, placeholders)
+        restored, unused, coverage = unmask_docx_in_memory(data, placeholders)
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
         base = Path(name).stem.removesuffix(" (замаскированный)")
+        document_name = f"{base} (демаскированный).docx"
+        ctx = _manifest_ctx()
+        manifest = build_unmask_manifest(
+            source_bytes=data,
+            document_name=document_name,
+            unused_keys=unused,
+            coverage=coverage.as_manifest(),
+            cache_hit=False,
+            namespace_version=ctx["namespace_version"],
+            masking_ruleset_version=ctx["masking_ruleset_version"],
+            exception_config_digest=ctx["exception_config_digest"],
+        )
         progress("archive", 95)
         return {
-            f"{base} (демаскированный).docx": restored,
-            f"{base} (отчёт о демаскировке).json": json.dumps(
-                {"unused_keys": unused}, ensure_ascii=False, indent=2
-            ).encode("utf-8"),
+            document_name: restored,
+            MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
         }
 
     raise JobExecutionError("unknown_kind")

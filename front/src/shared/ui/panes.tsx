@@ -5,7 +5,6 @@ import { type DragEvent, type RefObject, useMemo } from "react";
 
 import { type DocxResult, type MaskedFileResult } from "@/features/masking/types";
 import { placeholdersFromKeys, valuesFromKeys } from "@/shared/api/mask";
-import { docxWarningText } from "@/shared/api/mask-helpers";
 import { type MaskStats, statsBreakdown, totalText } from "@/shared/mask-stats";
 import { DocxViewer } from "@/shared/ui/docx-viewer";
 
@@ -71,7 +70,6 @@ export function MaskResultPane({
     resultTab,
     onResultTabChange,
     stats,
-    docxWarning,
     keys,
     maskedNothing,
     showResultPreview,
@@ -97,7 +95,6 @@ export function MaskResultPane({
     result: string;
     resultTextRef: RefObject<HTMLTextAreaElement | null>;
     maskedDocRef: RefObject<HTMLDivElement | null>;
-    docxWarning: string[] | null;
     canDownloadResult: boolean;
     canDownloadKeys: boolean;
     onDownloadResult: () => void;
@@ -124,21 +121,6 @@ export function MaskResultPane({
                         </Tabs.List>
                     </Tabs.ListContainer>
                 </Tabs>
-                {docxWarning && error === null ? (
-                    <Tooltip delay={150}>
-                        <Tooltip.Trigger
-                            className="editor-pane__docx-warning"
-                            role="note"
-                            aria-label="Предупреждение о покрытии DOCX"
-                        >
-                            ⚠ Не все части обработаны
-                        </Tooltip.Trigger>
-                        <Tooltip.Content showArrow placement="bottom">
-                            <Tooltip.Arrow />
-                            <span className="stats-breakdown">{docxWarningText(docxWarning)}</span>
-                        </Tooltip.Content>
-                    </Tooltip>
-                ) : null}
                 {stats !== null && error === null && stats.total > 0 ? (
                     <Tooltip delay={150}>
                         <Tooltip.Trigger className="editor-pane__stats">

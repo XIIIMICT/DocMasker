@@ -80,7 +80,6 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
                                 maskedFile={w.maskedFile}
                                 inFileMode={w.inFileMode}
                                 result={w.result}
-                                docxWarning={w.docxWarning}
                                 resultTextRef={w.resultTextRef}
                                 maskedDocRef={w.maskedDocRef}
                                 canDownloadResult={w.canDownloadResult}

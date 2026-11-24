@@ -119,7 +119,7 @@ def test_unmask_file_job_round_trip(env: Settings, worker: Worker) -> None:
     from src.masking.docx_service import mask_docx_in_memory
 
     source = _build_docx()
-    masked_bytes, _entities, keys = mask_docx_in_memory(source)
+    masked_bytes, _entities, keys, _coverage = mask_docx_in_memory(source)
     accepted = enqueue(
         "unmask_file",
         input_bytes=masked_bytes,
@@ -133,7 +133,7 @@ def test_unmask_file_job_round_trip(env: Settings, worker: Worker) -> None:
         names = archive.namelist()
         restored = archive.read(next(name for name in names if name.endswith(".docx")))
         manifest = json.loads(archive.read(next(name for name in names if name.endswith(".json"))))
-    assert manifest == {"unused_keys": []}
+    assert manifest["statistics"]["unused_keys"] == []
     from docx import Document
 
     text = "\n".join(p.text for p in Document(io.BytesIO(restored)).paragraphs)

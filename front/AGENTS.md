@@ -187,12 +187,14 @@ Rules:
    with a Russian `detail`. The front mirrors all of it in
    `shared/api/mask.ts::validateKeysYaml` — run **on every keystroke** (derived
    from `demaskKeys`, not on submit) — and both the module and the page import
-   the shared `KEYS_SECTION_TITLES` list and the `Профиль` marker
+   the generated label catalogue (`labels.generated.ts`) and the `Профиль` marker
    (no version keys — the pre-prod v2 envelope was retired). An invalid keys editor gets
    `aria-invalid` and a red inline message, and the request is never sent. The
    keys file is `.yaml` on **both** load and download (`.yml` also accepted on
-   read). Unused-keys metadata rides in the restore ZIP's JSON manifest, never
-   headers — see `back/AGENTS.md`.
+   read). File results carry a required, validated `manifest.json` whose
+   `statistics` (incl. `unused_keys`) is the single source of UI stats —
+   never headers or placeholder counting; a missing/bad manifest is a clear
+   error, never "0 entities".
 9. **Proxy timeouts are bounded; jobs carry long work.**
    `src/instrumentation.ts` sets a global undici Agent with
    `headersTimeout: 60_000` / `bodyTimeout: 600_000` (the old `0`/`0`

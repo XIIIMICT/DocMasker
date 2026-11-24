@@ -9,23 +9,21 @@ import {
     type ModeState,
 } from "@/features/masking/types";
 import { ACTIVE_JOB_KEY, cancelJob, type JobAccepted, waitForJob } from "@/shared/api/jobs";
-import {
-    keyEntries,
-    type MaskResponse,
-    type UnmaskResponse,
-    validateKeysYaml,
-} from "@/shared/api/mask";
+import { type MaskResponse, type UnmaskResponse, validateKeysYaml } from "@/shared/api/mask";
 import { unpackMaskArchive, unpackRestoreArchive } from "@/shared/api/mask-archive";
 import {
     jobBundle,
     jobRestoreBundle,
     jobToMaskResponse,
     jobToUnmaskResponse,
-    parseBreakdown,
-    parseDocxWarning,
 } from "@/shared/api/mask-helpers";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
-import { countKeysValues, type MaskStats, statsFromAggregate } from "@/shared/mask-stats";
+import {
+    countKeysValues,
+    type MaskStats,
+    statsFromAggregate,
+    statsFromManifest,
+} from "@/shared/mask-stats";
 import type { AppMode } from "@/shared/ui/brand";
 import type { DragHandlers } from "@/shared/ui/panes";
 
@@ -114,7 +112,6 @@ export function useMaskerWorkflow() {
         restored,
         restoredFile,
         demaskUnused,
-        docxWarning,
         inputTab,
         resultTab,
         busy,
@@ -278,7 +275,6 @@ export function useMaskerWorkflow() {
             restored: "",
             restoredFile: null,
             demaskUnused: null,
-            docxWarning: null,
             error: null,
             resultTab: "result",
             inputTab: "data",
@@ -432,53 +428,33 @@ export function useMaskerWorkflow() {
                 throw new Error(await readErrorDetail(response));
             }
             let bundle: Awaited<ReturnType<typeof unpackMaskArchive>>;
-            let total: number;
-            let byLabel: Record<string, number>;
             if (response.status === 202) {
-                update({ docxWarning: null });
                 const accepted = await trackAccepted(response);
                 const controller = new AbortController();
                 pollingController.current = controller;
                 const jobResult = await waitForJob(accepted, controller.signal);
                 endJob();
-                bundle = await jobBundle(jobResult, ".docx", ".yaml");
-                const keysText = await bundle.keys.text();
-                total = 0;
-                byLabel = {};
-                for (const [placeholder] of keyEntries(keysText)) {
-                    const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
-                    byLabel[label] = (byLabel[label] ?? 0) + 1;
-                    total += 1;
-                }
+                bundle = await jobBundle(jobResult);
             } else {
-                total = Number(response.headers.get("X-Masked-Count") ?? "0");
-                byLabel = parseBreakdown(response.headers.get("X-Masked-Breakdown"));
-                update({
-                    docxWarning: parseDocxWarning(response.headers.get("X-Docx-Unsupported-Parts")),
-                });
-                // The backend returns one ZIP holding the masked .docx and its keys;
-                // unpack it so each half can be downloaded on its own.
+                // The flat ZIP holds the masked .docx, keys and manifest.json.
                 bundle = await unpackMaskArchive(await response.blob());
             }
             const keysYaml = await bundle.keys.text();
-            // Keys are deduped by value, so their per-label count is the unique
-            // count (the headers only carry occurrence totals).
-            const uniqueByLabel: Record<string, number> = {};
-            for (const [placeholder] of keyEntries(keysYaml)) {
-                const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
-                uniqueByLabel[label] = (uniqueByLabel[label] ?? 0) + 1;
-            }
             update({
-                maskedFile: bundle,
+                maskedFile: {
+                    result: bundle.result,
+                    resultName: bundle.resultName,
+                    keys: bundle.keys,
+                    keysName: bundle.keysName,
+                },
                 keys: keysYaml,
-                stats: { total, byLabel, uniqueByLabel, unused: [] },
+                stats: statsFromManifest(bundle.manifest),
             });
         } catch (requestError) {
             update({
                 maskedFile: null,
                 keys: "",
                 stats: null,
-                docxWarning: null,
                 error:
                     requestError instanceof Error
                         ? requestError.message
@@ -519,7 +495,7 @@ export function useMaskerWorkflow() {
                 }
                 update({
                     restoredFile: { blob: bundle.docx, name: bundle.docxName },
-                    demaskUnused: bundle.manifest.unused_keys,
+                    demaskUnused: bundle.manifest.statistics.unused_keys ?? [],
                 });
             } else {
                 const response = await requestTextUnmask();
@@ -742,7 +718,6 @@ export function useMaskerWorkflow() {
         showResultPreview,
         maskedFile,
         result,
-        docxWarning,
         restored,
         restoredFile,
         canDownloadResult,

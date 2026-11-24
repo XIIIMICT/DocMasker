@@ -167,8 +167,15 @@
       вынесены в типизированные YAML с жёсткой валидацией старта, digest
       инвалидирует кэш; CLI `validate_config`; приватный `exceptions.yaml`
       в .gitignore; legacy `Профиль` marker читается/пишется как metadata.
-- [ ] **Phase 5** — namespace-aware DOCX coverage + общий manifest
-      (убрать warning-only поведение).
+- [x] **Phase 5** — namespace-aware OOXML coverage + общий manifest:
+      полноценный OPC-трансформер (`back/src/masking/ooxml/`) обрабатывает body/
+      tables/все header-footer/footnotes/endnotes/comments/tracked deletions/
+      textboxes/sdt/core+app props/alt-text/external rel targets, сохраняя
+      неизменённые ZIP-записи байт-в-байт; strict 422 для embedded objects/
+      unsafe XML; warning-плаumbing и X-Docx-* удалены. Единый versioned
+      `manifest.json` для sync и job (`statistics`/`coverage`/`versions`),
+      frontend требует и валидирует его, text-job DTO = канонический ответ.
+      215 back tests incl. `test_ooxml.py` synthetic fixtures.
 - [ ] **Phase 6** — API contracts/timeouts/streaming/event-loop safety
       (generated TS types, stable errors, request IDs).
 - [ ] **Phase 7** — performance/capacity (long-text windowing, DOCX prefilters,

@@ -34,24 +34,30 @@ async def test_mask_file_returns_zip_of_docx_and_keys() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/zip")
-    # The count header and the RFC 5987 Cyrillic download name are advertised.
-    assert int(response.headers["x-masked-count"]) >= 4
+    assert response.headers["cache-control"] == "no-store"
     disposition = response.headers["content-disposition"]
     assert "filename*=UTF-8''" in disposition
     assert unquote(disposition.split("filename*=UTF-8''")[1]) == "доклад (замаскированный).zip"
 
-    # Per-label breakdown lets the front render the summary in the result label.
-    breakdown = json.loads(response.headers["x-masked-breakdown"])
-    assert breakdown["person"] == 3
-    assert breakdown["phone"] == 2
-    assert sum(breakdown.values()) == int(response.headers["x-masked-count"])
-
-    # The archive carries the masked document and its keys, unpacked by the front.
+    # The versioned manifest is the single source of statistics/coverage (§7).
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         names = set(archive.namelist())
-        assert names == {"доклад (замаскированный).docx", "доклад (ключи демаскировки).yaml"}
+        assert names == {
+            "доклад (замаскированный).docx",
+            "доклад (ключи демаскировки).yaml",
+            "manifest.json",
+        }
         masked_docx = archive.read("доклад (замаскированный).docx")
         keys_yaml = archive.read("доклад (ключи демаскировки).yaml").decode("utf-8")
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+    assert manifest["schema_version"] == 1
+    assert manifest["operation"] == "mask_file"
+    assert manifest["status"] == "succeeded"
+    assert manifest["statistics"]["total_occurrences"] >= 4
+    assert manifest["statistics"]["occurrences_by_label"]["person"] == 3
+    assert manifest["statistics"]["occurrences_by_label"]["phone"] == 2
+    assert "main_document" in manifest["coverage"]["processed_parts"]
 
     document = DocxDocument(io.BytesIO(masked_docx))
     text = "\n".join(p.text for p in document.paragraphs)
@@ -85,9 +91,10 @@ async def test_mask_file_counts_occurrences_across_paragraphs() -> None:
         )
 
     assert response.status_code == 200
-    assert int(response.headers["x-masked-count"]) == 4
-    breakdown = json.loads(response.headers["x-masked-breakdown"])
-    assert breakdown == {"person": 4}
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert manifest["statistics"]["total_occurrences"] == 4
+    assert manifest["statistics"]["occurrences_by_label"] == {"person": 4}
 
 
 async def test_mask_file_rejects_non_docx() -> None:
@@ -219,11 +226,13 @@ async def test_unmask_file_returns_zip_of_docx_and_manifest() -> None:
 
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         names = set(archive.namelist())
-        assert names == {"отчёт (демаскированный).docx", "отчёт (отчёт о демаскировке).json"}
+        assert names == {"отчёт (демаскированный).docx", "manifest.json"}
         restored_docx = archive.read("отчёт (демаскированный).docx")
-        manifest = json.loads(archive.read("отчёт (отчёт о демаскировке).json").decode("utf-8"))
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
 
-    assert manifest == {"unused_keys": []}
+    assert manifest["operation"] == "unmask_file"
+    assert manifest["status"] == "succeeded"
+    assert manifest["statistics"]["unused_keys"] == []
     document = DocxDocument(io.BytesIO(restored_docx))
     text = "\n".join(p.text for p in document.paragraphs)
     assert "Иван Петров" in text
@@ -252,9 +261,9 @@ async def test_unmask_file_reports_unused_keys_in_manifest() -> None:
 
     assert response.status_code == 200
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        manifest = json.loads(archive.read("отчёт (отчёт о демаскировке).json").decode("utf-8"))
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
     # yaml12 strips the quotes on parse, so the value arrives unquoted.
-    assert manifest == {"unused_keys": ["https://never-mentioned.example"]}
+    assert manifest["statistics"]["unused_keys"] == ["https://never-mentioned.example"]
 
 
 async def test_unmask_file_rejects_garbage_bytes_with_415() -> None:
@@ -290,16 +299,19 @@ async def _mask_archive() -> bytes:
     return response.content
 
 
-async def test_mask_file_warns_about_unsupported_ooxml_parts() -> None:
-    # A package with a comments part cannot be fully anonymized: the response
-    # must carry a short, safe code list (no values, no filenames).
+async def test_mask_file_processes_comments_part_instead_of_warning() -> None:
+    # §6.5: supported parts are processed, no best-effort warning header.
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as outer:
         inner = io.BytesIO(_build_docx())
         with zipfile.ZipFile(inner) as source:
             for info in source.infolist():
                 outer.writestr(info, source.read(info.filename))
-        outer.writestr("word/comments.xml", "<w:comments/>")
+        outer.writestr(
+            "word/comments.xml",
+            '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:comment><w:p><w:r><w:t>Иван Петров</w:t></w:r></w:p></w:comment></w:comments>",
+        )
 
     async with _client() as client:
         response = await client.post(
@@ -313,10 +325,13 @@ async def test_mask_file_warns_about_unsupported_ooxml_parts() -> None:
             },
         )
     assert response.status_code == 200
-    assert response.headers["x-docx-unsupported-parts"] == "comments"
+    assert "x-docx-unsupported-parts" not in response.headers
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert "main_document" in manifest["coverage"]["processed_parts"]
 
 
-async def test_mask_file_has_no_warning_for_a_plain_docx() -> None:
+async def test_mask_file_plain_docx_is_complete() -> None:
     async with _client() as client:
         response = await client.post(
             "/api/mask-file",
@@ -330,3 +345,7 @@ async def test_mask_file_has_no_warning_for_a_plain_docx() -> None:
         )
     assert response.status_code == 200
     assert "x-docx-unsupported-parts" not in response.headers
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert manifest["complete"] is True
+    assert manifest["coverage"]["rejected_parts"] == []

@@ -56,9 +56,10 @@ text; drag & drop accepts `.docx`/`.txt` (and `.yaml` for the keys field).
   `GET /api/profiles` were removed in Phase 4. Setting `MASK_LABELS` fails startup.
 - `POST /api/mask` / `/api/unmask` — text → JSON (`text`, `stats` aggregates,
   `keys` YAML) / masked text + keys → restored text.
-- `POST /api/mask-file` / `/api/unmask-file` — `.docx` → a ZIP (masked doc + keys
-  / restored doc + unused-keys JSON manifest). The front unpacks the archive and
-  offers two separate downloads; the user never sees the ZIP.
+- `POST /api/mask-file` / `/api/unmask-file` — `.docx` → a flat ZIP (masked doc
+  + keys + `manifest.json` / restored doc + `manifest.json`). The manifest is
+  the single source of statistics/coverage; the front requires and validates
+  it, then offers two separate downloads; the user never sees the ZIP.
 - `POST /api/jobs` (202 + `job_id`) · `GET /api/jobs/{id}` (status/phase/progress) ·
   `GET /api/jobs/{id}/result` (flat ZIP, `no-store`, 409 until ready) ·
   `DELETE /api/jobs/{id}` (cancel). The four sync endpoints transparently

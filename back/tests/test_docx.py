@@ -61,7 +61,7 @@ def _build_docx() -> bytes:
 def test_docx_masking_preserves_formatting_and_runs() -> None:
     source = _build_docx()
 
-    masked_bytes, entities, keys = mask_docx_in_memory(source)
+    masked_bytes, entities, keys, _coverage = mask_docx_in_memory(source)
 
     assert len(entities) >= 4  # person (body) + phone (bold) + header person + table phone
     document = DocxDocument(io.BytesIO(masked_bytes))
@@ -114,7 +114,7 @@ def test_numbering_is_continuous_across_the_document() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, _entities, keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, _entities, keys, _coverage = mask_docx_in_memory(out.getvalue())
     paragraphs = [p.text for p in DocxDocument(io.BytesIO(masked_bytes)).paragraphs]
     assert "[ORGANIZATION_1]" in paragraphs[0]
     assert "[ORGANIZATION_2]" in paragraphs[1]
@@ -123,9 +123,10 @@ def test_numbering_is_continuous_across_the_document() -> None:
     }
 
 
-def test_hyperlinked_email_collapses_to_plain_mask() -> None:
-    # Word represents a mailto: link as a w:hyperlink whose run holds the email.
-    # The masked result must be a plain [EMAIL_1] run with no link left behind.
+def test_hyperlinked_email_masks_text_and_relationship_target() -> None:
+    # §6.2(3): both the visible hyperlink text and the external relationship
+    # Target carry the email; both are masked, and the target is restored on
+    # unmask. The w:hyperlink element itself is preserved (relationship validity).
     doc = DocxDocument()
     p = doc.add_paragraph()
     p.add_run("Пишите на ")
@@ -133,17 +134,22 @@ def test_hyperlinked_email_collapses_to_plain_mask() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, entities, _keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, entities, keys, _coverage = mask_docx_in_memory(out.getvalue())
 
     document = DocxDocument(io.BytesIO(masked_bytes))
     paragraph = document.paragraphs[0]
     assert "[EMAIL_1]" in paragraph.text
     assert "dksir@ruschem.ru" not in paragraph.text
-    # The hyperlink was unwrapped: no w:hyperlink element and no relationship.
-    assert paragraph._p.findall(qn("w:hyperlink")) == []
-    hyperlink_rels = [rel for rel in paragraph.part.rels.values() if rel.reltype == RT.HYPERLINK]
-    assert hyperlink_rels == []
-    assert [entity.label for entity in entities] == ["email"]
+    # Relationship target is masked too, and the link element survives.
+    assert paragraph._p.findall(qn("w:hyperlink")) != []
+    targets = [rel.target_ref for rel in paragraph.part.rels.values() if rel.reltype == RT.HYPERLINK]
+    assert targets
+    assert all("dksir@ruschem.ru" not in target for target in targets)
+    assert [entity.label for entity in entities] == ["email", "email"]
+    placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
+    restored, unused, _coverage = unmask_docx_in_memory(masked_bytes, placeholders)
+    assert unused == []
+    assert "dksir@ruschem.ru" in DocxDocument(io.BytesIO(restored)).paragraphs[0].text
 
 
 def test_label_subset_masks_only_its_labels_and_keys_still_restore() -> None:
@@ -156,18 +162,19 @@ def test_label_subset_masks_only_its_labels_and_keys_still_restore() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, entities, keys = mask_docx_in_memory(out.getvalue(), RuleBasedMasker.for_labels(["email"]))
+    masked_bytes, entities, keys, _coverage = mask_docx_in_memory(out.getvalue(), RuleBasedMasker.for_labels(["email"]))
 
-    # The person is untouched (no person detector); the email is masked.
-    assert [entity.label for entity in entities] == ["email"]
+    # The person is untouched (no person detector); the email is masked in both
+    # the visible text and the relationship target (two occurrences).
+    assert [entity.label for entity in entities] == ["email", "email"]
     document = DocxDocument(io.BytesIO(masked_bytes))
     assert "Иван Петров" in document.paragraphs[0].text
     assert "[EMAIL_1]" in document.paragraphs[0].text
     # The legacy marker is still written (one runtime configuration now).
     assert "Профиль: russian-default" in keys.to_yaml()
-    # Restoring works through the default registered titles.
+    # Restoring works through the canonical catalogue.
     placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
-    restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)
+    restored, unused, _coverage = unmask_docx_in_memory(masked_bytes, placeholders)
     assert unused == []
     assert "dksir@ruschem.ru" in DocxDocument(io.BytesIO(restored)).paragraphs[0].text
 
@@ -181,7 +188,7 @@ def test_repeated_entities_in_different_paragraphs_are_all_reported() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, entities, keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, entities, keys, _coverage = mask_docx_in_memory(out.getvalue())
 
     persons = [entity for entity in entities if entity.label == "person"]
     assert len(persons) == 3
@@ -203,7 +210,7 @@ def test_repeated_entities_across_table_and_header_are_all_reported() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    _masked_bytes, entities, _keys = mask_docx_in_memory(out.getvalue())
+    _masked_bytes, entities, _keys, _coverage = mask_docx_in_memory(out.getvalue())
 
     phones = [entity for entity in entities if entity.label == "phone"]
     assert len(phones) == 3
@@ -224,7 +231,7 @@ def test_docx_empty_file_is_fine() -> None:
     doc = DocxDocument()
     out = io.BytesIO()
     doc.save(out)
-    masked_bytes, entities, keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, entities, keys, _coverage = mask_docx_in_memory(out.getvalue())
     document = DocxDocument(io.BytesIO(masked_bytes))
     assert document.paragraphs == []
     assert entities == []
@@ -238,7 +245,7 @@ def test_docx_accepts_explicit_masker() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, entities, _keys = mask_docx_in_memory(out.getvalue(), only_email)
+    masked_bytes, entities, _keys, _coverage = mask_docx_in_memory(out.getvalue(), only_email)
     text = "\n".join(p.text for p in DocxDocument(io.BytesIO(masked_bytes)).paragraphs)
     assert "[EMAIL_1]" in text
     assert "Иван Петров" in text
@@ -256,7 +263,7 @@ def test_entity_spanning_three_runs_collapses_to_one_marker() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, _entities, _keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, _entities, _keys, _coverage = mask_docx_in_memory(out.getvalue())
     paragraph = DocxDocument(io.BytesIO(masked_bytes)).paragraphs[0]
     assert paragraph.text.count("[ORGANIZATION_1]") == 1
     assert "Росхим" not in paragraph.text
@@ -273,7 +280,7 @@ def test_masked_document_has_no_highlight() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, _entities, _keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, _entities, _keys, _coverage = mask_docx_in_memory(out.getvalue())
     document = DocxDocument(io.BytesIO(masked_bytes))
     for paragraph in document.paragraphs:
         assert paragraph.text == "Контакты: [PERSON_1], тел [PHONE_1]."
@@ -301,7 +308,7 @@ def test_entity_split_across_many_runs_yields_one_marker() -> None:
     out = io.BytesIO()
     doc.save(out)
 
-    masked_bytes, _entities, _keys = mask_docx_in_memory(out.getvalue())
+    masked_bytes, _entities, _keys, _coverage = mask_docx_in_memory(out.getvalue())
     text = DocxDocument(io.BytesIO(masked_bytes)).paragraphs[0].text
     assert text == "Привет! Меня зовут [PERSON_1], я работаю в [ORGANIZATION_1] и живу в Донецке…"
     assert text.count("[PERSON_1]") == 1
@@ -334,7 +341,7 @@ def _build_variant_headers_docx() -> bytes:
 
 def test_all_header_footer_variants_are_masked() -> None:
     source = _build_variant_headers_docx()
-    masked_bytes, entities, keys = mask_docx_in_memory(source)
+    masked_bytes, entities, keys, _coverage = mask_docx_in_memory(source)
     document = DocxDocument(io.BytesIO(masked_bytes))
     section = document.sections[0]
     all_text = " ".join(
@@ -375,9 +382,9 @@ def test_all_header_footer_variants_are_masked() -> None:
 
 def test_all_header_footer_variants_restore() -> None:
     source = _build_variant_headers_docx()
-    masked_bytes, _entities, keys = mask_docx_in_memory(source)
+    masked_bytes, _entities, keys, _coverage = mask_docx_in_memory(source)
     placeholders = placeholders_from_document(parse_keys_yaml(keys.to_yaml()))
-    restored, unused = unmask_docx_in_memory(masked_bytes, placeholders)
+    restored, unused, _coverage = unmask_docx_in_memory(masked_bytes, placeholders)
     assert unused == []
     document = DocxDocument(io.BytesIO(restored))
     section = document.sections[0]

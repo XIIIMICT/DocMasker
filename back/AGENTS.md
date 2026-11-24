@@ -68,51 +68,37 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
    Cyrillic body sent literally through PowerShell arrives corrupted and comes
    back as `?` — that's a test-harness artifact, not a server bug.
 
-## DOCX masking (`masking/docx_service.py`)
+## DOCX masking (`masking/ooxml/`)
 
-7. **Masking works at the run level**, replacing only the covered slice of
-   each run so styles/sizes are preserved. An entity spanning **several runs**
-   (e.g. `АО «Росхим»` = `АО «` | `Росхим` | `»`) must still yield **one**
-   `[LABEL]` — don't revert to per-run `mask_text`, which produces
-   `[ORGANIZATION][ORGANIZATION][ORGANIZATION]`. `mask_paragraph` writes the
-   marker into the run holding the entity start, blanks the covered slices of
-   the following runs, and **recomputes the run bounds for every entity** — a
-   `bounds` list cached once goes stale as later (right-to-left) entities
-   shorten runs and emits the marker once per covered run
-   (`[PERSON_1][PERSON_1][ORGANIZATION_1]`). No highlight is written to the
-   file: the yellow tint is **preview-only** (front `DocxViewer`).
-8. **Don't compare python-docx `Run` objects by identity.** `add_run(...)`
-   returns a fresh proxy each call; assert on `.text`/formatting, not
-   `run is run`.
-9. **`iter_paragraphs` must keep a strong reference to `paragraph._p`.**
-   python-docx hands out fresh proxies, so deduplicating by `id(paragraph._p)`
-   alone drops paragraphs once an earlier proxy is garbage-collected and its
-   address is reused by a later element (header/footer paragraphs vanished
-   after repeated calls). The generator holds every seen element in a
-   `keep_alive` list — keep it.
-10. **Hyperlinked text lives outside `paragraph.runs`.** A `mailto:`/URL
-    hyperlink is a `w:hyperlink` wrapper; its runs are invisible to
-    `paragraph.runs` but present in `paragraph.text`. `_paragraph_runs` walks
-    `iter_inner_content()` so masks land inside links too, and a link whose
-    text becomes only mask markers is unwrapped (element replaced by its runs,
-    relationship dropped) so no dangling `mailto:` remains. Don't switch back
-    to `paragraph.runs`.
-11. **`iter_paragraphs` covers all six header/footer variants** per section
-    (`header`, `footer`, `first_page_*`, `even_page_*`, plus tables inside
-    them). python-docx 1.2 exposes these properties and resolves the OOXML
-    `w:headerReference`/`w:footerReference` parts — older notes claiming only
-    default variants exist are obsolete. Variants with
-    `is_linked_to_previous` are skipped (their content belongs to the previous
-    section). Unsupported OOXML parts + the warning mechanism:
-    `docs/DOCX_SUPPORT.md`.
-12. **Document-wide numbering needs two passes.** `mask_docx_in_memory`
-    detects+assigns in a first pass over all paragraphs and rewrites in a
-    second; `unmask_docx_in_memory` collapses a marker spanning several runs
-    the same way `mask_paragraph` does. Don't fold either into one pass.
+7. **Masking is OPC-package-level, not python-docx run-level.** `ooxml/package.py`
+   builds a namespace-URI inventory from `[Content_Types].xml` + relationship
+   files (never hardcoded prefixes), parses XML with `defusedxml.lxml`
+   (`forbid_dtd`, `forbid_entities`), groups text nodes by the closest `w:p`,
+   and rewrites slices back-to-front. An entity spanning several text nodes
+   becomes **one** placeholder. Only modified ZIP entries are re-serialized;
+   unchanged entries (images, styles, numbering) are copied byte-for-byte.
+8. **Supported parts are processed, not warned about.** Body/tables, all
+   header/footer variants, footnotes, endnotes, comments, `w:delText`,
+   `w:txbxContent`, `a:t`, `w:sdt`, `docProps/core.xml`/`app.xml`, `wp:docPr`
+   alt-text attributes and external relationship `Target` values are all
+   text-bearing. There is **no** `X-Docx-Unsupported-Parts` plumbing.
+9. **Fail closed on uninspectable content.** Embedded OLE/`*.bin` objects,
+   malformed/unsafe XML and oversized parts raise `OoxmlPackageError` → a clear
+   422. Raster image pixels are the one documented non-text limitation
+   (`raster_image_ocr: not_performed`); they are copied, not a blocker.
+10. **One `manifest.json` for sync and job file results** (`ooxml/manifest.py`,
+    `masking/archives.py`, `jobs/operations.py`). It carries versioned
+    `statistics`, `coverage`, input hash, output names and `cache` — the
+    frontend requires/validates it; no `X-Masked-*` headers. Text jobs return
+    the exact canonical `MaskResponse`/`UnmaskResponse` in `result.json`.
+11. **`mask_docx_in_memory` returns 4 values** (bytes, entities, keys,
+    `CoverageReport`); `unmask_docx_in_memory` returns 3 (bytes, unused,
+    coverage). Synthetic OPC fixtures + parity tests live in
+    `tests/test_ooxml.py`; see `docs/DOCX_SUPPORT.md`.
 
 ## Keys, spans, reversibility
 
-13. **`MaskKeys` (`mapping.py`) numbers each entity per label in document
+12. **`MaskKeys` (`mapping.py`) numbers each entity per label in document
     order** and dedupes by exact text: the same string repeated reuses one
     placeholder and one key; distinct wordings (different cases of one org)
     stay separate — that is what keeps restoration lossless. Numbers are
@@ -121,7 +107,7 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     placeholder→value `str.replace` (self-delimiting), so order does not
     matter there. Placeholders are `[LABEL_N]`; `placeholders_from_document`
     reverses a parsed keys file.
-14. **Keys YAML uses `yaml12` (the `py-yaml12` package), not PyYAML.** YAML
+13. **Keys YAML uses `yaml12` (the `py-yaml12` package), not PyYAML.** YAML
     1.2 preserves quoting (`АО "Росхим"` stays quoted); PyYAML 1.1 would
     mangle it. Writers emit the legacy `Профиль: russian-default` marker ahead
     of the Russian sections; readers accept that shape (including a foreign
@@ -130,16 +116,16 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     pre-prod v2 envelope was retired, those keys are now unknown sections.
     Section titles come from the canonical `labels.yaml` catalogue; empty
     sections are omitted.
-15. **The `/api/mask-file` response is a ZIP, not a `.docx`.** It bundles
-    `<base> (замаскированный).docx` + `<base> (ключи демаскировки).yaml`;
-    the front unpacks it with jszip and offers two separate downloads. Don't
-    return the `.docx` alone (the keys would be lost) and don't hand the
-    archive to the user. `/api/unmask-file` likewise returns a ZIP with the
-    restored `.docx` + `<base> (отчёт о демаскировке).json` manifest
-    (`{"unused_keys": [...]}`) — the former `X-Unused-Keys` header carried
+14. **The `/api/mask-file` response is a flat ZIP, not a `.docx`.** It bundles
+    `<base> (замаскированный).docx` + `<base> (ключи демаскировки).yaml` +
+    `manifest.json`; the front unpacks it with jszip, **validates the manifest**
+    and offers two separate downloads. Don't return the `.docx` alone, don't
+    hand the archive to the user, and never put statistics in `X-Masked-*`
+    headers. `/api/unmask-file` returns the restored `.docx` + `manifest.json`
+    (with `statistics.unused_keys`) — the former `X-Unused-Keys` header carried
     percent-encoded Cyrillic PII in transport metadata and could outgrow
     every header size limit; never reintroduce it.
-16. **Span overlap policy is formal**: entities are sorted by (start asc,
+15. **Span overlap policy is formal**: entities are sorted by (start asc,
     length desc, score desc, detector order); a span is kept unless it
     overlaps a kept span. `_merge_spans` uses a sweep (O(n log n)) — the old
     `any()` scan was quadratic. Regressions for equal/nested/partial/touching
@@ -147,12 +133,12 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
 
 ## API & execution
 
-17. **CPU work must leave the event loop** (`masking/executor.py::run_cpu`):
+16. **CPU work must leave the event loop** (`masking/executor.py::run_cpu`):
     the four sync endpoints offload natasha/python-docx/ZIP to a bounded
     `ThreadPoolExecutor` (`JOBS_CONCURRENCY * 2` slots, semaphore per event
     loop); overflow → 429. `/health` stays responsive during a mask — never
     call `mask_document`/`mask_docx_in_memory` directly in an `async def`.
-18. **Large inputs become durable jobs** (ADR-0002 / PostgreSQL substrate
+17. **Large inputs become durable jobs** (ADR-0002 / PostgreSQL substrate
     ADR-0003): PostgreSQL (`jobs/repository.py`, SQLAlchemy 2 sync + psycopg 3,
     Alembic migration `0001_jobs`, `SKIP LOCKED` claim with a fresh `uuid4()`
     lease token) + private id-keyed spool (`jobs/storage.py`), long-lived warm
@@ -165,7 +151,7 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     **No SQLite fallback remains.** Integration tests need a real PostgreSQL
     (`TEST_DATABASE_URL`); without it the job tests skip.
 
-19. **Phase 2 job lifecycle invariants** (`jobs/worker.py`): every claim gets
+18. **Phase 2 job lifecycle invariants** (`jobs/worker.py`): every claim gets
     a fresh `uuid4()` fencing token + `worker_id` (`claim_with_owner`);
     heartbeat/phase/succeed/fail/acknowledge_cancel are all guarded by that
     token and affected-row count, so a stale worker cannot publish a result.
@@ -177,14 +163,14 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     errors non-retryable; transient/internal bounded retry with backoff), TTL
     cleanup never touches active rows, and SIGTERM keeps heartbeating while
     in-flight jobs drain. Never log inputs/keys/exception text.
-20. **Error/status conventions**: `validate_keys_yaml` raises
+19. **Error/status conventions**: `validate_keys_yaml` raises
     `KeysValidationError` → 422 with a Russian `detail`; malformed/oversized/
     encrypted DOCX → 415/413; bounded queue/executor → 429; job result not
     ready → 409; unknown job id → 404. Unknown placeholders stay as-is.
     `GET /api/labels` publishes the canonical catalogue; `profile_id` and
     `GET /api/profiles` were removed in Phase 4. Setting `MASK_LABELS` fails
     startup.
-21. **One immutable masking configuration** (`masking/config.py`, Phase 4):
+20. **One immutable masking configuration** (`masking/config.py`, Phase 4):
     `back/config/masking/labels.yaml` is the single label catalogue (sequence
     = keys-section order, no `order` field); all lexicons and
     `always_mask`/`never_mask` exceptions are literal typed YAML loaded into
@@ -199,7 +185,7 @@ one home — architecture detail lives in `docs/ARCHITECTURE.md`.
     and key numbering. Adding a label = one detector + one registry entry +
     one `labels.yaml` row (and regenerate the front catalogue).
     `MASK_LABELS` was removed with a loud startup error.
-22. **Valkey cache is an optimization, never a correctness dependency**
+21. **Valkey cache is an optimization, never a correctness dependency**
     (`jobs/cache.py`, Phase 3): keys are HMAC-SHA256 over a canonical
     fingerprint of exact input/keys bytes + normalized filename + every
     version/digest that can change output (`MASKING_RULESET_VERSION`,
