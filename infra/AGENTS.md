@@ -6,14 +6,19 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
 
 ## Compose layout
 
-- `compose.yaml` (name `docmasker`) has profiles `prod` and `dev`:
-  - prod: `postgres`, `valkey`, `back`, `worker`, `front`.
-  - dev: the same infra + `back-dev`, `worker-dev`, `front-dev`, built with
-    `develop.watch` (`--watch`) syncing `back/src` and `front/src`.
-- `just dev` / `just prod` start **all** services (the worker and the database
-  are not optional). `just prod` = `up -d back worker front` (compose pulls in
-  the healthy `postgres`/`valkey` dependencies); `just dev` = `up --build
-  --watch back-dev worker-dev front-dev`.
+- `compose.yaml` (name `docmasker`) has profiles `prod` and `dev` for the
+  **application only**: `back`, `worker`, `front` / `back-dev`, `worker-dev`,
+  `front-dev` (dev built with `develop.watch` syncing `back/src` and `front/src`).
+- PostgreSQL and Valkey are **not** part of those profiles and are not pulled
+  in by `depends_on`. They live in `infra/compose.db.yaml` (included from
+  `compose.yaml`) and are started explicitly with `just db-stand` — the same
+  pattern as ReportCollector. Backend `DATABASE_URL`/`VALKEY_URL` point to the
+  compose service names on the private networks; seed/migrate from the host
+  reach PostgreSQL via loopback `${POSTGRES_PORT:-15433}`.
+- `just dev` / `just prod` therefore require a running stand:
+  `just db-stand` then `just seed` (applies Alembic `0001_jobs` and verifies
+  the `jobs` table) before starting the app. `just migrate` applies migrations
+  without seeding; `just revision "msg"` creates an Alembic revision.
 - `infra/compose.ci.yaml` is the isolated CI stack: back **18001**, front
   **15001** (loopback-only); postgres/valkey are **private** (no published
   ports), never load the developer's `.env`, and the `jobs-data` volume is
@@ -38,7 +43,10 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
   `BACKEND_INTERNAL_URL` is derived from the compose service name +
   `BACKEND_PORT`; the browser calls only its own origin (no CORS).
 - New infrastructure settings in `.env.example` (ADR-0003): `DATABASE_URL`
-  (`postgresql+psycopg://…`), `POSTGRES_USER/PASSWORD/DB`, `DB_POOL_SIZE`,
+  (`postgresql+psycopg://…@postgres:5432/…` — the compose service name inside
+  the network), `POSTGRES_USER/PASSWORD/DB`, `POSTGRES_PORT` (loopback host
+  port for `just seed`, default **15433** — 5432 is used by ReportCollector),
+  `DB_POOL_SIZE`,
   `DB_MAX_OVERFLOW`, `DB_CONNECT_TIMEOUT_SECONDS`, `VALKEY_URL`,
   `VALKEY_PASSWORD` (Valkey runs with `--requirepass`; prod `back`/`worker`
   get the password via `VALKEY_URL`), `CACHE_ENABLED`, `CACHE_KEY_SECRET`
@@ -74,9 +82,11 @@ index; architecture detail lives in `docs/ARCHITECTURE.md`, CI in
 - `--reload-ignore-dirs logs,jobs` in the dev Dockerfile is required: Granian
   watches `/app/jobs` and the artifact spool changes on every job write.
   Restart the dev stack with `just dev` (compose `--watch`), never `docker cp`.
-- `back`/`worker` depend on **healthy** `postgres`/`valkey`, not merely started
-  containers. Alembic migrations are an explicit CI/deployment step
-  (`uv run --directory back alembic upgrade head`), never a startup race.
+- `back`/`worker` do **not** depend on the database containers; they expect an
+  already-provisioned PostgreSQL/Valkey stand (`just db-stand`). Alembic
+  migrations are an explicit step (`just seed` / `just migrate`), never a
+  startup race. CI uses its own isolated stack with its own healthchecks and
+  applies migrations explicitly.
 
 ## Containers & TLS (current state, stage 6 deferred)
 

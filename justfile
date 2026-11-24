@@ -18,6 +18,26 @@ prod-build:
 dev:
     docker compose --profile dev up --build --watch back-dev worker-dev front-dev
 
+# Поднять отдельный стенд данных (PostgreSQL + Valkey) — как в ReportCollector.
+# Приложение НЕ поднимает их само: just dev / just prod работают с уже
+# существующим PostgreSQL/Valkey. Перед per-test БД применяем just seed.
+db-stand:
+    docker compose up -d --wait postgres valkey
+
+# Создать/проверить схему PostgreSQL (Alembic) и засидить минимальные данные.
+# --host нужен при запуске с хоста, когда DATABASE_URL указывает на сервис
+# compose `postgres`; внутри контейнера хост подставляется compose.
+seed:
+    uv run --directory back -m src.scripts.seed_database --host 127.0.0.1:{{env_var_or_default("POSTGRES_PORT", "15433")}}
+
+# Применить миграции Alembic (явный шаг деплоя/CI, не гонка при старте).
+migrate:
+    uv run --directory back alembic upgrade head
+
+# Новая ревизия Alembic: just revision "описание"
+revision message:
+    uv run --directory back alembic revision --autogenerate -m "{{message}}"
+
 # Установка / обновление зависимостей (uv, bun)
 deps:
     uv sync --directory back
@@ -35,7 +55,9 @@ typecheck:
     uv run --directory back ty check --fix
     bun run --cwd front typecheck
 
-# Тестирование (детерминированное, офлайн — без сети и моделей)
+# Тестирование (детерминированное, офлайн — без сети и моделей).
+# Интеграционные тесты PostgreSQL требуют beforehand: just db-stand && just seed,
+# затем TEST_DATABASE_URL (см. docs/WORKFLOW.md).
 test:
     uv run --directory back pytest
     bun run --cwd front test

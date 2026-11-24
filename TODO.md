@@ -215,6 +215,9 @@
 
 ## Процесс
 
+- Перед запуском стека и интеграционными тестами: `just db-stand` → `just seed`
+  (Postgres/Valkey поднимаются отдельно, по образцу ReportCollector; приложение
+  не стартует их само и не имеет depends_on). `just migrate` / `just revision`.
 - Каждая смысловая задача — отдельная task-ветка от актуальной `dev`, merge
   `--no-ff` без squash; `dev` → `main` только squash после release approval.
 - Перед merge: `just lint`, `just typecheck`, `just test`, e2e на `just dev`,

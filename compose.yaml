@@ -1,55 +1,17 @@
 name: docmasker
 
+# Data services (PostgreSQL + Valkey) live in infra/compose.db.yaml and are
+# started explicitly with `just db-stand`, mirroring ReportCollector. The app
+# recipes never start them implicitly and have no depends_on — see
+# infra/AGENTS.md.
+include:
+  - path: ./infra/compose.db.yaml
+
 # Порты задаются один раз в корневом .env (BACKEND_PORT / FRONT_PORT)
 # и отсюда же расходятся: ARG в Dockerfile (порт в контейнере), проброс порта,
 # healthcheck. Все обязательные (:? — при отсутствии compose падает с понятной
 # ошибкой, а не молча подставляет дефолт).
 services:
-  # Authoritative job state (ADR-0003). Private: no host/network port in prod.
-  postgres:
-    profiles: [prod, dev]
-    container_name: dm-postgres
-    image: postgres:18-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:?}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
-      POSTGRES_DB: ${POSTGRES_DB:?}
-      PGDATA: /var/lib/postgresql/18/docker
-    volumes:
-      - postgres-data:/var/lib/postgresql/18/docker
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?} -d ${POSTGRES_DB:?}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    networks: [net, net-dev]
-
-  # Disposable TTL cache index (Phase 3). Cache loss must be safe.
-  valkey:
-    profiles: [prod, dev]
-    container_name: dm-valkey
-    image: valkey/valkey:8-alpine
-    restart: unless-stopped
-    command:
-      [
-        "valkey-server",
-        "--appendonly",
-        "no",
-        "--maxmemory",
-        "256mb",
-        "--maxmemory-policy",
-        "allkeys-lru",
-        "--requirepass",
-        "${VALKEY_PASSWORD:?}",
-      ]
-    healthcheck:
-      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD:?}", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    networks: [net, net-dev]
-
   back:
     profiles: [prod]
     container_name: dm-back
@@ -77,11 +39,6 @@ services:
       MASKING_CONFIG_DIR: ${MASKING_CONFIG_DIR:-/app/config/masking}
       KEYS_FORMAT_VERSION: ${KEYS_FORMAT_VERSION:-1}
       DOCX_TRANSFORMER_VERSION: ${DOCX_TRANSFORMER_VERSION:-1}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
     ports:
       # Loopback-only: the API stays reachable for local testing but never
       # from the network — the browser must go through the front proxy.
@@ -115,10 +72,6 @@ services:
       # Private runtime exceptions: mounted read-only, never baked into the image.
       - ./back/config/masking/exceptions.yaml:/app/config/masking/exceptions.yaml:ro
     depends_on:
-      postgres:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
       back:
         condition: service_healthy
     networks: [net]
@@ -138,11 +91,7 @@ services:
       - jobs-data:/app/jobs
       # Private runtime exceptions: mounted read-only, never baked into the image.
       - ./back/config/masking/exceptions.yaml:/app/config/masking/exceptions.yaml:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
+    depends_on: !override
       back-dev:
         condition: service_started
     networks: !override [net-dev]
@@ -248,6 +197,4 @@ volumes:
   # shared only by back and worker (ADR-0003).
   jobs-data:
     name: dm-jobs-data
-  # PostgreSQL is the authoritative job store; this volume is backed up.
-  postgres-data:
-    name: dm-postgres-data
+  # postgres-data is declared in infra/compose.db.yaml (included above).

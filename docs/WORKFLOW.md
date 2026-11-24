@@ -8,7 +8,15 @@ this file in the same change (see "Documentation discipline").
 
 1. Copy the config: `cp .env.example .env` (root — single source).
 2. Dependencies: `just deps` (`uv sync --directory back` + `bun install --cwd front`).
-3. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts `dm-postgres`, `dm-valkey`, `dm-back-dev`, `dm-worker-dev` and `dm-front-dev`. `just prod` starts the same infra plus `dm-back`, `dm-worker`, `dm-front`; PostgreSQL is the authoritative job store, `jobs-data` holds only artifacts. Migrations: `uv run --directory back alembic upgrade head` (explicit CI/deploy step).
+3. Start the data stand once, in the ReportCollector pattern:
+   `just db-stand` (PostgreSQL + Valkey from `infra/compose.db.yaml`), then
+   `just seed` (Alembic `0001_jobs` + verify the `jobs` table; idempotent).
+   `just migrate` applies migrations without seeding. Required before any
+   app stack or integration tests — the app does **not** start its own DB.
+4. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts
+   `dm-back-dev`, `dm-worker-dev`, `dm-front-dev` against the existing stand.
+   `just prod` starts `dm-back`, `dm-worker`, `dm-front`. PostgreSQL is the
+   authoritative job store; `jobs-data` holds only artifacts.
 
 There are no host-run recipes for the servers (`just back` / `just front` are commented out in the `justfile`). If needed, run the backend manually with Granian: `uv run --directory back granian --interface asgi --reload --reload-ignore-dirs logs src.main:app --port 8001`. For host-run installs the `justfile` exports `UV_SYSTEM_CERTS=1` and `NODE_OPTIONS=--use-system-ca` so corporate CAs are trusted.
 
@@ -25,6 +33,9 @@ CI prerequisites (once, in GitHub repo settings): push the repo, create the `mai
 | e2e | — | — | — | `bun run --cwd front test:e2e` (Playwright, chromium, workers=1) |
 
 Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
+Database recipes: `just db-stand`, `just seed`, `just migrate`,
+`just revision "msg"`. Integration tests need the stand (`just db-stand` +
+`just seed`) and `TEST_DATABASE_URL` / `TEST_VALKEY_URL`.
 
 ### Back
 
