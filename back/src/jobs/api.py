@@ -1,7 +1,5 @@
 """Job API: submit / status / result / cancel (ADR-0002, Phase 6 §8.1/§8.5/§10)."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import quote
 
