@@ -8,9 +8,14 @@ A dedicated heartbeat thread renews the lease independently of the blocking
 masking operation (§3.6), so a two-minute DOCX job cannot lose its lease.
 SIGTERM stops new claims but keeps heartbeating in-flight jobs while they
 drain; forced termination is recovered by lease expiry with bounded attempts.
+
+Structured logs carry the opaque job id for every job being processed, while
+metrics carry only bounded labels (kind and safe error code). Metrics emission
+is best-effort: it never affects job execution or fencing.
 """
 
 import logging
+import shutil
 import signal
 import threading
 import time
@@ -20,11 +25,27 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from src.app_logging import configure_application_logging, log_event, log_warning
 from src.config import Settings, get_settings
+from src.metrics import (
+    inc_lease_expired,
+    inc_lease_renew_failure,
+    mark_worker_heartbeat,
+    observe_job_duration,
+    observe_job_failed,
+    observe_job_queue_age,
+    observe_job_retried,
+    observe_job_succeeded,
+    safe_error_code,
+    safe_kind,
+    set_artifact_disk_free,
+    set_job_running,
+)
 
 from . import dependencies
 from .dependencies import artifact_store, job_repository
-from .models import Claim, Job, JobPhase
+from .metrics import start_metrics_server, stop_metrics_server
+from .models import Claim, Job, JobKind, JobPhase
 from .operations import JobExecutionError, execute
 from .repository import JobRepository
 from .storage import ArtifactStore, cleanup_artifacts
@@ -124,11 +145,29 @@ class Heartbeat:
                     claim=self._claim,
                 )
             except Exception as error:  # noqa: BLE001 - log only the exception type
-                LOGGER.warning("heartbeat failed (error_type=%s)", type(error).__name__)
+                inc_lease_renew_failure()
+                log_warning(
+                    LOGGER,
+                    "lease_renew_failed",
+                    "Lease renewal failed.",
+                    job_id=self._job_id,
+                    operation="heartbeat",
+                    error_type=type(error).__name__,
+                )
                 ok = True  # a transient DB failure is not proof of lost ownership
             if not ok:
+                inc_lease_expired()
+                log_warning(
+                    LOGGER,
+                    "lease_expired",
+                    "Lease renewal rejected.",
+                    job_id=self._job_id,
+                    operation="heartbeat",
+                    outcome="error",
+                )
                 self._lost.set()
                 return
+            mark_worker_heartbeat()
             self._stop.wait(self._interval)
 
 
@@ -171,19 +210,47 @@ class Worker:
                 claim=claim,
             )
             if not ok:
+                inc_lease_renew_failure()
                 heartbeat.mark_lost()
+                log_warning(
+                    LOGGER,
+                    "lease_renew_failed",
+                    "Phase renewal rejected.",
+                    job_id=job_id,
+                    operation="heartbeat",
+                    outcome="error",
+                )
                 raise LeaseLostError(job_id)
+            mark_worker_heartbeat()
 
         return report
 
-    def run_one(self, job_id: str, claim: Claim) -> None:
+    def run_one(self, job_id: str, claim: Claim, kind: JobKind | None = None) -> None:
         """Execute one claimed job end-to-end (runs inside a worker thread)."""
+        kind_label = safe_kind(kind) if kind is not None else "unmatched"
+        started = time.perf_counter()
+        running = False
         heartbeat = Heartbeat(self._repo, job_id, claim, self._settings)
         heartbeat.start()
         try:
             self._checkpoint(job_id, claim, heartbeat)
             cache = dependencies.result_cache()
-            cache_key = self._repo.get(job_id).cache_key
+            current = self._repo.get(job_id)
+            kind_label = safe_kind(current.kind)
+            set_job_running(kind=kind_label, running=True)
+            running = True
+            log_event(
+                LOGGER,
+                "job_started",
+                "Job started.",
+                job_id=job_id,
+                worker_id=self._worker_id,
+                kind=kind_label,
+                operation="execute",
+                attempt=current.attempt,
+                outcome="ok",
+            )
+            cache_key = current.cache_key
             cached = cache.get(cache_key) if cache_key else None
             if cached is not None:
                 # A verified cache hit still goes through the fenced publish:
@@ -195,6 +262,16 @@ class Worker:
                     "result",
                     ttl_seconds=self._settings.jobs_ttl_seconds,
                     claim=claim,
+                )
+                observe_job_succeeded(kind_label)
+                log_event(
+                    LOGGER,
+                    "job_succeeded",
+                    "Job succeeded from cache.",
+                    job_id=job_id,
+                    kind=kind_label,
+                    operation="execute",
+                    outcome="ok",
                 )
                 return
             entries = execute(
@@ -214,23 +291,55 @@ class Worker:
                 ttl_seconds=self._settings.jobs_ttl_seconds,
                 claim=claim,
             )
+            observe_job_succeeded(kind_label)
             # Populate the cache only after the fenced succeeded transition
             # was accepted (§4.5); a stale/cancelled job never caches.
             if cache_key:
                 cache.put(cache_key, result)
+            log_event(
+                LOGGER,
+                "job_succeeded",
+                "Job succeeded.",
+                job_id=job_id,
+                kind=kind_label,
+                operation="execute",
+                outcome="ok",
+            )
         except CancelledError, LeaseLostError:
-            LOGGER.info("job %s: cancelled or lease lost, discarding result", job_id)
+            log_event(
+                LOGGER,
+                "job_cancelled",
+                "Job cancelled or lease lost, discarding result.",
+                job_id=job_id,
+                kind=kind_label,
+                worker_id=self._worker_id,
+                operation="execute",
+                outcome="cancelled",
+            )
             self._repo.acknowledge_cancel(job_id, claim)
             self._store.delete(job_id)
         except JobExecutionError as error:
-            self._fail(job_id, claim, classify(error))
+            self._fail(job_id, claim, classify(error), kind_label)
         except Exception:  # noqa: BLE001 - never leak exception text / PII to logs
-            LOGGER.warning("job %s failed (error_code=internal_error)", job_id)
-            self._fail(job_id, claim, ErrorClass("internal_error", retryable=True))
+            log_warning(
+                LOGGER,
+                "job_failed",
+                "Job failed.",
+                job_id=job_id,
+                kind=kind_label,
+                operation="execute",
+                error_code="internal_error",
+                outcome="error",
+            )
+            self._fail(job_id, claim, ErrorClass("internal_error", retryable=True), kind_label)
         finally:
             heartbeat.stop()
+            if running:
+                set_job_running(kind=kind_label, running=False)
+            observe_job_duration(kind_label, time.perf_counter() - started)
 
-    def _fail(self, job_id: str, claim: Claim, error: ErrorClass) -> None:
+    def _fail(self, job_id: str, claim: Claim, error: ErrorClass, kind: object = None) -> None:
+        kind_label = safe_kind(kind)
         attempt = self._repo.get(job_id).attempt
         # First retry is immediate; subsequent ones use bounded exponential
         # backoff with a hard cap (§3.8). Jitter is omitted for determinism.
@@ -243,9 +352,61 @@ class Worker:
             claim=claim,
             backoff_seconds=backoff,
         )
+        if status == "queued":
+            observe_job_retried(kind_label)
+            log_event(
+                LOGGER,
+                "job_retried",
+                "Job scheduled for retry.",
+                job_id=job_id,
+                kind=kind_label,
+                worker_id=self._worker_id,
+                operation="execute",
+                error_code=safe_error_code(error.code),
+                attempt=attempt,
+                outcome="retry",
+            )
         if status == "failed":
+            observe_job_failed(kind=kind_label, error_code=error.code)
+            log_warning(
+                LOGGER,
+                "job_failed",
+                "Job reached terminal failure.",
+                job_id=job_id,
+                kind=kind_label,
+                worker_id=self._worker_id,
+                operation="execute",
+                error_code=safe_error_code(error.code),
+                attempt=attempt,
+                outcome="error",
+            )
             # Failed rows keep metadata for diagnostics, but never input/keys.
             self._store.delete(job_id)
+
+    def _refresh_runtime_metrics(self) -> None:
+        """Queue depth and free artifact space; never fatal on a DB/disk outage."""
+        try:
+            self._repo.count_active()
+        except Exception as error:  # noqa: BLE001 - log only the exception type
+            log_warning(
+                LOGGER,
+                "queue_sample_failed",
+                "Queue sample unavailable.",
+                operation="sampler",
+                error_type=type(error).__name__,
+            )
+        try:
+            usage = shutil.disk_usage(self._settings.jobs_dir)
+        except OSError as error:
+            log_warning(
+                LOGGER,
+                "artifact_disk_sample_failed",
+                "Artifact disk sample unavailable.",
+                operation="sampler",
+                error_type=type(error).__name__,
+            )
+        else:
+            set_artifact_disk_free(usage.free)
 
     def sweep(self) -> None:
         """Remove eligible terminal rows and their artifacts (§3.9, GC)."""
@@ -255,14 +416,27 @@ class Worker:
         if expired:
             cleanup_artifacts(self._store, expired)
             self._repo.remove_expired([job.id for job in expired])
-            LOGGER.info("swept %d expired jobs", len(expired))
+            log_event(
+                LOGGER,
+                "expired_jobs_swept",
+                "Expired jobs swept.",
+                operation="gc",
+                outcome="ok",
+            )
+        self._refresh_runtime_metrics()
 
     def _sweep_safe(self) -> None:
         """GC must never kill the worker on a transient DB outage (§3.9)."""
         try:
             self.sweep()
         except Exception as error:  # noqa: BLE001 - log only the exception type
-            LOGGER.warning("worker sweep failed (error_type=%s)", type(error).__name__)
+            log_warning(
+                LOGGER,
+                "worker_sweep_failed",
+                "Worker sweep failed.",
+                operation="gc",
+                error_type=type(error).__name__,
+            )
 
     def _claim_safe(self) -> tuple[Job, Claim] | None:
         """One poll attempt; transient PostgreSQL errors become an empty poll."""
@@ -273,14 +447,28 @@ class Worker:
                 worker_id=self._worker_id,
             )
         except Exception as error:  # noqa: BLE001 - never log DB messages or PII
-            LOGGER.warning("worker claim failed (error_type=%s)", type(error).__name__)
+            log_warning(
+                LOGGER,
+                "worker_claim_failed",
+                "Worker claim failed.",
+                operation="poll",
+                error_type=type(error).__name__,
+            )
             return None
 
     def run(self) -> None:
         """Poll loop until SIGTERM; bounded by JOBS_CONCURRENCY."""
-        LOGGER.info("worker %s started (concurrency=%d)", self._worker_id[:8], self._settings.jobs_concurrency)
+        log_event(
+            LOGGER,
+            "worker_started",
+            "Worker started.",
+            worker_id=self._worker_id,
+            operation="poll",
+            outcome="ok",
+        )
         next_sweep = time.monotonic() + min(self._settings.jobs_ttl_seconds, 60.0)
         while not self._stop.is_set():
+            mark_worker_heartbeat()  # liveness even while the queue is empty
             if time.monotonic() >= next_sweep:
                 self._sweep_safe()
                 next_sweep = time.monotonic() + min(self._settings.jobs_ttl_seconds, 60.0)
@@ -292,21 +480,29 @@ class Worker:
                 self._stop.wait(self._settings.jobs_poll_seconds)
                 continue
             job, claim = claimed
-            future = self._pool.submit(self.run_one, job.id, claim)
+            age = max(0.0, time.time() - job.created_at)
+            observe_job_queue_age(job.kind, age)
+            future = self._pool.submit(self.run_one, job.id, claim, job.kind)
             with self._futures_lock:
                 self._futures = {f for f in self._futures if not f.done()}
                 self._futures.add(future)
         # SIGTERM: stop claiming, keep heartbeats alive while in-flight work
         # drains (never cancel CPU threads and pretend they were stopped).
-        LOGGER.info("draining worker pool (%d futures)", len(self._futures))
+        log_event(
+            LOGGER,
+            "worker_draining",
+            "Draining worker pool.",
+            worker_id=self._worker_id,
+            operation="drain",
+        )
         self._pool.shutdown(wait=True, cancel_futures=False)
         for future in self._futures:
             try:
                 future.result(timeout=0)
             except Exception:  # noqa: BLE001 - outcome already recorded in run_one
-                LOGGER.warning("in-flight job finished with an error while draining")
+                log_warning(LOGGER, "drain_failed", "In-flight job finished with an error.", operation="drain")
         self._sweep_safe()
-        LOGGER.info("worker stopped")
+        log_event(LOGGER, "worker_stopped", "Worker stopped.", worker_id=self._worker_id, operation="poll")
 
 
 def _zip_entries(entries: dict[str, Any]) -> bytes:
@@ -323,12 +519,16 @@ def _zip_entries(entries: dict[str, Any]) -> bytes:
 
 def main() -> None:
     """Worker entrypoint (module run: python -m src.jobs.worker)."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_application_logging()
     settings = get_settings()
     worker = Worker(settings, job_repository(), artifact_store())
+    server = start_metrics_server(host=settings.worker_metrics_host, port=settings.worker_metrics_port)
     signal.signal(signal.SIGTERM, lambda _signum, _frame: worker._stop.set())  # noqa: SLF001
     signal.signal(signal.SIGINT, lambda _signum, _frame: worker._stop.set())  # noqa: SLF001
-    worker.run()
+    try:
+        worker.run()
+    finally:
+        stop_metrics_server(server)
 
 
 if __name__ == "__main__":

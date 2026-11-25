@@ -10,12 +10,22 @@ contents, keys or PII ever leave the API.
 
 import logging
 import uuid
+from time import perf_counter
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from .app_logging import bind_request_id, log_error, log_event, log_warning
+from .metrics import (
+    http_request_finished,
+    http_request_started,
+    mark_http_failure,
+    observe_http_request,
+)
+from .observability import route_template
 
 LOGGER = logging.getLogger("docmasker.errors")
 
@@ -92,10 +102,51 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next: Any) -> Any:  # noqa: ANN401
-        request.state.request_id = str(uuid.uuid4())
-        response = await call_next(request)
-        response.headers[REQUEST_ID_HEADER] = request.state.request_id
-        return response
+        """Correlate every request and record HTTP metrics without any PII."""
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+        started = perf_counter()
+        response_status = 500
+        http_request_started()
+        with bind_request_id(request_id):
+            try:
+                response = await call_next(request)
+                response_status = response.status_code
+                response.headers[REQUEST_ID_HEADER] = request_id
+            except Exception:
+                # The outer ServerErrorMiddleware renders the Russian error
+                # envelope; here only the bounded outcome is recorded.
+                response_status = 500
+                mark_http_failure()
+                raise
+            else:
+                return response
+            finally:
+                http_request_finished()
+                route = route_template(request.app, request.scope)
+                duration = perf_counter() - started
+                observe_http_request(
+                    method=request.scope.get("method", "OTHER"),
+                    route=route,
+                    status=response_status,
+                    duration_seconds=duration,
+                )
+                if response_status >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+                    mark_http_failure()
+                if request.scope.get("path") not in {"/health", "/ready", "/metrics"}:
+                    fields = {
+                        "request_id": request_id,
+                        "method": request.scope.get("method", "OTHER"),
+                        "route": route,
+                        "status_code": response_status,
+                        "duration_ms": round(duration * 1000, 1),
+                    }
+                    if response_status >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+                        log_error(LOGGER, "http_request_error", "Request failed.", **fields)
+                    elif response_status >= status.HTTP_400_BAD_REQUEST:
+                        log_warning(LOGGER, "http_request_failed", "Request rejected.", **fields)
+                    else:
+                        log_event(LOGGER, "http_request", "Request handled.", **fields)
 
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:

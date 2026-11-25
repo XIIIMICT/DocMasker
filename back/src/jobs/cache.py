@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 import valkey
 
+from src.metrics import observe_cache_operation
+
 if TYPE_CHECKING:
     from src.config import Settings
 
@@ -184,6 +186,18 @@ class ResultCache:
                 LOGGER.warning("Valkey unavailable; continuing uncached")
                 self._client = None
                 self._failures += 1
+                observe_cache_operation(operation="failure", outcome="error")
+
+    def ping(self) -> bool:
+        """Readiness probe for the Valkey dependency (never raises)."""
+        if self._client is None:
+            return False
+        try:
+            self._client.ping()
+        except Exception:  # noqa: BLE001 - cache outage is not an API failure
+            observe_cache_operation(operation="failure", outcome="error")
+            return False
+        return True
 
     @property
     def metrics(self) -> dict[str, int]:
@@ -198,27 +212,33 @@ class ResultCache:
     def _evict(self, key: str) -> None:
         self._evictions += 1
         self._misses += 1
+        observe_cache_operation(operation="eviction", outcome="ok")
         if self._client is None:
             return
         try:
             self._client.delete(key)
         except Exception:  # noqa: BLE001
             self._failures += 1
+            observe_cache_operation(operation="failure", outcome="error")
 
     def get(self, key: str) -> bytes | None:
         """Lookup: verify the entry and its artifact before serving a hit."""
         if self._client is None:
             self._misses += 1
+            observe_cache_operation(operation="miss", outcome="ok")
             return None
         try:
             raw = self._client.get(key)
         except Exception:  # noqa: BLE001
             self._failures += 1
             self._misses += 1
+            observe_cache_operation(operation="failure", outcome="error")
+            observe_cache_operation(operation="miss", outcome="ok")
             LOGGER.warning("cache read failed; treating as miss")
             return None
         if raw is None:
             self._misses += 1
+            observe_cache_operation(operation="miss", outcome="ok")
             return None
         entry = self._parse_entry(str(raw))
         if entry is None:
@@ -229,6 +249,7 @@ class ResultCache:
             self._evict(key)
             return None
         self._hits += 1
+        observe_cache_operation(operation="hit", outcome="ok")
         return data
 
     @staticmethod
@@ -259,9 +280,11 @@ class ResultCache:
             self._client.set(key, payload, ex=int(self._settings.cache_ttl_seconds))
         except Exception:  # noqa: BLE001
             self._failures += 1
+            observe_cache_operation(operation="failure", outcome="error")
             LOGGER.warning("cache write failed; result is still valid uncached")
             return None
         self._writes += 1
+        observe_cache_operation(operation="write", outcome="ok")
         return entry
 
     def invalidate(self, key: str) -> None:
@@ -271,6 +294,7 @@ class ResultCache:
             self._client.delete(key)
         except Exception:  # noqa: BLE001
             self._failures += 1
+            observe_cache_operation(operation="failure", outcome="error")
 
 
 def fingerprint_for(

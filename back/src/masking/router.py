@@ -16,6 +16,7 @@ from src.jobs.dependencies import result_cache
 from src.jobs.repository import JobQueueFullError
 from src.jobs.routing import count_docx_paragraphs, enqueue, needs_job
 from src.masking.config import SCHEMA_VERSION, get_config
+from src.metrics import observe_upload
 
 from .archives import mask_archive, restore_archive
 from .docx_service import CoverageReport, OoxmlPackageError, mask_docx_in_memory, unmask_docx_in_memory
@@ -38,6 +39,17 @@ if TYPE_CHECKING:
     from src.jobs.models import JobKind
 
 router = APIRouter(tags=["masking"])
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    """Read a sync upload and count the bounded outcome (never the content)."""
+    try:
+        source = await file.read()
+    except Exception:
+        observe_upload(outcome="error")
+        raise
+    observe_upload(outcome="ok")
+    return source
 
 
 @router.get("/labels", response_model=LabelsResponse)
@@ -278,7 +290,7 @@ async def mask_file_endpoint(
             detail="Файл должен иметь расширение .docx.",
         )
 
-    source = await file.read()
+    source = await _read_upload(file)
     if not source:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
     # §10: validate package structure and the hard byte limit BEFORE any
@@ -400,7 +412,7 @@ async def unmask_file_endpoint(
             detail=f"Ключи больше допустимых ({settings.max_keys_chars} символов).",
         )
 
-    source = await file.read()
+    source = await _read_upload(file)
     if not source:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
     # §10: hard byte limit before any ZIP/XML paragraph-count heuristic.
