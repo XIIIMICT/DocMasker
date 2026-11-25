@@ -53,6 +53,10 @@ _TEXT_TAGS: frozenset[str] = frozenset(
         # Extended properties: Company / Manager
         f"{{{EP}}}Company",
         f"{{{EP}}}Manager",
+        # docProps/custom.xml user-defined property values.
+        f"{{{VT}}}lpwstr",
+        f"{{{VT}}}lpstr",
+        f"{{{VT}}}bstr",
     }
 )
 
@@ -62,6 +66,15 @@ _TEXT_ATTRS: frozenset[tuple[str, str]] = frozenset(
         (f"{{{WP}}}docPr", "descr"),
         (f"{{{WP}}}docPr", "title"),
         (f"{{{WP}}}docPr", "name"),
+        # Comment/tracked-change authors and initials can identify a person
+        # even after the body text is masked (P0.3).
+        (f"{{{W}}}comment", f"{{{W}}}author"),
+        (f"{{{W}}}comment", f"{{{W}}}initials"),
+        (f"{{{W}}}ins", f"{{{W}}}author"),
+        (f"{{{W}}}del", f"{{{W}}}author"),
+        (f"{{{W}}}moveFrom", f"{{{W}}}author"),
+        (f"{{{W}}}moveTo", f"{{{W}}}author"),
+        (f"{{{W}}}person", f"{{{W}}}author"),
     }
 )
 
@@ -79,6 +92,7 @@ _CATEGORY_BY_PART: dict[str, str] = {
     "word/comments.xml": "comments",
     "docProps/core.xml": "core_properties",
     "docProps/app.xml": "app_properties",
+    "docProps/custom.xml": "custom_properties",
 }
 
 _REL_TYPES: dict[str, str] = {
@@ -88,6 +102,70 @@ _REL_TYPES: dict[str, str] = {
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes": "endnotes",
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments": "comments",
 }
+
+
+_PROCESSABLE_CATEGORIES = frozenset(
+    {
+        *_CATEGORY_BY_PART.values(),
+        *_REL_TYPES.values(),
+        "relationships",
+        "generic_xml",
+    }
+)
+
+#: Explicit processor/disposition registry (P0.3). Unknown XML is never
+#: silently treated as safe: it is marked unprocessed and the package is
+#: rejected instead of returning a misleading "complete" manifest.
+_COPY_SAFE_PARTS = frozenset(
+    {
+        "word/styles.xml",
+        "word/stylesWithEffects.xml",
+        "word/numbering.xml",
+        "word/settings.xml",
+        "word/fontTable.xml",
+        "word/webSettings.xml",
+        "word/theme/theme1.xml",
+        "word/commentsExtended.xml",
+        "word/commentsIds.xml",
+        "word/commentsExtensible.xml",
+    }
+)
+_COPY_SAFE_CONTENT_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml",
+        "application/vnd.openxmlformats-officedocument.theme+xml",
+    }
+)
+_MEDIA_SUFFIXES = (".png", ".jpeg", ".jpg", ".gif", ".bmp", ".emf", ".wmf")
+
+
+def _disposition(name: str, ctype: str, rel_category: str) -> str:
+    """Classify one part into process / copy / reject semantics."""
+    if name.endswith(".rels"):
+        return "process"  # external relationship Target values are masked
+    if name in _CATEGORY_BY_PART or rel_category in _REL_TYPES.values():
+        return "process"
+    if name == "[Content_Types].xml":
+        return "copy"
+    if name.endswith(_MEDIA_SUFFIXES):
+        return "copy"
+    if name.endswith(".bin") or "/embeddings/" in name:
+        return "reject"
+    if ctype in _COPY_SAFE_CONTENT_TYPES:
+        return "copy"
+    if name.endswith((".xml", ".rels")):
+        # Chart/drawing text-bearing parts are not in the anonymisation scope:
+        # mark them unprocessed and fail closed instead of claiming complete.
+        if any(marker in ctype for marker in ("chart+xml", "spreadsheetml")):
+            return "unprocessed"
+        # Unknown XML (e.g. customXml/item1.xml) is inspected generically:
+        # only text nodes are rewritten, never attributes or structure.
+        return "process"
+    return "copy"  # opaque binary with no embedded-object semantics
 
 
 class OoxmlPackageError(ValueError):
@@ -117,6 +195,10 @@ class CoverageReport:
     def as_manifest(self) -> dict[str, Any]:
         return {
             "processed_parts": sorted(set(self.processed_parts)),
+            "processed": [
+                {"name": item.name, "category": item.category, "text_nodes": item.text_nodes}
+                for item in sorted(self.processed, key=lambda item: item.name)
+            ],
             "unprocessed_text_parts": sorted(set(self.unprocessed_text_parts)),
             "rejected_parts": sorted(set(self.rejected_parts)),
             "raster_image_ocr": "not_performed",
@@ -151,7 +233,7 @@ def _secure_parse(data: bytes) -> etree._Element:
         raise OoxmlPackageError(msg) from error
 
 
-def _content_types(archive: zipfile.ZipFile) -> dict[str, str]:
+def _content_types(archive: zipfile.ZipFile) -> tuple[dict[str, str], dict[str, str]]:
     """Part name → content type, resolved by URI (no prefix assumptions)."""
     try:
         root = _secure_parse(archive.read("[Content_Types].xml"))
@@ -159,13 +241,20 @@ def _content_types(archive: zipfile.ZipFile) -> dict[str, str]:
         msg = "Пакет DOCX не содержит [Content_Types].xml."
         raise OoxmlPackageError(msg) from error
     result: dict[str, str] = {}
+    defaults: dict[str, str] = {}
     for element in root:
-        if _local(element.tag) == "Override":
+        tag = _local(element.tag)
+        if tag == "Override":
             name = element.get("PartName", "").lstrip("/")
             ctype = element.get("ContentType", "")
             if name:
                 result[name] = ctype
-    return result
+        elif tag == "Default":
+            extension = element.get("Extension", "").lower()
+            ctype = element.get("ContentType", "")
+            if extension:
+                defaults[extension] = ctype
+    return result, defaults
 
 
 def _relationships(archive: zipfile.ZipFile, part_name: str) -> list[tuple[str, str, str]]:
@@ -226,51 +315,59 @@ def build_inventory(data: bytes) -> tuple[list[_Part], CoverageReport]:
         if "[Content_Types].xml" not in names or "word/document.xml" not in names:
             msg = "Файл не является корректным DOCX (отсутствуют части пакета Word)."
             raise OoxmlPackageError(msg)
-        _content_types(archive)
+        overrides, defaults = _content_types(archive)
 
-        # Root + main-document relationships decide which parts are text-bearing,
-        # by Type URI (not filename guesses). Shared parts appear once.
+        def content_type_of(name: str) -> str:
+            if name in overrides:
+                return overrides[name]
+            return defaults.get(name.rsplit(".", 1)[-1].lower(), "")
+
+        def safe_name(name: str) -> str:
+            if (
+                not name
+                or name.startswith("/")
+                or "\\" in name
+                or "//" in name
+                or ".." in name.split("/")
+                or any(segment.startswith(".") and segment != ".rels" for segment in name.split("/"))
+            ):
+                msg = "Пакет DOCX содержит некорректный путь части."
+                raise OoxmlPackageError(msg)
+            return name
+
         by_name: dict[str, tuple[str, str]] = {}
-        for owner in ("", "word/document.xml"):
+        # Root relationships are resolved from the package root; every part's
+        # relationships are resolved relative to that owning part (P0.3).
+        rel_sources = ["", *[name for name in sorted(names) if not name.endswith(".rels")]]
+        for owner in rel_sources:
             for rel_type, target, mode in _relationships(archive, owner):
-                resolved = _resolve("word/document.xml", target)
+                resolved = _resolve(owner, target)
                 if resolved in names:
-                    by_name[resolved] = (_REL_TYPES.get(rel_type, "other"), mode)
+                    by_name[safe_name(resolved)] = (_REL_TYPES.get(rel_type, "other"), mode)
         for name in names:
-            if name.startswith("word/") and name.endswith((".xml", ".rels")):
+            if name.startswith("word/") and name.endswith(".xml"):
                 by_name.setdefault(name, ("other", ""))
-        for name in names:
             if name.startswith("docProps/") and name.endswith(".xml"):
                 by_name.setdefault(name, ("other", ""))
-        # Relationships files themselves carry external targets (and their own
-        # parts' rels may contain hyperlinks).
-        for name in names:
             if name.endswith(".rels"):
                 by_name.setdefault(name, ("relationships", "Internal"))
         by_name.setdefault("word/document.xml", (_CATEGORY_BY_PART["word/document.xml"], ""))
 
         parts: list[_Part] = []
         for name in sorted(names):
-            if name == "[Content_Types].xml":
-                parts.append(_Part(name, archive.read(name), "content_types", is_xml=True))
-                continue
+            safe_name(name)
+            ctype = content_type_of(name)
             rel_category, _mode = by_name.get(name, ("other", ""))
-            category = _CATEGORY_BY_PART.get(name, rel_category)
+            disposition = _disposition(name, ctype, rel_category)
+            category = _CATEGORY_BY_PART.get(name, rel_category) if disposition == "process" else disposition
+            if disposition == "process" and category in ("other", ""):
+                category = "generic_xml"
+            if disposition == "reject":
+                coverage.rejected_parts.append(name)
+            elif disposition == "unprocessed":
+                coverage.unprocessed_text_parts.append(name)
             is_xml = name.endswith((".xml", ".rels"))
-            if name.endswith((".png", ".jpeg", ".jpg", ".gif", ".bmp", ".emf", ".wmf")):
-                # Raster/vector pixels are untouched — documented limitation
-                # (§6.4), not an unprocessed *text* part and never a blocker.
-                parts.append(_Part(name, archive.read(name), "media", is_xml=False))
-                continue
-            if name.endswith(".bin") or "/embeddings/" in name:
-                # Embedded OLE/binary packages cannot be inspected safely.
-                coverage.rejected_parts.append("embedded_objects")
-                parts.append(_Part(name, archive.read(name), "embedded_object", is_xml=False))
-                continue
-            if is_xml:
-                parts.append(_Part(name, archive.read(name), category, is_xml=True))
-            else:
-                parts.append(_Part(name, archive.read(name), "other_binary", is_xml=False))
+            parts.append(_Part(name, archive.read(name), category, is_xml=is_xml))
     return parts, coverage
 
 
@@ -355,6 +452,20 @@ def _containers(root: etree._Element, part_name: str, category: str) -> list[_Co
     return result
 
 
+def _generic_containers(root: etree._Element, part_name: str, category: str) -> list[_Container]:
+    """
+    Text nodes of an unknown XML part (e.g. customXml/item1.xml).
+
+    Only element text is touched — attributes and structure are preserved.
+    """
+    refs = [
+        _TextRef(element)
+        for element in root.iter()
+        if isinstance(element.tag, str) and element.text and element.text.strip()
+    ]
+    return [_Container(refs=refs, part_name=part_name, category=category)] if refs else []
+
+
 def _closest_paragraph(element: etree._Element) -> etree._Element | None:
     current = element.getparent()
     while current is not None:
@@ -407,8 +518,8 @@ def transform_package(
     unsafe/uninspectable content.
     """
     parts, coverage = build_inventory(data)
-    if coverage.rejected_parts:
-        msg = "Документ содержит неподдерживаемое вложенное содержимое, которое нельзя безопасно обработать."
+    if coverage.rejected_parts or coverage.unprocessed_text_parts:
+        msg = "Документ содержит неподдерживаемое содержимое, которое нельзя безопасно обработать."
         raise OoxmlPackageError(msg)
 
     with zipfile.ZipFile(io.BytesIO(data)) as source:
@@ -418,12 +529,19 @@ def transform_package(
         used_placeholders: set[str] = set()
 
         for part in parts:
-            if not part.is_xml or part.category in ("content_types", "media", "embedded_object", "other_binary"):
+            if part.category not in _PROCESSABLE_CATEGORIES:
                 continue
             root = _secure_parse(part.data)
-            containers = _containers(root, part.name, part.category)
-            if not containers:
-                continue
+            containers = (
+                _generic_containers(root, part.name, part.category)
+                if part.category == "generic_xml"
+                else _containers(root, part.name, part.category)
+            )
+            text_nodes = sum(len(container.refs) for container in containers)
+            # Every successfully inspected supported part is recorded, even
+            # when it contains no PII (P0.3 coverage semantics).
+            coverage.processed_parts.append(part.category)
+            coverage.processed.append(ProcessedPart(part.name, part.category, text_nodes))
             modified = False
             for container in containers:
                 text = container.text()
@@ -458,8 +576,6 @@ def transform_package(
                     modified = True
             if modified:
                 edited[part.name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
-                coverage.processed_parts.append(part.category)
-                coverage.processed.append(ProcessedPart(part.name, part.category, len(containers)))
 
         unused = (
             [value for placeholder, value in placeholders.items() if placeholder not in used_placeholders]

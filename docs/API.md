@@ -238,6 +238,9 @@ thresholds → `202 + JobAccepted`.
   },
   "coverage": {
     "processed_parts": ["main_document", "footnotes"],
+    "processed": [
+      { "name": "word/document.xml", "category": "main_document", "text_nodes": 3 }
+    ],
     "unprocessed_text_parts": [],
     "rejected_parts": [],
     "raster_image_ocr": "not_performed"
@@ -247,7 +250,11 @@ thresholds → `202 + JobAccepted`.
 ```
 
 `unmask_file` reports `statistics.unused_keys` instead of occurrence counts.
-The frontend rejects a missing/malformed/wrong-version manifest with a clear
+`processed_parts` includes every inspected supported part even with zero
+detections; `complete` is true only when the supported scope was fully
+inspected and no text-bearing part was unprocessed/rejected — such documents
+are rejected with 422 rather than delivered as a misleading success. The
+frontend rejects a missing/malformed/wrong-version manifest with a clear
 error. See `docs/DOCX_SUPPORT.md`.
 
 ## Durable jobs (`/api/jobs`, ADR-0002)
