@@ -1,0 +1,47 @@
+name: Docker Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yaml
+
+  release:
+    name: Publish tested images
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: production-images
+      - run: docker load -i production-images.tar
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exact images that passed CI
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected vMAJOR.MINOR.PATCH"; exit 1; }
+          owner="${REPOSITORY_OWNER,,}"
+          # The worker runs the same back image, so it is published with the API.
+          for component in back front; do
+            image="ghcr.io/$owner/dm-$component"
+            for tag in "${VERSION#v}" "$COMMIT"; do
+              docker tag "dm-$component:ci" "$image:$tag"
+              docker push "$image:$tag"
+            done
+          done
