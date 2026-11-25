@@ -53,6 +53,9 @@ export interface ModeState {
     // Keys the backend reported as unused after a file demasking (a `.docx`
     // text is only known server-side). `null` → derive live from the input.
     demaskUnused: string[] | null;
+    // Placeholder occurrences counted from the masked DOCX input; lets the
+    // demasking tooltip show "с повторами" just like the masking tooltip.
+    demaskOccurrences: Record<string, number> | null;
     // Shared UI state.
     busy: boolean;
     dragging: boolean;
@@ -76,6 +79,7 @@ export function emptyModeState(): ModeState {
         restored: "",
         restoredFile: null,
         demaskUnused: null,
+        demaskOccurrences: null,
         busy: false,
         dragging: false,
         error: null,

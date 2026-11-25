@@ -160,10 +160,14 @@ Rules:
    `.txt` client-side into the input `TextArea` (its name is never shown) and
    never posts it to `/api/mask-file`; only `.docx` goes to the backend.
    Masked text is always downloadable as `.txt`. The result label reads
-   `N фрагментов`; the `Tooltip` body (`shared/mask-stats.ts::statsBreakdown`)
-   lists `Тип: occurrences (uniques уникальных)` per label, and on demasking
+   `N фрагментов`, where **N is the number of distinct values** (`uniqueTotal`).
+   The `Tooltip` body (`shared/mask-stats.ts::statsBreakdown`) renders a bold
+   category title and `unique (total с повторами)` per label, and on demasking
    appends a `Не применено N:` block of key values whose placeholder was absent
-   from the masked input (no tooltip when `N = 0`).
+   from the masked input (no block when `N = 0`). For a masked DOCX the
+   occurrence counts come from `placeholder-count.ts::countPlaceholdersInDocx`
+   (all XML parts); for text they are counted from the input string. Parity is
+   covered by `mask-stats.test.ts` and the file e2e.
 5. **The theme switcher is icon-only `Tabs` with `Tooltip`, and theme state
    lives in `next-themes`.** `shared/ui/theme-switcher.tsx` uses `Tabs` with
    **no `Tabs.Panel`** (the selection is a `setTheme` side-effect) and one icon

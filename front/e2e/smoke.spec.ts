@@ -102,8 +102,8 @@ test("текст с PII маскируется через /api/mask", async ({ p
     const stats = page.locator(".editor-pane__stats");
     await expect(stats).toHaveText("2 фрагмента");
     await stats.focus();
-    await expect(page.getByRole("tooltip")).toContainText("Физлица: 1 (1 уникальный)");
-    await expect(page.getByRole("tooltip")).toContainText("Номера телефонов: 1 (1 уникальный)");
+    await expect(page.getByRole("tooltip")).toContainText("Физлица: 1 (1 с повторами)");
+    await expect(page.getByRole("tooltip")).toContainText("Номера телефонов: 1 (1 с повторами)");
     // The keys tab carries the demasking YAML; both downloads become available.
     await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
     await expect(page.getByRole("textbox", { name: "Ключи демаскировки" })).toHaveValue(
@@ -259,7 +259,7 @@ test("очистка данных на маскировке убирает со�
     await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue("");
 });
 
-test("tooltip маскировки показывает уникальные счётчики по типам", async ({ page }) => {
+test("tooltip маскировки показывает уникальные значения и число повторов", async ({ page }) => {
     await page.goto("/");
     await page
         .getByRole("textbox", { name: MASK_DATA })
@@ -270,7 +270,8 @@ test("tooltip маскировки показывает уникальные с�
     await stats.focus();
     const tooltip = page.getByRole("tooltip");
     await expect(tooltip).toContainText("Физлица:", { timeout: 10000 });
-    await expect(tooltip).toContainText("уникальн");
+    await expect(tooltip).toContainText("с повторами");
+    await expect(tooltip.locator("b").first()).toBeVisible();
 });
 
 test("tooltip демаскировки перечисляет неприменённые ключи", async ({ page }) => {
@@ -311,6 +312,35 @@ test("демаскировка файла сообщает неприменён�
     const tooltip = page.getByRole("tooltip");
     await expect(tooltip).toContainText("Не применено 1:", { timeout: 10000 });
     await expect(tooltip).toContainText("- ООО «Рога и копыта»;");
+});
+
+test("статистика файла совпадает при маскировке и демаскировке с теми же ключами", async ({
+    page,
+}) => {
+    await page.goto("/");
+    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    const maskStats = page.locator(".editor-pane__stats");
+    await expect(maskStats).toBeVisible({ timeout: 30000 });
+    const headline = (await maskStats.textContent())?.trim();
+    expect(headline).toBeTruthy();
+
+    await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+    const keys = await page.getByRole("textbox", { name: "Ключи демаскировки" }).inputValue();
+    expect(keys).toContain("Физлица:");
+
+    await switchMode(page, "Демаскировка");
+    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_MASKED_DOCX);
+    await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+    await page.getByRole("textbox", { name: "Ключи демаскировки" }).fill(keys);
+    const demaskStats = page.locator(".editor-pane__stats");
+    await expect(demaskStats).toBeVisible({ timeout: 15000 });
+    expect((await demaskStats.textContent())?.trim()).toBe(headline);
+
+    await demaskStats.focus();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip.locator("b").first()).toBeVisible({ timeout: 10000 });
+    await expect(tooltip).toContainText("с повторами");
 });
 
 test("текстовая маскировка через job (202) показывает результат", async ({ page }) => {

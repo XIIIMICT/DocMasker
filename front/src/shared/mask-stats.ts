@@ -1,3 +1,6 @@
+import type { ReactNode } from "react";
+import { createElement } from "react";
+
 import { LABEL_CATALOGUE } from "@/shared/api/labels.generated";
 import { keyEntries, type MaskStatsPayload } from "@/shared/api/mask";
 import type { ResultManifest } from "@/shared/api/mask-archive";
@@ -5,9 +8,10 @@ import type { ResultManifest } from "@/shared/api/mask-archive";
 /**
  * Masking / demasking totals for the result-label tooltip.
  *
- * `byLabel` counts occurrences, `uniqueByLabel` counts distinct values, and
- * `unused` (demasking only) lists key values whose placeholder never appeared
- * in the document. `total` is the sum of `byLabel`.
+ * The headline number is the count of UNIQUE values. `byLabel` keeps the total
+ * number of occurrences (for the tooltip's "N с повторами" part),
+ * `uniqueByLabel` counts distinct values, and `unused` (demasking only) lists
+ * key values whose placeholder never appeared in the document.
  */
 export interface MaskStats {
     total: number;
@@ -48,40 +52,44 @@ export function labelName(label: string, count: number): string {
     return plural(count, ["фрагмент", "фрагмента", "фрагментов"]);
 }
 
-/** "5 фрагментов" — the short result-label summary. */
-export function totalText(stats: MaskStats): string {
-    return `${stats.total} ${plural(stats.total, ["фрагмент", "фрагмента", "фрагментов"])}`;
+/** Sum of distinct values across categories — the headline fragment count. */
+export function uniqueTotal(stats: MaskStats): number {
+    return Object.values(stats.uniqueByLabel).reduce((sum, count) => sum + count, 0);
 }
 
-/** "2 уникальных" — the Russian plural of "unique" for a count. */
-function uniqueText(count: number): string {
-    return plural(count, ["уникальный", "уникальных", "уникальных"]);
+/** "5 фрагментов" — the short result-label summary (unique values only). */
+export function totalText(stats: MaskStats): string {
+    const count = uniqueTotal(stats);
+    return `${count} ${plural(count, ["фрагмент", "фрагмента", "фрагментов"])}`;
 }
 
 /**
- * Tooltip body: one line per label, e.g.
- * ```
- * Физлица: 4 (2 уникальных)
- * Организации: 5 (5 уникальных)
- * ```
- * Plus, when some keys were not applied, a trailing block listing them.
+ * Tooltip body with a bold category title, the unique count first and the
+ * total occurrences in parentheses, e.g.:
+ *
+ * **Организации:** 5 (7 с повторами)
+ *
+ * Unused demasking keys are appended as a trailing block.
  */
-export function statsBreakdown(stats: MaskStats): string {
+export function statsBreakdown(stats: MaskStats): ReactNode[] {
+    const nodes: ReactNode[] = [];
     const lines = Object.entries(stats.byLabel)
         .filter(([, count]) => count > 0)
-        .sort(([, a], [, b]) => b - a)
-        .map(([label, count]) => {
-            const unique = stats.uniqueByLabel[label] ?? count;
-            const title = LABEL_TITLES[label] ?? label;
-            return `${title}: ${count} (${unique} ${uniqueText(unique)})`;
-        });
+        .sort(([, a], [, b]) => b - a);
+    lines.forEach(([label, occurrences], index) => {
+        if (index > 0) nodes.push("\n");
+        const unique = stats.uniqueByLabel[label] ?? occurrences;
+        const title = LABEL_TITLES[label] ?? label;
+        nodes.push(createElement("b", { key: `title-${label}` }, `${title}:`));
+        nodes.push(` ${unique} (${occurrences} с повторами)`);
+    });
     if (stats.unused.length > 0) {
-        lines.push("", `Не применено ${stats.unused.length}:`);
+        nodes.push("\n\n", `Не применено ${stats.unused.length}:`);
         for (const value of stats.unused) {
-            lines.push(`- ${value};`);
+            nodes.push("\n", `- ${value};`);
         }
     }
-    return lines.join("\n");
+    return nodes;
 }
 
 /** Build masking stats from the backend's aggregate response (no raw values). */
@@ -106,22 +114,30 @@ export function statsFromManifest(manifest: ResultManifest): MaskStats {
 }
 
 /**
- * Build demasking stats from the keys and the text they are applied to: the
- * counts mirror masking, and any key whose placeholder is absent from the
- * document is reported as "не применено". Pass `null` for `documentText` when
- * the masked text is unknown (a `.docx` is only known to the backend), which
- * skips the unused scan.
+ * Build demasking stats from the keys and the placeholders they are applied to.
+ *
+ * `uniqueByLabel` comes from the distinct key values. Occurrences are counted
+ * from `documentText` when it is known (text mode); for a DOCX the caller passes
+ * the counts extracted from the masked file via `occurrencesByLabel`. Any key
+ * whose placeholder is absent from the document is reported as "не применено".
  */
-export function countKeysValues(keysYaml: string, documentText: string | null): MaskStats {
-    const byLabel: Record<string, number> = {};
+export function countKeysValues(
+    keysYaml: string,
+    documentText: string | null,
+    occurrencesByLabel?: Record<string, number>,
+): MaskStats {
     const unique: Record<string, Set<string>> = {};
+    const byLabel: Record<string, number> = { ...occurrencesByLabel };
     const unused: string[] = [];
     for (const [placeholder, value] of keyEntries(keysYaml)) {
         const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
-        byLabel[label] = (byLabel[label] ?? 0) + 1;
         (unique[label] ??= new Set()).add(value);
-        if (documentText !== null && !documentText.includes(placeholder)) {
-            unused.push(value);
+        if (documentText !== null) {
+            const count = documentText.split(placeholder).length - 1;
+            if (count > 0) byLabel[label] = (byLabel[label] ?? 0) + count;
+            else unused.push(value);
+        } else if (occurrencesByLabel === undefined) {
+            byLabel[label] = (byLabel[label] ?? 0) + 1;
         }
     }
     return {

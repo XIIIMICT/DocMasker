@@ -17,6 +17,7 @@ import {
     jobToMaskResponse,
     jobToUnmaskResponse,
 } from "@/shared/api/mask-helpers";
+import { countPlaceholdersInDocx } from "@/shared/api/placeholder-count";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import {
     countKeysValues,
@@ -112,6 +113,7 @@ export function useMaskerWorkflow() {
         restored,
         restoredFile,
         demaskUnused,
+        demaskOccurrences,
         inputTab,
         resultTab,
         busy,
@@ -119,6 +121,27 @@ export function useMaskerWorkflow() {
         activeJob,
     } = state;
     const dragging = state.dragging;
+
+    // Demasking a DOCX: the masked placeholders live inside the file, so
+    // count them asynchronously for the tooltip's "с повторами" part. Text
+    // mode counts them synchronously from the input string in countKeysValues.
+    useEffect(() => {
+        if (inMaskMode || selectedFile === null || fileKind(selectedFile) !== "docx") {
+            if (demaskOccurrences !== null) update({ demaskOccurrences: null });
+            return;
+        }
+        let active = true;
+        void countPlaceholdersInDocx(selectedFile)
+            .then((counts) => {
+                if (active) update({ demaskOccurrences: counts });
+            })
+            .catch(() => {
+                if (active) update({ demaskOccurrences: null });
+            });
+        return () => {
+            active = false;
+        };
+    }, [inMaskMode, selectedFile]);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const keysInputRef = useRef<HTMLInputElement>(null);
@@ -241,7 +264,11 @@ export function useMaskerWorkflow() {
     // from its response (`demaskUnused`); in text mode it is derived live.
     const demaskStats: MaskStats | null = hasDemaskKeys
         ? {
-              ...countKeysValues(demaskKeys, inFileMode ? null : input),
+              ...countKeysValues(
+                  demaskKeys,
+                  inFileMode ? null : input,
+                  inFileMode ? (demaskOccurrences ?? undefined) : undefined,
+              ),
               ...(inFileMode && demaskUnused !== null ? { unused: demaskUnused } : {}),
           }
         : null;
