@@ -6,8 +6,6 @@ imports `masking.router.upload_limits` — a direct router→api import would
 create a cycle.
 """
 
-from __future__ import annotations
-
 import hashlib
 from collections.abc import Callable
 from pathlib import Path

@@ -1,7 +1,5 @@
 """Seed DocMasker's PostgreSQL substrate (mirrors ReportCollector's seed_database)."""
 
-from __future__ import annotations
-
 import argparse
 import logging
 from pathlib import Path
