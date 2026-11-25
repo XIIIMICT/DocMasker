@@ -57,6 +57,9 @@ The browser only calls its own origin; Next proxies `/api/*` server-side.
 - **Hook policy (shared, maintainer decision 2026-11-25):** every static checker
   (ruff, ty, oxfmt/oxlint, `bun check`) runs on the **staged files** at commit
   and on the **whole tree** in CI; no `manual` stage in any `prek.toml`.
+- **Docstring policy:** D100–D107 are intentionally ignored in
+  `back/pyproject.toml`. Write a docstring only for a non-obvious contract or the
+  reason behind a decision; do not add trivial ones or mass-delete existing ones.
 - **No debug artifacts** (`debug_*`, probes, stray scripts) in commits.
 - **Tooling:** `rg` over `grep`, `uv` over bare Python, `bun` over node.
 - **Ambiguous product/config/process decisions → ask the maintainer.** Only
