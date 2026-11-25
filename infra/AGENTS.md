@@ -63,7 +63,7 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   on), `CACHE_TTL_SECONDS`, `CACHE_NAMESPACE_VERSION`, `CACHE_MAX_ENTRIES`,
   `CACHE_MAX_MEMORY_MB`, `MASKING_RULESET_VERSION`,
   `RESULT_MANIFEST_VERSION`, `MASKING_CONFIG_DIGEST`, `KEYS_FORMAT_VERSION`,
-  `DOCX_TRANSFORMER_VERSION`, `WORKER_SHUTDOWN_GRACE_SECONDS`.
+  `DOCX_TRANSFORMER_VERSION`.
   Production startup fails clearly when credentials are missing (`:?` in
   compose). Valkey stays private to the internal network.
 - Phase 4 config: `MASKING_CONFIG_DIR=/app/config/masking` (default in the

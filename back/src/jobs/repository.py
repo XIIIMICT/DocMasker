@@ -190,6 +190,7 @@ class JobRepository:
                         created_at=now,
                         updated_at=now,
                         cache_key=cache_key,
+                        staging_until=now + timedelta(seconds=self._settings.staging_lease_seconds),
                     )
                 )
         if attached_id is not None:
@@ -222,6 +223,7 @@ class JobRepository:
                     phase="queued",
                     input_artifact=input_artifact,
                     keys_artifact=keys_artifact,
+                    staging_until=None,
                     result_expires_at=now + timedelta(seconds=ttl_seconds),
                     expires_at=now + timedelta(seconds=ttl_seconds),
                     updated_at=now,
@@ -243,8 +245,81 @@ class JobRepository:
             session.execute(
                 update(jobs)
                 .where(jobs.c.id == uuid.UUID(job_id), jobs.c.status == "staging")
-                .values(status="failed", error_code=error_code, finished_at=self._db_now(session))
+                .values(
+                    status="failed",
+                    error_code=error_code,
+                    staging_until=None,
+                    finished_at=self._db_now(session),
+                )
             )
+
+    def touch_staging(self, job_id: str) -> bool:
+        """Renew an in-progress staging lease; False if recovery claimed the row."""
+        with self._session() as session, session.begin():
+            now = self._db_now(session)
+            result = session.execute(
+                update(jobs)
+                .where(
+                    jobs.c.id == uuid.UUID(job_id),
+                    jobs.c.status == "staging",
+                    jobs.c.staging_until > now,
+                )
+                .values(staging_until=now + timedelta(seconds=self._settings.staging_lease_seconds), updated_at=now)
+            )
+            return _affected(result) == 1
+
+    def recover_abandoned_staging(self, *, limit: int = 100) -> list[str]:
+        """Atomically claim expired staging rows for cleanup (never make them claimable)."""
+        with self._session() as session, session.begin():
+            now = self._db_now(session)
+            rows = session.execute(
+                select(jobs.c.id)
+                .where(jobs.c.status == "staging", jobs.c.staging_until <= now)
+                .with_for_update(skip_locked=True)
+                .limit(limit)
+            ).all()
+            for row in rows:
+                session.execute(
+                    update(jobs)
+                    .where(jobs.c.id == row.id, jobs.c.status == "staging", jobs.c.staging_until <= now)
+                    .values(
+                        status="failed",
+                        phase="failed",
+                        error_code="staging_abandoned",
+                        staging_until=None,
+                        finished_at=now,
+                        updated_at=now,
+                    )
+                )
+            return [str(row.id) for row in rows]
+
+    def recover_expired_cancelling(self, *, limit: int = 100) -> list[str]:
+        """Terminally cancel a job whose owner died after a cancel request."""
+        with self._session() as session, session.begin():
+            now = self._db_now(session)
+            rows = session.execute(
+                select(jobs.c.id)
+                .where(jobs.c.status == "cancelling", jobs.c.lease_until <= now)
+                .with_for_update(skip_locked=True)
+                .limit(limit)
+            ).all()
+            for row in rows:
+                session.execute(
+                    update(jobs)
+                    .where(jobs.c.id == row.id, jobs.c.status == "cancelling", jobs.c.lease_until <= now)
+                    .values(
+                        status="cancelled",
+                        phase="cancelled",
+                        cancel_requested_at=now,
+                        worker_id=None,
+                        lease_token=None,
+                        lease_until=None,
+                        finished_at=now,
+                        result_expires_at=now + timedelta(seconds=self._settings.jobs_ttl_seconds),
+                        updated_at=now,
+                    )
+                )
+            return [str(row.id) for row in rows]
 
     # -- public API used by routing/api/worker --------------------------------
 
@@ -298,6 +373,10 @@ class JobRepository:
         new `uuid4()` fencing token + `worker_id`. `staging` rows are never
         claimable. Returns the ownership credentials every later mutation needs.
         """
+        # Recovery runs before each claim so a crash leaves no permanently
+        # active staging/cancelling row even when no sweep has fired yet.
+        self.recover_abandoned_staging()
+        self.recover_expired_cancelling()
         worker = worker_id or str(uuid.uuid4())
         with self._session() as session, session.begin():
             now = self._db_now(session)
@@ -674,10 +753,14 @@ class JobRepository:
             session.execute(jobs.delete().where(jobs.c.id.in_(keys)))
 
     def reconcile_staging(self) -> list[str]:
-        """Return stale staging ids for crash recovery (Phase 2 will act on them)."""
-        with self._session() as session:
-            rows = session.execute(select(jobs.c.id).where(jobs.c.status == "staging")).all()
-        return [str(row.id) for row in rows]
+        """
+        Compatibility helper: claim + return abandoned staging ids.
+
+        Kept for tests/diagnostics; runtime recovery runs from
+        ``recover_abandoned_staging`` inside the worker maintenance/claim
+        lifecycle and never deletes a live staging row.
+        """
+        return self.recover_abandoned_staging()
 
     def dispose(self) -> None:
         """Release the process-wide pool (tests / shutdown)."""

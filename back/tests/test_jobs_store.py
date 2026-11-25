@@ -5,6 +5,7 @@ TEST_DATABASE_URL.
 """
 
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -260,7 +261,8 @@ def test_staging_is_not_claimable(settings: Settings) -> None:
     assert created is True
     assert staged.status == "staging"
     assert repo.claim(lease_seconds=30, concurrency=1) is None
-    assert staged.id in repo.reconcile_staging()
+    # A live staging lease is never recovered; only an abandoned one is.
+    assert staged.id not in repo.reconcile_staging()
     published = repo.publish_staging(staged.id, input_artifact="in", keys_artifact=None, ttl_seconds=3600)
     assert published.status == "queued"
     claimed = repo.claim(lease_seconds=30, concurrency=1)
@@ -277,6 +279,47 @@ def test_active_jobs_are_never_swept(settings: Settings) -> None:
     assert repo.expired_jobs(time.time()) == []
     assert repo.get(job.id).status == "running"
     repo.dispose()
+
+
+def test_abandoned_staging_is_recovered_not_claimed(repo: JobRepository) -> None:
+    """A crash between staging insert and artifact publication must not hang."""
+    staged, created = repo.create_staging("mask_text", max_active=16, max_attempts=3, cache_key=str(uuid.uuid4()))
+    assert created
+    with repo._engine.begin() as connection:
+        connection.execute(
+            text("UPDATE jobs SET staging_until = now() - interval '1 second' WHERE id = :id"),
+            {"id": uuid.UUID(staged.id)},
+        )
+    assert staged.id in repo.recover_abandoned_staging()
+    job = repo.get(staged.id)
+    assert job.status == "failed"
+    assert job.error_code == "staging_abandoned"
+    assert job.phase == "failed"
+    # Terminal staging failures are never claimable work.
+    assert repo.claim_with_owner(lease_seconds=30, concurrency=1) is None
+
+
+def test_expired_cancelling_is_terminally_cancelled(repo: JobRepository) -> None:
+    """Worker death after request_cancel() must release queue capacity."""
+    repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert claimed is not None
+    job, claim = claimed
+    assert repo.request_cancel(job.id) == "cancelling"
+    with repo._engine.begin() as connection:
+        connection.execute(
+            text("UPDATE jobs SET lease_until = now() - interval '1 second' WHERE id = :id"),
+            {"id": uuid.UUID(job.id)},
+        )
+    assert job.id in repo.recover_expired_cancelling()
+    final = repo.get(job.id)
+    assert final.status == "cancelled"
+    assert final.cancel_requested is True
+    assert final.lease_token is None
+    assert final.lease_until is None
+    # Capacity is released and the old owner cannot revive the row.
+    assert repo.acknowledge_cancel(job.id, claim) is False
+    assert repo.fail(job.id, "internal_error", retryable=True, max_attempts=3, claim=claim) == OWNERSHIP_LOST
 
 
 def test_result_ttl_starts_on_completion(settings: Settings) -> None:

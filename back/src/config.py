@@ -65,7 +65,9 @@ class Settings(BaseSettings):
     masking_config_dir: str = Field(default="/app/config/masking", validation_alias="MASKING_CONFIG_DIR")
     keys_format_version: int = Field(default=1, validation_alias="KEYS_FORMAT_VERSION")
     docx_transformer_version: int = Field(default=2, validation_alias="DOCX_TRANSFORMER_VERSION")
-    worker_shutdown_grace_seconds: float = Field(default=30.0, validation_alias="WORKER_SHUTDOWN_GRACE_SECONDS")
+    #: Staging rows carry a short renewable lease; abandoned enqueues are
+    #: recovered by worker maintenance (follow-up brief P0.2).
+    staging_lease_seconds: float = Field(default=60.0, validation_alias="STAGING_LEASE_SECONDS")
     #: Dedicated, non-blocking Prometheus listener in the worker process.
     worker_metrics_port: int = Field(default=8002, validation_alias="WORKER_METRICS_PORT")
     worker_metrics_host: str = Field(default="0.0.0.0", validation_alias="WORKER_METRICS_HOST")  # noqa: S104
@@ -153,7 +155,7 @@ class Settings(BaseSettings):
             "cache_ttl_seconds",
             "cache_connect_timeout_seconds",
             "cache_socket_timeout_seconds",
-            "worker_shutdown_grace_seconds",
+            "staging_lease_seconds",
         ):
             if getattr(self, name) <= 0:
                 msg = f"Настройка {name.upper()} должна быть положительной."

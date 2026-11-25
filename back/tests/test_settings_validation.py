@@ -35,7 +35,7 @@ _ALIASES: dict[str, str] = {
     "jobs_lease_seconds": "JOBS_LEASE_SECONDS",
     "jobs_poll_seconds": "JOBS_POLL_SECONDS",
     "jobs_ttl_seconds": "JOBS_TTL_SECONDS",
-    "worker_shutdown_grace_seconds": "WORKER_SHUTDOWN_GRACE_SECONDS",
+    "staging_lease_seconds": "STAGING_LEASE_SECONDS",
     "worker_metrics_port": "WORKER_METRICS_PORT",
     "worker_metrics_host": "WORKER_METRICS_HOST",
 }
@@ -69,7 +69,7 @@ def _settings(**overrides: object) -> Settings:
         "jobs_lease_seconds",
         "jobs_poll_seconds",
         "jobs_ttl_seconds",
-        "worker_shutdown_grace_seconds",
+        "staging_lease_seconds",
         "worker_metrics_port",
     ],
 )

@@ -11,6 +11,7 @@ import os
 import re
 import tempfile
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -147,7 +148,7 @@ class ArtifactStore:
         """Write `data` atomically (a crash never leaves a half-written file)."""
         self._write_at(self._path(job_id, suffix), data)
 
-    def copy_from(self, job_id: str, suffix: str, src: Path) -> None:
+    def copy_from(self, job_id: str, suffix: str, src: Path, on_chunk: Callable[[], None] | None = None) -> None:
         """
         Atomically copy a staged upload into the spool in bounded chunks.
 
@@ -158,11 +159,15 @@ class ArtifactStore:
         fd, tmp = tempfile.mkstemp(prefix=f".{job_id}.", dir=str(self._root))
         try:
             with os.fdopen(fd, "wb") as out, src.open("rb") as source:
+                chunks = 0
                 while True:
                     chunk = source.read(64 * 1024)
                     if not chunk:
                         break
                     out.write(chunk)
+                    chunks += 1
+                    if on_chunk is not None and chunks % 64 == 0:  # every 4 MiB
+                        on_chunk()
                 out.flush()
                 os.fsync(out.fileno())
             Path(tmp).replace(target)

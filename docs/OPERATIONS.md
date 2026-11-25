@@ -166,10 +166,17 @@ never a blind `rm` (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). Today
 - **Worker drain:** on SIGTERM the worker stops claiming new jobs but keeps
   heartbeating in-flight jobs while its pool drains with
   `shutdown(wait=True, cancel_futures=False)` — it never pretends a Python
-  thread was killed (`back/src/jobs/worker.py`, `WORKER_SHUTDOWN_GRACE_SECONDS=30`
-  in `.env.example`). Forced termination is recovered by lease expiry.
-  Compose currently has no explicit `stop_grace_period`; tuning it and a live
-  restart drill are `TODO.md` items.
+   thread was killed (`back/src/jobs/worker.py`). Compose uses its default
+   stop grace; if the process is killed before the pool drains, lease expiry
+   recovers the job with bounded attempts. No configurable shutdown grace is
+   claimed: Python cannot safely force-stop worker threads.
+- **Crash recovery (P0.2):** `staging` rows carry a renewable
+   `STAGING_LEASE_SECONDS` (default 60) lease, refreshed every 4 MiB while a
+   large upload is copied. Worker maintenance/claim cycles atomically claim
+   only expired staging rows (`failed`, `staging_abandoned`) and expired
+   `cancelling` rows (`cancelled`), then clean their artifacts idempotently.
+   Live publishers cannot publish after their staging row was recovered; a
+   `cancelling` job is never selected as ordinary work.
 
 ## 6. Runbooks
 

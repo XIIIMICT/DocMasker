@@ -15,11 +15,20 @@ from src.config import Settings, get_settings
 
 from .dependencies import artifact_store, job_repository, should_use_job
 from .models import JobKind
+from .repository import IllegalTransitionError
 from .schemas import JobAccepted
 
 if TYPE_CHECKING:
     from .cache import CacheFingerprint
+    from .repository import JobRepository
     from .storage import ArtifactStore
+
+
+def _touch_or_raise(repo: JobRepository, job_id: str) -> None:
+    """Renew a staging lease; if recovery won, abort this publisher."""
+    if not repo.touch_staging(job_id):
+        msg = "staging lease lost during upload"
+        raise IllegalTransitionError(msg)
 
 
 def job_urls(job_id: str) -> tuple[str, str]:
@@ -83,6 +92,7 @@ def _enqueue(
         # instead of duplicating expensive work (§4.5).
         return accepted(staged.id)
     try:
+        _touch_or_raise(repo, staged.id)
         write_input(store, staged.id)
         store.write(staged.id, "name", filename.encode("utf-8"))
         store.write(staged.id, "kind", kind.encode("ascii"))
@@ -159,7 +169,12 @@ def enqueue_from_path(
         fingerprint=key_material,
         keys_bytes=keys_bytes,
         filename=filename,
-        write_input=lambda store, job_id: store.copy_from(job_id, "input", input_path),
+        write_input=lambda store, job_id: store.copy_from(
+            job_id,
+            "input",
+            input_path,
+            on_chunk=lambda: _touch_or_raise(job_repository(), job_id),
+        ),
     )
 
 

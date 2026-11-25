@@ -443,7 +443,38 @@ class Worker:
             set_artifact_disk_free(usage.free)
 
     def sweep(self) -> None:
-        """Remove eligible terminal rows and their artifacts (§3.9, GC)."""
+        """Recover abandoned work, then remove eligible terminal artifacts (§3.9)."""
+        # P0.2: crash recovery is part of worker maintenance, not an unused
+        # repository helper. Both methods atomically claim only stale rows.
+        abandoned = self._repo.recover_abandoned_staging()
+        cancelled = self._repo.recover_expired_cancelling()
+        recovered = [*abandoned, *cancelled]
+        if recovered:
+            confirmed = []
+            for job_id in recovered:
+                try:
+                    job = self._repo.get(job_id)
+                except Exception as error:  # noqa: BLE001 - row may have been removed by GC
+                    log_warning(
+                        LOGGER,
+                        "recovery_row_missing",
+                        "Recovered job row disappeared before cleanup.",
+                        operation="gc",
+                        error_type=type(error).__name__,
+                    )
+                    continue
+                if job.status in ("failed", "cancelled"):
+                    confirmed.append(job)
+            if confirmed:
+                cleanup_artifacts(self._store, confirmed)
+                log_event(
+                    LOGGER,
+                    "abandoned_jobs_recovered",
+                    "Abandoned staging/cancelling jobs recovered.",
+                    operation="gc",
+                    outcome="ok",
+                    recovered=len(confirmed),
+                )
         self._repo.expire_queued(queue_wait_seconds=self._settings.jobs_ttl_seconds)
         self._repo.mark_terminal_retention(retention_seconds=self._settings.jobs_ttl_seconds)
         expired = self._repo.expired_jobs(time.time())

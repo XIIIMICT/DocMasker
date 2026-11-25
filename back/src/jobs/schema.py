@@ -56,6 +56,7 @@ jobs: Table = sa.Table(
     sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     sa.Column("cancel_requested_at", sa.DateTime(timezone=True)),
+    sa.Column("staging_until", sa.DateTime(timezone=True)),
     sa.Column("queue_expires_at", sa.DateTime(timezone=True)),
     sa.Column("result_expires_at", sa.DateTime(timezone=True)),
     sa.Column("expires_at", sa.DateTime(timezone=True)),
