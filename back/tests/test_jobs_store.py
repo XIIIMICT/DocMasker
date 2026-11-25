@@ -276,7 +276,8 @@ def test_path_for_rejects_symlink_escape(store: ArtifactStore, tmp_path: Path) -
     from src.jobs.storage import ArtifactError
 
     job_id = "12345678-1234-4234-8234-123456789abc"
-    outside = tmp_path / "outside.txt"
+    # store.root == tmp_path, so the target must be a sibling of tmp_path.
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
     outside.write_text("secret", encoding="utf-8")
     link = store.root / f"{job_id}.result"
     try:
