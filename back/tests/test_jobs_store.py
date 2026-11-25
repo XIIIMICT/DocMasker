@@ -271,6 +271,22 @@ def test_artifact_paths_are_id_scoped(store: ArtifactStore) -> None:
         store.write("short", "input", b"x")
 
 
+def test_path_for_rejects_symlink_escape(store: ArtifactStore, tmp_path: Path) -> None:
+    """A symlinked artifact must not resolve outside the private spool root."""
+    from src.jobs.storage import ArtifactError
+
+    job_id = "12345678-1234-4234-8234-123456789abc"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = store.root / f"{job_id}.result"
+    try:
+        link.symlink_to(outside)
+    except OSError as error:  # Windows may require developer mode for symlinks
+        pytest.skip(f"symlinks unavailable: {type(error).__name__}")
+    with pytest.raises(ArtifactError):
+        store.path_for(job_id, "result")
+
+
 def test_artifact_write_is_atomic_and_readable(store: ArtifactStore) -> None:
     job_id = "12345678-1234-4234-8234-123456789abc"
     store.write(job_id, "input", b"hello")

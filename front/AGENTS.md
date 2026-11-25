@@ -12,15 +12,15 @@ Next 16.4.6 / React 19.3.1 / HeroUI **3.2.8 (v3 only)** / Tailwind 4, Bun ≥1.4
 for `bun check`, Node 26 in the production container. **Exact versions are in
 `bun.lock`**, not in `package.json` ranges.
 
-| What | Command |
-|---|---|
-| Install / dev / prod build | `bun install` · `bun run dev` · `bun run build` |
-| Lint / check | `bun run lint` · `bun run lint:check` |
-| Format / check | `bun run format` · `bun run format:check` |
-| Typecheck | `bun run typecheck` (`bun check`) |
-| Unit tests | `bun run test` (`bunfig.toml` + `src/test-setup.ts`, happy-dom) |
-| Coverage gate | `bun test --coverage --coverage-reporter=lcov` then `bun scripts/check-coverage.mjs 65` |
-| e2e (running stack required) | `bun run test:e2e --project=smoke` with `E2E_BASE_URL` |
+| What                         | Command                                                                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| Install / dev / prod build   | `bun install` · `bun run dev` · `bun run build`                                         |
+| Lint / check                 | `bun run lint` · `bun run lint:check`                                                   |
+| Format / check               | `bun run format` · `bun run format:check`                                               |
+| Typecheck                    | `bun run typecheck` (`bun check`)                                                       |
+| Unit tests                   | `bun run test` (`bunfig.toml` + `src/test-setup.ts`, happy-dom)                         |
+| Coverage gate                | `bun test --coverage --coverage-reporter=lcov` then `bun scripts/check-coverage.mjs 65` |
+| e2e (running stack required) | `bun run test:e2e --project=smoke` with `E2E_BASE_URL`                                  |
 
 `bun run format` can rewrite line breaks in untouched files — check `git status`
 and `git diff` afterwards. The Playwright `smoke` project (21 tests in 3 files) needs a prepared

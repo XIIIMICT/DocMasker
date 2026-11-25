@@ -10,10 +10,21 @@ per session; the `jobs` table is truncated between tests for isolation.
 """
 
 import os
+import tempfile
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
+
+# CI runs as a non-root user where the container default /app/jobs is not
+# writable. Tests must never depend on a container path: point JOBS_DIR at a
+# writable temp directory BEFORE any module imports Settings/get_settings.
+os.environ.setdefault("JOBS_DIR", str(Path(tempfile.gettempdir()) / "docmasker-test-jobs"))
+
+from src.config import get_settings
+
+get_settings.cache_clear()
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 

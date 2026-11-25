@@ -14,6 +14,12 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "config" / "masking"
 def _copy_config(tmp_path: Path) -> Path:
     root = tmp_path / "config"
     shutil.copytree(DEFAULT_ROOT, root)
+    # exceptions.yaml is private/gitignored and absent in CI checkouts; the
+    # loader falls back to the committed example. The digest test edits that
+    # path, so materialise it explicitly for deterministic runs everywhere.
+    exceptions = root / "exceptions.yaml"
+    if not exceptions.exists():
+        shutil.copyfile(root / "exceptions.example.yaml", exceptions)
     return root
 
 

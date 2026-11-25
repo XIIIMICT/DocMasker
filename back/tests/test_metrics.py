@@ -212,6 +212,8 @@ async def test_ready_emits_dependency_duration(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(main_module, "job_repository", _Repo)
     monkeypatch.setattr(main_module, "result_cache", _Cache)
+    # CI does not set CACHE_ENABLED, so Valkey is only probed when enabled.
+    monkeypatch.setattr(main_module.settings, "cache_enabled", True)
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/ready")

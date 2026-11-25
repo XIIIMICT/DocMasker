@@ -1,5 +1,7 @@
 """Job API: submit / status / result / cancel (ADR-0002, Phase 6 §8.1/§8.5/§10)."""
 
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import quote
 
@@ -24,6 +26,16 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 _ZIP_MIME = "application/zip"
+
+
+def _contained_in_spool(root: Path, candidate: Path) -> bool:
+    """Realpath containment check for a path derived from an untrusted job id."""
+    root_real = os.path.realpath(root)
+    resolved = os.path.realpath(candidate)
+    try:
+        return os.path.commonpath([root_real, resolved]) == root_real
+    except ValueError:  # different drives on Windows
+        return False
 
 
 def _unprocessable(code: str, detail: str) -> ApiError:
@@ -165,6 +177,11 @@ async def job_result(job_id: str) -> Response:
         raise ApiError("result_not_ready", "Результат ещё не готов.", status.HTTP_409_CONFLICT)
     store = artifact_store()
     path = store.path_for(job_id, "result")
+    # Defense in depth for CodeQL: the route id is untrusted. Both ArtifactStore
+    # and this check normalise with realpath and require containment in the
+    # private spool root, so no ../ or symlink can escape it.
+    if not _contained_in_spool(store.root, path):
+        raise ApiError("result_expired", "Некорректный идентификатор задания.", status.HTTP_404_NOT_FOUND)
     exists = await run_blocking(path.is_file)
     if not exists:
         raise ApiError(
