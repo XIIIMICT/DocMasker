@@ -1,0 +1,95 @@
+{
+  "uid": "docmasker-api-errors",
+  "title": "DocMasker — Ошибки API",
+  "tags": ["docmasker", "http"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "5xx в секунду",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(dm_http_requests_total{status=~\"5..\"}[5m]))" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Секунд с последней ошибки 5xx",
+      "description": "0, если ошибок ещё не было (dm_http_last_failure_timestamp_seconds = 0).",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "time() - max(dm_http_last_failure_timestamp_seconds)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Запросы по статусу",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(dm_http_requests_total[5m]))", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "5xx по шаблонам маршрутов",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (route, status) (rate(dm_http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "{{route}} {{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "bars", "fillOpacity": 50 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Задержка запросов, p95 (с)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(dm_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 2, "custom": { "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "Ошибки и предупреждения (request_id в структуре)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 17 },
+      "datasource": { "type": "loki", "uid": "docmasker-loki" },
+      "targets": [
+        { "refId": "A", "expr": "{project=\"docmasker\"} | level=~\"ERROR|CRITICAL|WARNING\"", "queryType": "range" }
+      ],
+      "options": { "sortOrder": "Descending", "wrapLogMessage": true }
+    }
+  ]
+}

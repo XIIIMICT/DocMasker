@@ -19,6 +19,12 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   `just db-stand` then `just seed` (applies Alembic `0001_jobs` and verifies
   the `jobs` table) before starting the app. `just migrate` applies migrations
   without seeding; `just revision "msg"` creates an Alembic revision.
+- `infra/compose.monitoring.yaml` is included with **no profiles**: alloy is
+  always started (`just monitoring`, external Loki), the rest is selected by
+  `just monitoring-stand`. See `docs/ARCHITECTURE.md` (Observability) and
+  `docs/OPERATIONS.md` §8. `just drift-check` runs the workspace-level
+  `../infra/check-drift.py` to verify byte-identical shared Loki configs and
+  Alertmanager entrypoints across all three projects and the DWH stack.
 - `infra/compose.ci.yaml` is the isolated CI stack: back **18001**, front
   **15001** (loopback-only); postgres/valkey are **private** (no published
   ports), never load the developer's `.env`, and the `jobs-data` volume is
@@ -103,8 +109,9 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   does not inherit it). Replacing with a trusted corporate CA
   (`NODE_EXTRA_CA_CERTS` / system trust store) belongs to stage 6.
 - Container hardening (`read_only`, `tmpfs`, `cap_drop`, `no-new-privileges`,
-  `pids_limit`, resource limits), reverse-proxy/TLS/auth guidance and
-  observability are **deferred** — see `TODO.md`.
+  `pids_limit`, resource limits) and reverse-proxy/TLS/auth guidance are
+  **deferred** — see `TODO.md`. Observability is no longer deferred: see the
+  monitoring bullet above and `docs/OPERATIONS.md` §8.
 
 ## CI
 

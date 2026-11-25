@@ -24,6 +24,18 @@ dev:
 db-stand:
     docker compose up -d --wait postgres valkey
 
+# Только Alloy — логи идут во внешний/центральный Loki (LOKI_URL из .env)
+monitoring:
+    docker compose up -d alloy
+
+# Полный локальный стек: Loki, Grafana, Alloy, Prometheus, Alertmanager, SMTP-релей
+monitoring-stand:
+    docker compose up -d loki grafana alloy prometheus alertmanager smtp-relay
+
+# Локальная проверка дрейфа общих конфигов между тремя стеками и DWH
+drift-check:
+    python ../infra/check-drift.py
+
 # Создать/проверить схему PostgreSQL (Alembic) и засидить минимальные данные.
 # --host нужен при запуске с хоста, когда DATABASE_URL указывает на сервис
 # compose `postgres`; внутри контейнера хост подставляется compose.

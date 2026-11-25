@@ -128,14 +128,16 @@ never a blind `rm` (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). Today
   logs only the exception type. **Do not claim Compose/CI healthchecks use
   `/ready`** — wiring it (and a front readiness route) is deferred stage 6
   (`infra/AGENTS.md`, `TODO.md`).
-- **`GET /metrics` — coarse safe counters only**, e.g.
-  `{"active_jobs":0,"cache":{"hits":3,"misses":1,"writes":1,"failures":0,"evictions":0}}`.
-  A DB outage degrades to `active_jobs: null` and a cache outage to zeroed
-  counters; neither returns 500 (`back/src/main.py`,
-  `test_readiness.py::test_metrics_are_coarse_and_db_outage_degrades`).
-  No ids, inputs, keys or key names are exposed (`docs/SECURITY.md`).
+- **`GET /metrics`** keeps the legacy coarse JSON answer for a plain request,
+  e.g. `{"active_jobs":0,"cache":{"hits":3,"misses":1,"writes":1,"failures":0,"evictions":0}}`;
+  a DB outage degrades to `active_jobs: null` and a cache outage to zeroed
+  counters; neither returns 500. With `Accept: text/plain` (what Prometheus
+  sends) the same route returns the full `dm_*` exposition instead. No ids,
+  inputs, keys or key names are exposed (`docs/SECURITY.md`, §8).
 - Full metrics (latency, queue depth/age, lease losses, retries, job durations,
-  DB pool saturation) and structured JSON logs remain deferred (`TODO.md`).
+  DB pool saturation) and structured JSON logs are now emitted by the backend
+  and worker and shipped by the monitoring stack — see §8. Compose/CI
+  healthchecks still call `/health`, not `/ready`.
 
 ## 5. Job lifecycle operations
 
@@ -261,8 +263,94 @@ keys or exception messages into tickets or chat.
 
 Reverse-proxy/TLS/auth example and rate limits; container hardening and
 internal-only backend network; `/ready` and front readiness wired into
-healthchecks; full metrics and structured logs; log rotation; `stop_grace_period`
-tuning and a live SIGTERM drill; clean-install/prod-image verification and job
-lifecycle stress on target hardware (`TODO.md`, `docs/TESTING.md`). Branch
+healthchecks; log rotation and long-term metric retention policy;
+`stop_grace_period` tuning and a live SIGTERM drill; clean-install/prod-image
+verification and job lifecycle stress on target hardware (`TODO.md`,
+`docs/TESTING.md`). Branch
 protection / the `CI required` check is a GitHub repository setting — the
 repository only documents the checklist (`docs/WORKFLOW.md`).
+
+## 8. Monitoring stack (startup, modes, runbooks)
+
+The stack lives in `infra/compose.monitoring.yaml` (included from the root
+`compose.yaml`) and is independent of the app profiles. Architecture and the
+full variable contract are in `docs/ARCHITECTURE.md` ("Observability /
+monitoring stack"); this section is the operational half.
+
+### Startup and ports
+
+```sh
+just monitoring        # Alloy only — logs to an external/central Loki
+just monitoring-stand  # Loki + Grafana + Alloy + Prometheus + Alertmanager + relay
+```
+
+`LOKI_URL`, `GF_SECURITY_ADMIN_USER` and `GF_SECURITY_ADMIN_PASSWORD` are
+mandatory (`:?` in compose). Host ports: Alloy UI **12345**, Loki **3100**,
+Grafana **3000**, Prometheus **9090**, Alertmanager **9093**. The SMTP relay is
+internal only (port 25 inside `dm-net`). These are the same ports the other two
+projects use — run one project's full stand at a time, or remap host ports in a
+local override (the container ports stay fixed).
+
+Prometheus targets are rendered at container start from `.env`; for the app in
+this same compose set `BACKEND_METRICS_HOST=back` and
+`WORKER_METRICS_HOST=worker` (prod `back` is published on loopback only, so
+`host.docker.internal` cannot see it). For an external app/server set both to
+`host.docker.internal` or the central host; `WORKER_METRICS_PORT=8002` by
+default. There is no Pushgateway — the worker is scraped.
+
+### Retention and volumes
+
+Prometheus keeps 15 days of raw samples (`PROMETHEUS_RETENTION`); Loki keeps
+168h (`LOKI_RETENTION`, expanded with `-config.expand-env=true`). Volumes:
+`dm-loki-data`, `dm-prometheus-data`, `dm-grafana-data`,
+`dm-alertmanager-data` — all private. Monitoring data is disposable relative
+to `dm-postgres-data`/`dm-jobs-data`: losing it loses history, not job state.
+
+### Self-monitoring and checks
+
+Prometheus scrapes `prometheus`, `loki`, `alertmanager` and `grafana` in
+addition to `docmasker-back`/`docmasker-worker`; rules for all five live in
+`docmasker-stack` / the `up` alerts of `infra/prometheus/alert-rules.yml`.
+Health checks after a change:
+
+```sh
+docker compose --profile prod --profile dev config --quiet
+docker compose -f infra/compose.ci.yaml config --quiet
+docker compose exec prometheus promtool check config /etc/prometheus/alert-rules.yml
+curl -s http://localhost:9090/api/v1/targets   # all jobs up
+curl -s http://localhost:3000/api/health
+```
+
+Grafana dashboards (folder `DocMasker`): «Рабочая очередь», «Ошибки API»,
+«Кэш», «Диск артефактов». Alert annotations name the relevant dashboard and
+say where the `request_id`/`job_id` is: in Loki structured metadata, never in
+a metric label. Thresholds marked PROVISIONAL need calibration before they are
+treated as SLOs.
+
+### Alert mail and the SMTP deviation
+
+`infra/alertmanager/entrypoint.sh` renders recipient/sender/smarthost from
+`SUPPORT_MAIL`/`ALERT_SMTP_*` at container start, so `.env` edits require
+`just monitoring-stand` again. **Deviation:** Alertmanager → our own
+`dm-smtp-relay` is plain SMTP on port 25 (`smtp_require_tls: false`); the relay
+→ corporate SMTP uses STARTTLS on 587 with `SMTP_RELAY_*` credentials. Port
+465 (implicit TLS) cannot be used with `smtp_require_tls`. When the relay has
+no credentials, Alertmanager sends unauthenticated to it and the relay owns
+upstream auth; empty `ALERT_SMTP_USER`/`PASSWORD` remove the auth lines from
+the rendered config.
+
+If mail does not arrive: check `localhost:9093` (alerts are still visible
+there), then `docker compose logs dm-alertmanager` for `Notify success` and
+`docker compose logs dm-smtp-relay` for the upstream SMTP error — never put
+credentials or PII into a ticket. Stopping Grafana/Prometheus/Loki must not
+stop `just prod`/`just dev`: the workload writes files and local metrics and
+degrades on emission failures by exception type only.
+
+### External/central mode verification
+
+Set `LOKI_URL` to the central endpoint (e.g.
+`http://host.docker.internal:3100`), `LOG_ENV=prod`, run `just monitoring`,
+exercise a masking request and a job, and confirm the entries appear in the
+central Grafana with `project="docmasker"` and the expected `env` label plus
+`request_id`/`job_id` metadata. Metrics/alerting in that mode belong to the
+central Prometheus/Alertmanager; the local stand is not started.

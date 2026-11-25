@@ -1,0 +1,114 @@
+{
+  "uid": "docmasker-worker",
+  "title": "DocMasker — Рабочая очередь",
+  "tags": ["docmasker", "worker"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Активные и выполняемые задания",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind) (dm_jobs_active)", "legendFormat": "active {{kind}}" },
+        { "refId": "B", "expr": "sum by (kind) (dm_jobs_running)", "legendFormat": "running {{kind}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 15 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Длительность заданий, p95 (с)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(dm_job_duration_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "decimals": 2, "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Проваленные задания по error_code",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (error_code) (rate(dm_jobs_failed_total[5m]))", "legendFormat": "{{error_code}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Время ожидания в очереди, p95 (с)",
+      "description": "Наблюдается в момент захвата задания; для live-очереди используйте dm_jobs_active.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(dm_job_queue_age_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "decimals": 2, "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Лизы: ошибки обновления и истечения",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(dm_lease_renew_failures_total[5m])", "legendFormat": "renew failures" },
+        { "refId": "B", "expr": "rate(dm_lease_expired_total[5m])", "legendFormat": "expired" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Секунд с последнего heartbeat воркера",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "time() - dm_worker_heartbeat_timestamp_seconds" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 120 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    }
+  ]
+}

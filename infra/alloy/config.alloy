@@ -1,0 +1,94 @@
+// DocMasker log shipping: files -> Alloy -> Loki at LOKI_URL.
+// Alloy is the only shipper; the app never talks to Loki directly, so external
+// (central DWH) mode is just a LOKI_URL override in .env.
+
+local.file_match "docmasker_logs" {
+  path_targets = [
+    {
+      "__path__" = "/var/log/docmasker/*.log",
+      "project"  = "docmasker",
+      "env"      = sys.env("LOG_ENV"), // LOG_ENV: local|prod — set in compose from .env
+      "job"      = "docmasker",
+    },
+  ]
+
+  sync_period = "5s"
+}
+
+loki.source.file "docmasker_logs" {
+  targets       = local.file_match.docmasker_logs.targets
+  forward_to    = [loki.process.docmasker.receiver]
+  tail_from_end = false
+}
+
+loki.process "docmasker" {
+  stage.json {
+    expressions = {
+      "level"       = "level",
+      "logger"      = "logger",
+      "module"      = "module",
+      "time"        = "timestamp",
+      "event"       = "event",
+      "duration_ms" = "duration_ms",
+      "status_code" = "status_code",
+      // Correlation ids and domain fields are queryable but NOT index labels.
+      // A uuid per request/job as a label would explode the Loki index.
+      "request_id"  = "request_id",
+      "job_id"      = "job_id",
+      "worker_id"   = "worker_id",
+      "operation"   = "operation",
+      "error_code"  = "error_code",
+      "error_type"  = "error_type",
+      "outcome"     = "outcome",
+      "route"       = "route",
+      "attempt"     = "attempt",
+      "storage"     = "storage",
+      "dependency"  = "dependency",
+      "error"       = "error",
+      "exception"   = "exception",
+    }
+  }
+
+  stage.labels {
+    values = {
+      "level"  = "",
+      "logger" = "",
+      "module" = "",
+      "event"  = "",
+    }
+  }
+
+  stage.structured_metadata {
+    values = {
+      "request_id"  = "request_id",
+      "job_id"      = "job_id",
+      "worker_id"   = "worker_id",
+      "operation"   = "operation",
+      "error_code"  = "error_code",
+      "error_type"  = "error_type",
+      "outcome"     = "outcome",
+      "route"       = "route",
+      "attempt"     = "attempt",
+      "duration_ms" = "duration_ms",
+      "queue_wait_ms" = "queue_wait_ms",
+      "status_code" = "status_code",
+      "storage"     = "storage",
+      "dependency"  = "dependency",
+      "error"       = "error",
+      "exception"   = "exception",
+    }
+  }
+
+  stage.timestamp {
+    source = "time"
+    format = "RFC3339Nano"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = sys.env("LOKI_URL") + "/loki/api/v1/push"
+  }
+}

@@ -1,0 +1,48 @@
+# Alertmanager routing and delivery for DocMasker.
+#
+# `to`/`from`/`smarthost` are rendered at CONTAINER START by entrypoint.sh from
+# .env (Alertmanager does not expand env variables in these fields). Editing .env
+# requires a restart (`just monitoring-stand`), not a reload.
+#
+# DEVIATION (documented in docs/ARCHITECTURE.md and docs/OPERATIONS.md): the
+# internal hop Alertmanager -> our own smtp-relay is plain SMTP on port 25
+# (smtp_require_tls: false). The relay -> corporate SMTP hop uses STARTTLS 587
+# with SMTP_RELAY_* credentials; do not point Alertmanager at port 465 — it is
+# implicit TLS and incompatible with Alertmanager's TLS modes.
+
+global:
+  resolve_timeout: 5m
+  smtp_require_tls: false
+
+route:
+  receiver: support-mail
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 4h
+  repeat_interval: 4h
+
+receivers:
+  - name: support-mail
+    email_configs:
+      - to: "${SUPPORT_MAIL}"
+        from: "${ALERT_SMTP_FROM}"
+        smarthost: "${ALERT_SMTP_SMARTHOST}"
+        # Removed by entrypoint.sh when the relay needs no auth from inside
+        # the compose network (the relay authenticates upstream itself).
+        auth_username: "${ALERT_SMTP_USER}"
+        auth_password: "${ALERT_SMTP_PASSWORD}"
+        send_resolved: true
+        headers:
+          Subject: '[DocMasker] {{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
+        html: |
+          <h3>{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})</h3>
+          {{ range .Alerts }}
+          <p><strong>{{ .Annotations.summary }}</strong></p>
+          <p>{{ .Annotations.description }}</p>
+          {{ end }}
+          <p>Дашборды (папка Grafana «DocMasker»):
+             <a href="http://localhost:3000">Grafana</a> ·
+             <a href="http://localhost:9090/alerts">Prometheus</a> ·
+             <a href="http://localhost:9093">Alertmanager</a></p>
+          <p>Корреляция: request_id/job_id — в структурных логах Loki
+             (поля request_id/job_id, метка project="docmasker").</p>

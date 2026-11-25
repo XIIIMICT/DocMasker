@@ -1,0 +1,88 @@
+{
+  "uid": "docmasker-artifact-disk",
+  "title": "DocMasker — Диск артефактов",
+  "tags": ["docmasker", "disk"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Свободно на приватном томе артефактов",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "dm_artifact_disk_free_bytes", "legendFormat": "artifacts" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "fillOpacity": 15 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 5368709120 },
+              { "color": "green", "value": 10737418240 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Свободно на файловых системах рантайма",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "dm_runtime_disk_free_bytes", "legendFormat": "{{storage}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "fillOpacity": 15 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 5368709120 },
+              { "color": "green", "value": 10737418240 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Минимум свободного места (artifacts)",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "min_over_time(dm_artifact_disk_free_bytes[24h])" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 5368709120 },
+              { "color": "green", "value": 10737418240 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    }
+  ]
+}

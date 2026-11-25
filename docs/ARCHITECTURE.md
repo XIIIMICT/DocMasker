@@ -161,8 +161,10 @@ Both file operations use the **same archive builder and manifest serializer** in
 - `GET /health` — liveness probe used by the Docker healthcheck; always `ok` (no warm-up).
 - `GET /ready` — readiness probe (Phase 6): verifies PostgreSQL; `503` with a
   sanitized Russian reason when the store is unavailable.
-- `GET /metrics` — coarse safe counters (`active_jobs`, cache hits/misses/…),
-  no PII; degrades instead of 500 on a DB/cache outage.
+- `GET /metrics` — coarse safe JSON counters (`active_jobs`, cache
+  hits/misses/…) for a plain request; with `Accept: text/plain` it serves the
+  full `dm_*` Prometheus exposition scraped by the monitoring stack. No PII;
+  degrades instead of 500 on a DB/cache outage (see «Observability» below).
 
 Errors use the stable envelope `{code, detail, request_id}` + `X-Request-ID`
 header (Phase 6 §8.1); `detail` stays Russian and is shown in red inside the
@@ -228,6 +230,86 @@ loopback only (`127.0.0.1`). The backend starts instantly — there is no model
 download and no persistent cache volume. The base image is Alpine
 (`python:3.15-alpine`), matching the project convention, because dropping
 PyTorch removed the glibc/musl constraint.
+
+## Observability / monitoring stack
+
+`infra/compose.monitoring.yaml` is included from the root `compose.yaml` and
+follows the same wiring contract as ReportCollector and excel_loader — only
+names (container prefix `dm-`, metric prefix `dm_`), ports and dashboard
+content differ. All its services are profile-less by design; the app profiles
+remain `prod`/`dev`.
+
+**Port scheme (G2):** all three project stacks and the central DWH stack publish
+the same monitoring host ports (3000/3100/9090/9091/9093, Alloy 12345). Only one
+full stand runs on a machine at a time; remap the host ports if two are needed
+side by side. External/central mode is pure env override (`LOKI_URL`,
+`BACKEND_METRICS_HOST`, `WORKER_METRICS_HOST`).
+
+| Service | Container | Host port | Role |
+|---|---|---|---|
+| `alloy` | `dm-alloy` | 12345 (UI) | tails `../logs/*.log`, pushes to `LOKI_URL`; **no profile** — always started |
+| `loki` | `dm-loki` | 3100 | log store, retention `${LOKI_RETENTION:-168h}` |
+| `grafana` | `dm-grafana` | 3000 | four provisioned dashboards in folder `DocMasker` |
+| `prometheus` | `dm-prometheus` | 9090 | scrapes `docmasker-back`, `docmasker-worker` and the stack; 15d raw samples |
+| `alertmanager` | `dm-alertmanager` | 9093 | Russian e-mail alerts, config rendered at start |
+| `smtp-relay` | `dm-smtp-relay` | — (internal 25) | Postfix relay to the corporate SMTP host |
+
+The backend and worker write structured JSON lines into `logs/docmasker.log`
+(Alloy mounts `../logs` read-only). Alloy adds `{project="docmasker",
+env=LOG_ENV}` labels; `request_id`, `job_id`, `worker_id`, `operation`,
+`error_code` and the other bounded fields are **structured metadata**, never
+index labels — a uuid per request/job as a label would explode the Loki index.
+The default `env` is `local` (`LOG_ENV=prod` on the server).
+
+Prometheus does not expand `${VAR}` in scrape targets, so
+`infra/prometheus/entrypoint.sh` renders `prometheus.yml.tpl` into the
+container's writable `/tmp` at start from `BACKEND_METRICS_HOST`, `BACKEND_PORT`,
+`WORKER_METRICS_HOST`, `WORKER_METRICS_PORT` and `LOG_ENV`, then validates it
+with `promtool check config`. The same pattern renders the Alertmanager SMTP
+config into `/tmp` (`infra/alertmanager/entrypoint.sh`). Both mounts stay
+read-only; editing `.env` requires a stack restart, not a reload.
+
+**Dual mode** (the PostgreSQL/Valkey pattern):
+
+| Mode | Command | Endpoints |
+|---|---|---|
+| In-project | `just monitoring-stand` | `LOKI_URL=http://loki:3100`; set `BACKEND_METRICS_HOST=back`, `WORKER_METRICS_HOST=worker` so Prometheus reaches the compose services (the prod backend publishes only to loopback, so `host.docker.internal` cannot reach it) |
+| External / central DWH | `just monitoring` (Alloy only) | `LOKI_URL=http://host.docker.internal:3100` (or the central URL), `LOG_ENV=prod`; the central Prometheus/Alertmanager own the metrics/alert side |
+
+No application component writes to a monitoring service on its hot path. The
+worker is long-running and is **scraped** on `WORKER_METRICS_PORT=8002`; there
+is **no Pushgateway** in DocMasker (`METRICS_PUSHGATEWAY_URL` is intentionally
+empty and documented as unused).
+
+Retention lives in one place: `PROMETHEUS_RETENTION=15d` (compose flag) and
+`LOKI_RETENTION=168h` (expanded in `infra/loki/config.yaml` via
+`-config.expand-env=true`). Data is in the named volumes `dm-loki-data`,
+`dm-prometheus-data`, `dm-grafana-data`, `dm-alertmanager-data`; none is
+published to the host.
+
+Dashboards are code under `infra/grafana/provisioning/` (datasources
+`DocMasker Loki` / `DocMasker Prometheus`, folder `DocMasker`): worker queue
+health (`dm_jobs_active`, `dm_jobs_running`, `dm_jobs_failed_total`,
+`dm_job_duration_seconds`, `dm_job_queue_age_seconds`, lease counters,
+heartbeat), API errors (`dm_http_requests_total`,
+`dm_http_last_failure_timestamp_seconds`), cache hit ratio
+(`dm_cache_operations_total`) and artifact disk (`dm_artifact_disk_free_bytes`,
+`dm_runtime_disk_free_bytes`). Every panel uses a series actually emitted by
+the backend/worker; there are no placeholders.
+
+Alerts (`infra/prometheus/alert-rules.yml`) cover scrape targets, sustained
+and immediate 5xx, dependency failures (PostgreSQL/Valkey), failed jobs,
+stuck leases/queue backlog, disk pressure, event-loop lag, cache failures and
+**full stack self-monitoring** (`prometheus`, `loki`, `alertmanager`,
+`grafana` scrape jobs; no Pushgateway rule). Annotations are Russian, name the
+dashboard and say where `request_id`/`job_id` can be found; provisional
+thresholds are marked as such.
+
+**Documented deviation:** Alertmanager → the in-project Postfix relay uses
+plain SMTP on port 25 (`smtp_require_tls: false`) because it is an internal hop
+to our own container. The relay → corporate SMTP hop uses STARTTLS on 587 with
+`SMTP_RELAY_*` credentials. Port 465 (implicit TLS) is incompatible with
+Alertmanager's `smtp_require_tls`, so it is not used.
 
 ## CI stack (`infra/compose.ci.yaml`)
 
