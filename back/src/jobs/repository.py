@@ -40,6 +40,10 @@ class IllegalTransitionError(RuntimeError):
     """A repository call would move a job through a disallowed transition."""
 
 
+#: Explicit fenced-mutation outcomes — never conflated with a terminal failure.
+OWNERSHIP_LOST = "ownership_lost"
+
+
 def _now() -> datetime:
     """Process time for inserts; ownership checks use PostgreSQL clock_timestamp()."""
     return datetime.now(UTC)
@@ -306,7 +310,7 @@ class JobRepository:
             ).all()
             for record in stale:
                 inc_lease_expired()
-                if record.attempt + 1 >= record.max_attempts:
+                if record.attempt >= record.max_attempts:
                     session.execute(
                         update(jobs)
                         .where(jobs.c.id == record.id, jobs.c.status == "running")
@@ -483,17 +487,19 @@ class JobRepository:
                 raise JobNotFoundError(job_id)
             return str(row)
 
-    def acknowledge_cancel(self, job_id: str, claim: Claim) -> None:
-        """Worker acknowledged cancellation; fenced by the claim token."""
+    def acknowledge_cancel(self, job_id: str, claim: Claim) -> bool:
+        """Fenced cancellation acknowledgement; True only when DB confirms it."""
         with self._session() as session, session.begin():
             now = self._db_now(session)
-            session.execute(
+            result = session.execute(
                 update(jobs)
                 .where(
                     jobs.c.id == uuid.UUID(job_id),
                     jobs.c.status == "cancelling",
+                    jobs.c.cancel_requested_at.is_not(None),
                     jobs.c.worker_id == claim.worker_id,
                     jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                    jobs.c.lease_until > now,
                 )
                 .values(
                     status="cancelled",
@@ -504,6 +510,7 @@ class JobRepository:
                     updated_at=now,
                 )
             )
+            return _affected(result) == 1
 
     def succeed(self, job_id: str, result_key: str, *, ttl_seconds: float, claim: Claim | None = None) -> None:
         """
@@ -557,13 +564,20 @@ class JobRepository:
             now = self._db_now(session)
             conditions = [jobs.c.id == uuid.UUID(job_id)]
             if claim is not None:
+                # Worker-owned failure: status, owner, fencing token and live
+                # lease must all match in the same statement. A stale owner
+                # receives an explicit ownership_lost outcome and must not
+                # retry, publish or delete any artifact.
                 conditions += [
+                    jobs.c.status.in_(("running", "cancelling")),
                     jobs.c.worker_id == claim.worker_id,
                     jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                    jobs.c.lease_until > now,
+                    jobs.c.cancel_requested_at.is_(None),
                 ]
             row = session.execute(select(jobs.c.attempt, jobs.c.status).where(*conditions).with_for_update()).first()
             if row is None:
-                return "failed"
+                return OWNERSHIP_LOST if claim is not None else "failed"
             if retryable and row.attempt < max_attempts:
                 session.execute(
                     update(jobs)

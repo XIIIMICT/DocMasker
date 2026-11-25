@@ -8,6 +8,7 @@ paths, and TTL sweeping removes every artifact of expired jobs.
 """
 
 import os
+import re
 import tempfile
 import uuid
 from contextlib import suppress
@@ -27,6 +28,8 @@ class ArtifactStore:
 
     #: Only these suffixes are ever produced by the backend (no user input).
     _SUFFIXES = frozenset({"input", "keys", "result", "error", "name", "kind"})
+    _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    _RESULT_KEY_RE = re.compile(rf"^({_UUID})\.result\.({_UUID})$")
 
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root)
@@ -71,10 +74,64 @@ class ArtifactStore:
             raise ArtifactError(msg)
         return Path(candidate)
 
-    def write(self, job_id: str, suffix: str, data: bytes) -> None:
-        """Write `data` atomically (a crash never leaves a half-written file)."""
-        target = self._path(job_id, suffix)
-        fd, tmp = tempfile.mkstemp(prefix=f".{job_id}.", dir=str(self._root))
+    @classmethod
+    def result_key(cls, job_id: str, lease_token: str) -> str:
+        """Immutable result key for ONE claim/attempt — never a shared job path."""
+        try:
+            canonical = str(uuid.UUID(job_id))
+            token = str(uuid.UUID(lease_token))
+        except (ValueError, AttributeError, TypeError) as error:
+            msg = "Некорректный идентификатор задания."
+            raise ArtifactError(msg) from error
+        return f"{canonical}.result.{token}"
+
+    def path_for_result(self, key: str) -> Path:
+        """Resolve a DB-referenced result key, validated against the spool root."""
+        match = self._RESULT_KEY_RE.fullmatch(key.lower())
+        if match is None:
+            msg = "Некорректный идентификатор задания."
+            raise ArtifactError(msg)
+        root = os.path.realpath(str(self._root))
+        candidate = os.path.realpath(os.path.join(root, key))  # noqa: PTH118 - CodeQL sanitisation
+        if not candidate.startswith(root + os.sep):
+            msg = "Некорректный идентификатор задания."
+            raise ArtifactError(msg)
+        return Path(candidate)
+
+    def write_result(self, job_id: str, lease_token: str, data: bytes) -> str:
+        """Write an attempt-scoped immutable result and return its DB key."""
+        key = self.result_key(job_id, lease_token)
+        target = self.path_for_result(key)
+        self._write_at(target, data)
+        return key
+
+    def read_result(self, key: str) -> bytes:
+        path = self.path_for_result(key)
+        try:
+            return path.read_bytes()
+        except FileNotFoundError as error:
+            msg = "Результат задания недоступен (истёк срок хранения)."
+            raise ArtifactError(msg) from error
+
+    def delete_attempt_artifacts(self, job_id: str, *, keep_key: str | None = None) -> list[str]:
+        """Remove stale attempt results for a job; never touch a published key."""
+        try:
+            canonical = str(uuid.UUID(job_id))
+        except (ValueError, AttributeError, TypeError) as error:
+            msg = "Некорректный идентификатор задания."
+            raise ArtifactError(msg) from error
+        removed: list[str] = []
+        for path in self.root.glob(f"{canonical}.result.*"):
+            if keep_key is not None and path.name == keep_key:
+                continue
+            with suppress(FileNotFoundError):
+                path.unlink()
+                removed.append(path.name)
+        return removed
+
+    def _write_at(self, target: Path, data: bytes) -> None:
+        """Atomically write `data` to `target` (temp file + os.replace)."""
+        fd, tmp = tempfile.mkstemp(prefix=".dm-", dir=str(self._root))
         try:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(data)
@@ -85,6 +142,10 @@ class ArtifactStore:
             leftover = Path(tmp)
             if leftover.exists():
                 leftover.unlink()
+
+    def write(self, job_id: str, suffix: str, data: bytes) -> None:
+        """Write `data` atomically (a crash never leaves a half-written file)."""
+        self._write_at(self._path(job_id, suffix), data)
 
     def copy_from(self, job_id: str, suffix: str, src: Path) -> None:
         """
@@ -129,9 +190,16 @@ class ArtifactStore:
         return path.stat().st_size if path.is_file() else 0
 
     def delete(self, job_id: str) -> None:
-        """Remove every artifact of a job (TTL / cancellation cleanup)."""
+        """Remove every artifact of a job (terminal GC / confirmed cancellation)."""
         for suffix in ("input", "keys", "result", "error", "name", "kind"):
             path = self._path(job_id, suffix)
+            with suppress(FileNotFoundError):
+                path.unlink()
+        try:
+            canonical = str(uuid.UUID(job_id))
+        except ValueError, AttributeError, TypeError:
+            return
+        for path in self.root.glob(f"{canonical}.result.*"):
             with suppress(FileNotFoundError):
                 path.unlink()
 

@@ -47,7 +47,7 @@ from .dependencies import artifact_store, job_repository
 from .metrics import start_metrics_server, stop_metrics_server
 from .models import Claim, Job, JobKind, JobPhase
 from .operations import JobExecutionError, execute
-from .repository import JobRepository
+from .repository import OWNERSHIP_LOST, JobRepository
 from .storage import ArtifactStore, cleanup_artifacts
 
 LOGGER = logging.getLogger("docmasker.worker")
@@ -189,7 +189,11 @@ class Worker:
 
     def _checkpoint(self, job_id: str, claim: Claim, heartbeat: Heartbeat) -> None:
         """Cooperative cancellation / ownership checkpoint (§3.7)."""
-        if heartbeat.lost() or self._repo.cancellation_requested(job_id, claim):
+        if heartbeat.lost():
+            # Lease/cancellation audit is a distinct path: the old worker must
+            # not acknowledge cancellation or clean up shared artifacts.
+            raise LeaseLostError(job_id)
+        if self._repo.cancellation_requested(job_id, claim):
             raise CancelledError
 
     def _progress(
@@ -256,13 +260,14 @@ class Worker:
                 # A verified cache hit still goes through the fenced publish:
                 # no cancelled/stale worker can expose it.
                 self._checkpoint(job_id, claim, heartbeat)
-                self._store.write(job_id, "result", cached)
+                result_key = self._store.write_result(job_id, claim.lease_token, cached)
                 self._repo.succeed(
                     job_id,
-                    "result",
+                    result_key,
                     ttl_seconds=self._settings.jobs_ttl_seconds,
                     claim=claim,
                 )
+                self._store.delete_attempt_artifacts(job_id, keep_key=result_key)
                 observe_job_succeeded(kind_label)
                 log_event(
                     LOGGER,
@@ -282,15 +287,16 @@ class Worker:
             )
             self._checkpoint(job_id, claim, heartbeat)
             result = _zip_entries(entries)
-            # Immutable result: publish the artifact, then attach its reference
-            # in a fenced DB transaction. A stale worker never exposes output.
-            self._store.write(job_id, "result", result)
+            # Publish to an attempt-scoped immutable key: a stale worker cannot
+            # overwrite the artifact a newer claim will publish.
+            result_key = self._store.write_result(job_id, claim.lease_token, result)
             self._repo.succeed(
                 job_id,
-                "result",
+                result_key,
                 ttl_seconds=self._settings.jobs_ttl_seconds,
                 claim=claim,
             )
+            self._store.delete_attempt_artifacts(job_id, keep_key=result_key)
             observe_job_succeeded(kind_label)
             # Populate the cache only after the fenced succeeded transition
             # was accepted (§4.5); a stale/cancelled job never caches.
@@ -305,19 +311,36 @@ class Worker:
                 operation="execute",
                 outcome="ok",
             )
-        except CancelledError, LeaseLostError:
+        except CancelledError:
+            # Only after PostgreSQL confirms the terminal cancelled state may
+            # this owner schedule cleanup. Otherwise leave every artifact for
+            # the current owner or GC.
+            confirmed = self._repo.acknowledge_cancel(job_id, claim)
+            if confirmed:
+                self._store.delete(job_id)
             log_event(
                 LOGGER,
                 "job_cancelled",
-                "Job cancelled or lease lost, discarding result.",
+                "Job cancellation acknowledged." if confirmed else "Cancellation not owned; no cleanup.",
                 job_id=job_id,
                 kind=kind_label,
                 worker_id=self._worker_id,
                 operation="execute",
-                outcome="cancelled",
+                outcome="cancelled" if confirmed else "ownership_lost",
             )
-            self._repo.acknowledge_cancel(job_id, claim)
-            self._store.delete(job_id)
+        except LeaseLostError:
+            # A new owner (or lease recovery) owns the job now. Never delete,
+            # acknowledge cancellation, retry or publish from this worker.
+            log_event(
+                LOGGER,
+                "lease_lost",
+                "Lease lost; discarding work without touching artifacts.",
+                job_id=job_id,
+                kind=kind_label,
+                worker_id=self._worker_id,
+                operation="execute",
+                outcome="ownership_lost",
+            )
         except JobExecutionError as error:
             self._fail(job_id, claim, classify(error), kind_label)
         except Exception:  # noqa: BLE001 - never leak exception text / PII to logs
@@ -352,6 +375,17 @@ class Worker:
             claim=claim,
             backoff_seconds=backoff,
         )
+        if status == OWNERSHIP_LOST:
+            log_warning(
+                LOGGER,
+                "ownership_lost",
+                "Failure rejected: ownership lost.",
+                job_id=job_id,
+                operation="execute",
+                error_code=safe_error_code(error.code),
+                outcome="ownership_lost",
+            )
+            return  # no retry, no artifact deletion, no cache write
         if status == "queued":
             observe_job_retried(kind_label)
             log_event(

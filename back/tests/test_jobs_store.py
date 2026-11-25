@@ -9,10 +9,17 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 from src.config import Settings
-from src.jobs.repository import JobNotFoundError, JobQueueFullError, JobRepository
+from src.jobs.repository import (
+    OWNERSHIP_LOST,
+    IllegalTransitionError,
+    JobNotFoundError,
+    JobQueueFullError,
+    JobRepository,
+)
+from src.jobs.routing import enqueue
 from src.jobs.storage import ArtifactStore, cleanup_artifacts
 
 
@@ -157,8 +164,55 @@ def test_running_cancel_is_a_request_acknowledged_by_the_worker(repo: JobReposit
     assert repo.get(job.id).status == "cancelling"
     assert repo.get(job.id).cancel_requested is True
     assert repo.heartbeat(job.id, "detection", 50, lease_seconds=30, claim=claim) is False
-    repo.acknowledge_cancel(job.id, claim)
+    # Heartbeat was rejected because cancellation was requested, but the live
+    # claim can still acknowledge it exactly once.
+    assert repo.acknowledge_cancel(job.id, claim) is True
     assert repo.get(job.id).status == "cancelled"
+    assert repo.acknowledge_cancel(job.id, claim) is False  # idempotent, already terminal
+    assert repo.get(job.id).status == "cancelled"
+
+
+def test_stale_worker_cannot_overwrite_a_newer_result(
+    settings: Settings, repo: JobRepository, store: ArtifactStore
+) -> None:
+    """A/B lease race: the old claim must not mutate state or artifacts (P0.1)."""
+    import uuid
+
+    enqueue("mask_text", input_bytes=b"old", filename="")
+    first = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert first is not None
+    job_a, claim_a = first
+
+    # Deterministically expire A's lease in the database (no sleeps).
+    with repo._engine.begin() as connection:
+        connection.execute(
+            text("UPDATE jobs SET lease_until = now() - interval '1 second' WHERE id = :id"),
+            {"id": uuid.UUID(job_a.id)},
+        )
+
+    second = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert second is not None
+    job_b, claim_b = second
+    assert claim_b.lease_token != claim_a.lease_token
+
+    # A writes first with its own attempt key, then tries to publish/fail/ack.
+    stale_key = store.write_result(job_b.id, claim_a.lease_token, b"stale")
+    with pytest.raises(IllegalTransitionError):
+        repo.succeed(job_b.id, stale_key, ttl_seconds=60, claim=claim_a)
+    assert repo.fail(job_b.id, "internal_error", retryable=True, max_attempts=3, claim=claim_a) == OWNERSHIP_LOST
+    assert repo.acknowledge_cancel(job_b.id, claim_a) is False
+
+    # B publishes with a different immutable key; A's file can never replace it.
+    fresh_key = store.write_result(job_b.id, claim_b.lease_token, b"fresh")
+    repo.succeed(job_b.id, fresh_key, ttl_seconds=60, claim=claim_b)
+    store.delete_attempt_artifacts(job_b.id, keep_key=fresh_key)
+
+    final = repo.get(job_b.id)
+    assert final.status == "succeeded"
+    assert final.result_key == fresh_key
+    assert stale_key != fresh_key
+    assert not store.path_for_result(stale_key).exists()
+    assert store.path_for_result(fresh_key).read_bytes() == b"fresh"
 
 
 def test_ttl_sweep_removes_rows_and_artifacts(repo: JobRepository, store: ArtifactStore) -> None:

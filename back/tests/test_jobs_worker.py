@@ -63,8 +63,10 @@ def _run(worker: Worker, env: Settings, accepted_id: str) -> Job:
     return repo.get(accepted_id)
 
 
-def _result_zip(store: ArtifactStore, job_id: str) -> zipfile.ZipFile:
-    return zipfile.ZipFile(io.BytesIO(store.read(job_id, "result")))
+def _result_zip(store: ArtifactStore, job: Job) -> zipfile.ZipFile:
+    """Read the exact immutable artifact referenced by the succeeded row."""
+    assert job.result_key is not None
+    return zipfile.ZipFile(io.BytesIO(store.read_result(job.result_key)))
 
 
 def test_worker_poll_survives_transient_db_error(worker: Worker) -> None:
@@ -102,7 +104,7 @@ def test_mask_text_job_round_trip(env: Settings, worker: Worker) -> None:
     assert job.phase == "completed"
     assert job.progress == 100
     store = ArtifactStore(env.jobs_dir)
-    with _result_zip(store, job.id) as archive:
+    with _result_zip(store, job) as archive:
         payload = json.loads(archive.read("result.json"))
     assert payload["text"] == "[PERSON_1], [EMAIL_1]"
     assert "Иван Петров" in payload["keys"]
@@ -120,7 +122,7 @@ def test_unmask_text_job_round_trip(env: Settings, worker: Worker) -> None:
     job = _run(worker, env, accepted.job_id)
     assert job.status == "succeeded"
     store = ArtifactStore(env.jobs_dir)
-    with _result_zip(store, job.id) as archive:
+    with _result_zip(store, job) as archive:
         payload = json.loads(archive.read("result.json"))
     assert payload["text"] == "Иван Петров пришёл."
 
@@ -130,7 +132,7 @@ def test_mask_file_job_round_trip(env: Settings, worker: Worker) -> None:
     job = _run(worker, env, accepted.job_id)
     assert job.status == "succeeded"
     store = ArtifactStore(env.jobs_dir)
-    with _result_zip(store, job.id) as archive:
+    with _result_zip(store, job) as archive:
         names = archive.namelist()
         assert any(name.endswith("(замаскированный).docx") for name in names)
         assert any(name.endswith("(ключи демаскировки).yaml") for name in names)
@@ -157,7 +159,7 @@ def test_unmask_file_job_round_trip(env: Settings, worker: Worker) -> None:
     job = _run(worker, env, accepted.job_id)
     assert job.status == "succeeded"
     store = ArtifactStore(env.jobs_dir)
-    with _result_zip(store, job.id) as archive:
+    with _result_zip(store, job) as archive:
         names = archive.namelist()
         restored = archive.read(next(name for name in names if name.endswith(".docx")))
         manifest = json.loads(archive.read(next(name for name in names if name.endswith(".json"))))
