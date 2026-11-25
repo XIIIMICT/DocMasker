@@ -26,6 +26,7 @@ CT = "http://schemas.openxmlformats.org/package/2006/content-types"
 CP = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 DC = "http://purl.org/dc/elements/1.1/"
 EP = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+VT = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 
 _PERSON = "Иван Петров"
 _EMAIL = "ivan@example.ru"
@@ -77,6 +78,9 @@ def _build_package(
     big_marker: bool = False,
     extra: dict[str, bytes] | None = None,
     core_xml: str | None = None,
+    comments_xml: str | None = None,
+    content_types_extra: str = "",
+    root_rels_extra: str = "",
 ) -> bytes:
     """Minimal but structurally valid OPC package with all required parts."""
     buf = io.BytesIO()
@@ -88,12 +92,12 @@ def _build_package(
             '<Default Extension="xml" ContentType="application/xml"/>'
             '<Override PartName="/word/document.xml" '
             'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-            "</Types>",
+            f"{content_types_extra}</Types>",
         )
         z.writestr(
             "_rels/.rels",
             f'<Relationships xmlns="{PR}"><Relationship Id="rId1" '
-            f'Type="{R}/officeDocument" Target="word/document.xml"/></Relationships>',
+            f'Type="{R}/officeDocument" Target="word/document.xml"/>{root_rels_extra}</Relationships>',
         )
         z.writestr(
             "word/_rels/document.xml.rels",
@@ -117,7 +121,7 @@ def _build_package(
         z.writestr("word/document.xml", doc)
         z.writestr("word/footnotes.xml", _simple_part("footnotes", W, _PERSON))
         z.writestr("word/endnotes.xml", _simple_part("endnotes", W, _EMAIL))
-        z.writestr("word/comments.xml", _simple_part("comments", W, _PERSON))
+        z.writestr("word/comments.xml", comments_xml or _simple_part("comments", W, _PERSON))
         z.writestr("word/header1.xml", _simple_part("hdr", W, _PERSON, prefix="w"))
         z.writestr(
             "docProps/core.xml",
@@ -263,6 +267,80 @@ def test_embedded_binary_object_is_rejected() -> None:
     source = _build_package(extra={"word/embeddings/oleObject1.bin": b"\x00\x01"})
     with pytest.raises(OoxmlPackageError, match="неподдерживаемое"):
         transform_package(source, mode="mask", masker=RuleBasedMasker(), keys=MaskKeys())
+
+
+def test_custom_properties_and_author_attributes_are_masked() -> None:
+    """Custom vt:* values and comment authors are identifying text (P0.3)."""
+    custom = (
+        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties">'
+        f'<CustomDocumentProperties xmlns:vt="{VT}">'
+        f"<vt:lpwstr>{_PERSON}</vt:lpwstr>"
+        f"<vt:lpstr>{_EMAIL}</vt:lpstr>"
+        "</CustomDocumentProperties></Properties>"
+    )
+    comments = (
+        f'<w:comments xmlns:w="{W}"><w:comment w:author="{_PERSON}" w:initials="{_PERSON}">'
+        f"<w:p><w:r><w:t>{_PERSON}</w:t></w:r></w:p></w:comment></w:comments>"
+    )
+    source = _build_package(
+        comments_xml=comments,
+        extra={"docProps/custom.xml": custom.encode("utf-8")},
+    )
+    masked, _entities, _keys, coverage = mask_docx_in_memory(source)
+    assert "custom_properties" in coverage.processed_parts
+    with zipfile.ZipFile(io.BytesIO(masked)) as archive:
+        custom_out = archive.read("docProps/custom.xml").decode("utf-8")
+        comments_out = archive.read("word/comments.xml").decode("utf-8")
+    assert _PERSON not in custom_out
+    assert _EMAIL not in custom_out
+    assert _PERSON not in comments_out
+    assert 'w:author="[PERSON_1]"' in comments_out
+    assert 'w:initials="[PERSON_1]"' in comments_out
+
+
+def test_coverage_records_clean_parts_with_accurate_text_node_counts() -> None:
+    """A supported part with zero detections is still processed and counted."""
+    _masked, _entities, _keys, coverage = mask_docx_in_memory(_build_package())
+    assert "headers_footers" in coverage.processed_parts
+    header = next(part for part in coverage.processed if part.name == "word/header1.xml")
+    assert header.text_nodes == 1
+    assert header.category == "headers_footers"
+    assert coverage.unprocessed_text_parts == []
+    assert coverage.rejected_parts == []
+
+
+def test_unknown_text_bearing_part_is_rejected_not_reported_complete() -> None:
+    """A chart-like part with PII-capable text must fail closed (P0.3)."""
+    chart_ct = (
+        '<Override PartName="/word/charts/chart1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>'
+    )
+    source = _build_package(
+        content_types_extra=chart_ct,
+        extra={"word/charts/chart1.xml": f"<c:chart xmlns:c='x'><c:t>{_EMAIL}</c:t></c:chart>".encode()},
+    )
+    from src.masking.mapping import MaskKeys
+
+    parts, coverage = build_inventory(source)
+    assert any(part.category == "unprocessed" for part in parts)
+    assert "word/charts/chart1.xml" in coverage.unprocessed_text_parts
+    with pytest.raises(OoxmlPackageError, match="неподдерживаемое"):
+        transform_package(source, mode="mask", masker=RuleBasedMasker(), keys=MaskKeys())
+
+
+def test_root_and_nested_relationship_targets_resolve_to_owning_part() -> None:
+    """Root targets use package root; part targets are relative to that part."""
+    source = _build_package(
+        root_rels_extra=(f'<Relationship Id="rId9" Type="{R}/customXml" Target="customXml/item1.xml"/>'),
+        extra={"customXml/item1.xml": f"<root>{_PERSON}</root>".encode()},
+    )
+    parts, coverage = build_inventory(source)
+    categories = {part.name: part.category for part in parts}
+    assert categories["customXml/item1.xml"] == "generic_xml"
+    assert coverage.unprocessed_text_parts == []
+    masked, _entities, _keys, _coverage = mask_docx_in_memory(source)
+    with zipfile.ZipFile(io.BytesIO(masked)) as archive:
+        assert _PERSON not in archive.read("customXml/item1.xml").decode("utf-8")
 
 
 # --- §7 manifest contract ----------------------------------------------------

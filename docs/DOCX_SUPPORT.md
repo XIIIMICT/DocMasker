@@ -41,9 +41,13 @@ thousands of PII-free paragraphs cheap; see `docs/PERFORMANCE.md`.
 - **Raster/vector image pixels** — no OCR in this scope. `raster_image_ocr:
   "not_performed"` is reported in `manifest.json`; images are copied through
   unchanged. Do not claim full image-content anonymization.
-- Field codes / `w:instrText`, hidden `w:vanish` text, custom XML data, chart
-  cache values and embedded OLE/binary objects are **not** treated as ordinary
-  text-bearing WordprocessingML.
+- Field codes / `w:instrText`, hidden `w:vanish` text and chart cache values are
+  **not** ordinary text-bearing WordprocessingML and remain outside the current
+  anonymization promise. Unknown XML parts (e.g. `customXml/item1.xml`) are
+  processed generically: only their text nodes are rewritten, attributes and
+  structure are preserved. Chart/spreadsheet XML with text-bearing content is
+  classified as unprocessed and the package is rejected rather than reported
+  complete.
 
 ## Rejection (strict blocking, §6.4/§6.5)
 
@@ -51,7 +55,11 @@ A package is rejected with a clear non-PII error (HTTP 422) when it contains
 **embedded binary/OLE objects** (`*.bin`, `word/embeddings/*`) that cannot be
 inspected safely, or malformed/unsafe XML (DTD, external entities, oversized
 part). There is no "best-effort warning" for supported content: the normal path
-is a successful result with `complete: true` in `manifest.json`.
+is a successful result with `complete: true` in `manifest.json`. Parts with an
+explicit `copy` disposition (styles, numbering, settings, theme, media) are
+copied verbatim; parts with `unprocessed` text-bearing content (charts and
+similar) cause the same 422 rejection, so `complete: false` never reaches a
+delivered archive.
 
 There is **no** `X-Docx-Unsupported-Parts` plumbing and no frontend warning —
 that mechanism was removed in Phase 5.
@@ -69,8 +77,12 @@ unmask_file: <base> (демаскированный).docx + manifest.json
 The manifest carries `schema_version`, `operation`, `status`, `complete`,
 ruleset/config versions, input hash/size, output names, `statistics`
 (occurrences/unique by label, `unused_keys` for unmask), `coverage`
-(processed parts, unprocessed *text* parts, rejected parts, OCR status) and
-`cache`. The frontend requires and validates it — a missing/malformed/wrong
+(processed parts with per-part category and accurate `text_nodes`, unprocessed
+*text* parts, rejected parts, OCR status) and `cache`. `processed_parts` lists
+every successfully inspected supported part, including parts with zero
+detections; `complete` is true only when the supported scope was fully
+inspected and no text-bearing part was unprocessed or rejected. The frontend
+requires and validates it — a missing/malformed/wrong
 version is a clear result error, never "0 entities". Semantic metadata no
 longer lives in `X-Masked-Count` / `X-Masked-Breakdown`; both were removed.
 

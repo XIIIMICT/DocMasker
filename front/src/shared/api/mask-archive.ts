@@ -18,6 +18,7 @@ export interface ResultManifest {
     };
     coverage: {
         processed_parts: string[];
+        processed?: Array<{ name: string; category: string; text_nodes: number }>;
         unprocessed_text_parts: string[];
         rejected_parts: string[];
         raster_image_ocr: string;
