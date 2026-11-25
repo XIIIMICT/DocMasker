@@ -9,6 +9,7 @@ paths, and TTL sweeping removes every artifact of expired jobs.
 
 import os
 import tempfile
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,31 +25,51 @@ class ArtifactError(ValueError):
 class ArtifactStore:
     """Filesystem spool with atomic writes and id-scoped names."""
 
+    #: Only these suffixes are ever produced by the backend (no user input).
+    _SUFFIXES = frozenset({"input", "keys", "result", "error", "name", "kind"})
+
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
 
-    def _path(self, job_id: str, suffix: str) -> Path:
-        # Job ids are uuid4 strings (hex + dashes, 36 chars). Never accept a
-        # path as an artifact key — no traversal outside the spool directory.
-        allowed = set("0123456789abcdef-")
-        if len(job_id) != 36 or any(char not in allowed for char in job_id.lower()):
+    def _canonical_name(self, job_id: str, suffix: str) -> str:
+        """
+        Sanitise the untrusted job id into a canonical uuid4 filename.
+
+        Parsing through ``uuid.UUID`` removes any traversal/repetition and
+        guarantees a fixed-shape name; the suffix is an internal allowlist.
+        """
+        if suffix not in self._SUFFIXES:
             msg = "Некорректный идентификатор задания."
             raise ArtifactError(msg)
-        return self._root / f"{job_id}.{suffix}"
+        try:
+            canonical = str(uuid.UUID(job_id))
+        except (ValueError, AttributeError, TypeError) as error:
+            msg = "Некорректный идентификатор задания."
+            raise ArtifactError(msg) from error
+        if canonical != job_id.lower():
+            msg = "Некорректный идентификатор задания."
+            raise ArtifactError(msg)
+        return f"{canonical}.{suffix}"
+
+    def _path(self, job_id: str, suffix: str) -> Path:
+        return Path(os.path.join(str(self._root), self._canonical_name(job_id, suffix)))  # noqa: PTH118 - CodeQL sanitisation
 
     @property
     def root(self) -> Path:
         """Resolved spool root (for explicit containment checks by callers)."""
-        return self._root.resolve()
+        return Path(os.path.realpath(str(self._root)))
 
     def path_for(self, job_id: str, suffix: str) -> Path:
-        """Absolute path of a stored artifact, validated against the spool root."""
-        path = self._path(job_id, suffix).resolve()
-        if not path.is_relative_to(self.root):
+        """Return an artifact path proven (by realpath) to stay in the spool."""
+        root = os.path.realpath(str(self._root))
+        candidate = os.path.realpath(os.path.join(root, self._canonical_name(job_id, suffix)))  # noqa: PTH118 - CodeQL sanitisation
+        # CodeQL-recommended containment check: normalise first, then require
+        # the normalized path to start with the normalized root.
+        if not candidate.startswith(root + os.sep):
             msg = "Некорректный идентификатор задания."
             raise ArtifactError(msg)
-        return path
+        return Path(candidate)
 
     def write(self, job_id: str, suffix: str, data: bytes) -> None:
         """Write `data` atomically (a crash never leaves a half-written file)."""

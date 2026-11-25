@@ -28,16 +28,6 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 _ZIP_MIME = "application/zip"
 
 
-def _contained_in_spool(root: Path, candidate: Path) -> bool:
-    """Realpath containment check for a path derived from an untrusted job id."""
-    root_real = os.path.realpath(root)
-    resolved = os.path.realpath(candidate)
-    try:
-        return os.path.commonpath([root_real, resolved]) == root_real
-    except ValueError:  # different drives on Windows
-        return False
-
-
 def _unprocessable(code: str, detail: str) -> ApiError:
     return ApiError(code, detail, status.HTTP_422_UNPROCESSABLE_CONTENT)
 
@@ -176,12 +166,13 @@ async def job_result(job_id: str) -> Response:
     if job.status != "succeeded" or job.result_key is None:
         raise ApiError("result_not_ready", "Результат ещё не готов.", status.HTTP_409_CONFLICT)
     store = artifact_store()
-    path = store.path_for(job_id, "result")
-    # Defense in depth for CodeQL: the route id is untrusted. Both ArtifactStore
-    # and this check normalise with realpath and require containment in the
-    # private spool root, so no ../ or symlink can escape it.
-    if not _contained_in_spool(store.root, path):
+    # Defense in depth for CodeQL: normalise the untrusted path and require it
+    # to be contained in the private spool root before streaming it.
+    root_real = os.path.realpath(str(store.root))  # noqa: ASYNC240 - fast realpath, required by CodeQL
+    safe_path = os.path.realpath(str(store.path_for(job_id, "result")))  # noqa: ASYNC240
+    if not safe_path.startswith(root_real + os.sep):
         raise ApiError("result_expired", "Некорректный идентификатор задания.", status.HTTP_404_NOT_FOUND)
+    path = Path(safe_path)
     exists = await run_blocking(path.is_file)
     if not exists:
         raise ApiError(
