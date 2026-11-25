@@ -92,6 +92,19 @@ async def test_cancel_job(client: AsyncClient, jobs_env: Settings) -> None:
     assert (await client.delete(f"/api/jobs/{accepted['job_id']}")).status_code == 204
 
 
+async def test_job_rejects_oversized_keys(client: AsyncClient, jobs_env: Settings) -> None:
+    response = await client.post(
+        "/api/jobs",
+        data={
+            "kind": "unmask_text",
+            "text": "x",
+            "keys": "y" * (jobs_env.max_keys_chars + 1),
+        },
+    )
+    assert response.status_code == 413
+    assert response.json()["code"] == "keys_too_large"
+
+
 async def test_result_serves_zip_with_no_store(client: AsyncClient, jobs_env: Settings) -> None:
     accepted = await _submit_text(client)
     repo = JobRepository(jobs_env)

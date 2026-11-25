@@ -9,7 +9,7 @@ create a cycle.
 import hashlib
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 from src.config import Settings, get_settings
 
@@ -178,9 +178,46 @@ def enqueue_from_path(
     )
 
 
-def needs_job(*, text: str | None = None, data: bytes | None = None, paragraph_count: int = 0) -> bool:
+def needs_job(
+    *, text: str | None = None, data: bytes | None = None, size: int | None = None, paragraph_count: int = 0
+) -> bool:
     """Public wrapper over the configurable threshold."""
-    return should_use_job(text=text, data=data, paragraph_count=paragraph_count)
+    return should_use_job(text=text, data=data, size=size, paragraph_count=paragraph_count)
+
+
+def _count_paragraphs_xml(xml: IO[bytes]) -> int:
+    """Count `w:p` end events incrementally from a ZipExtFile-like stream."""
+    from lxml import etree  # ty: ignore[missing-module-member]
+
+    count = 0
+    context = etree.iterparse(
+        xml,
+        events=("end",),
+        recover=True,
+        resolve_entities=False,
+        no_network=True,
+        huge_tree=False,
+    )
+    for _event, element in context:
+        if etree.QName(element).localname == "p":
+            count += 1
+        element.clear()
+        while element.getprevious() is not None:
+            del element.getparent()[0]
+    return count
+
+
+def count_docx_paragraphs_path(path: Path) -> int:
+    """Count paragraphs from a staged path without loading the whole part."""
+    import zipfile
+
+    from lxml import etree  # ty: ignore[missing-module-member]
+
+    try:
+        with zipfile.ZipFile(path) as archive, archive.open("word/document.xml") as xml:
+            return _count_paragraphs_xml(xml)
+    except KeyError, zipfile.BadZipFile, etree.XMLSyntaxError, ValueError:
+        return 0
 
 
 def count_docx_paragraphs(data: bytes) -> int:
@@ -189,12 +226,9 @@ def count_docx_paragraphs(data: bytes) -> int:
 
     Opens `word/document.xml` as a `ZipExtFile` and counts `w:p` end events
     with an incremental pull parser instead of `archive.read()` + a byte
-    `count()` over the whole (possibly huge) XML part. Parsing is hardened
-    (`resolve_entities=False`, `no_network=True`, `huge_tree=False`) since this
-    is untrusted input. This is a cheap threshold heuristic only: a malformed
-    package returns 0 and real validation still runs on the sync path / at job
-    submission. Namespace prefixes are irrelevant — the local name `p` is what
-    matters, so a custom prefix still counts correctly.
+    `count()` over the whole XML part. A malformed package returns 0; real
+    validation still runs on the sync path / at job submission. Namespace
+    prefixes are irrelevant — the local name `p` is what matters.
     """
     import io
     import zipfile
@@ -206,22 +240,6 @@ def count_docx_paragraphs(data: bytes) -> int:
             zipfile.ZipFile(io.BytesIO(data)) as archive,
             archive.open("word/document.xml") as xml,
         ):
-            count = 0
-            context = etree.iterparse(
-                xml,
-                events=("end",),
-                recover=True,
-                resolve_entities=False,
-                no_network=True,
-                huge_tree=False,
-            )
-            for _event, element in context:
-                if etree.QName(element).localname == "p":
-                    count += 1
-                # Bounded memory: release parsed nodes as we go.
-                element.clear()
-                while element.getprevious() is not None:
-                    del element.getparent()[0]
-            return count
+            return _count_paragraphs_xml(xml)
     except KeyError, zipfile.BadZipFile, etree.XMLSyntaxError, ValueError:
         return 0

@@ -150,6 +150,14 @@ async def test_post_mask_endpoint_rejects_blank_text() -> None:
     assert response.json()["detail"] == "Текст пуст."
 
 
-def test_entity_is_frozen_dataclass() -> None:
+async def test_unmask_endpoint_rejects_oversized_text() -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/unmask",
+            json={"text": "x" * 200_001, "keys": "Физлица:\n  - Иван Петров"},
+        )
+    assert response.status_code == 413
+    assert response.json()["code"] == "text_too_large"
     entity = Entity(label="person", text="Иван", start=0, end=4)
     assert entity.score == 1.0

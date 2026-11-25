@@ -9,10 +9,10 @@ process-wide cached singleton built from one immutable config snapshot.
 
 import json
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from src.config import get_settings
+from src.masking.archives import safe_stem
 from src.masking.config import get_config
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from src.masking.docx_validation import upload_limits, validate_docx_package
@@ -118,7 +118,7 @@ def execute(
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
-        base = Path(name).stem
+        base = safe_stem(name)
         document_name = f"{base} (замаскированный).docx"
         keys_name = f"{base} (ключи демаскировки).yaml"
         ctx = _manifest_ctx()
@@ -157,7 +157,7 @@ def execute(
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
-        base = Path(name).stem.removesuffix(" (замаскированный)")
+        base = safe_stem(name).removesuffix(" (замаскированный)")
         document_name = f"{base} (демаскированный).docx"
         ctx = _manifest_ctx()
         manifest = build_unmask_manifest(
