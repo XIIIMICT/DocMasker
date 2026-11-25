@@ -111,9 +111,14 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
 - `.github/workflows/ci.yaml` triggers on push/PR to `main`/`dev`. Jobs:
   `config` (actionlint + compose config), `back` (ruff/ty/pytest ≥80%
   branch coverage), `front` (typecheck/lint/format/unit + 65% line-coverage
-  gate via `front/scripts/check-coverage.mjs`), `production` (needs
-  config+back+front, builds prod images, boots back+worker+front, asserts the
-  smoke test list, runs Playwright `smoke`), `required` (aggregate gate).
+  gate via `front/scripts/check-coverage.mjs`), `secrets` (gitleaks over the
+  full history), `production` (needs config+back+front, builds prod images,
+  boots back+worker+front, asserts the smoke test list, runs Playwright
+  `smoke`), `required` (aggregate gate).
+- `dependency-review.yaml` (PR dependency review) and `docker-release.yaml`
+  (tag-triggered publication of the exact images CI tested) mirror the other
+  two repositories. Backend CI sets `DATABASE_URL` for Alembic in addition to
+  `TEST_DATABASE_URL` for pytest — migrations read the former.
 - Branch protection / required check `CI required` is configured in **GitHub
   repository settings** — the repo cannot enable it; keep the checklist in
   `TODO.md`, never claim it is active.
