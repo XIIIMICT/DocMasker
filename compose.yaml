@@ -6,6 +6,8 @@ name: docmasker
 # infra/AGENTS.md.
 include:
   - path: ./infra/compose.db.yaml
+  # Monitoring services are profile-less; just monitoring[-stand] selects them.
+  - path: ./infra/compose.monitoring.yaml
 
 # Host-side .env keeps POSTGRES_HOST=localhost (seed/migrations); containers
 # override it with POSTGRES_HOST_DOCKER (the compose service name). Same pattern

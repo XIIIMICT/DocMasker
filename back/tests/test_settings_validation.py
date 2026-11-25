@@ -36,6 +36,8 @@ _ALIASES: dict[str, str] = {
     "jobs_poll_seconds": "JOBS_POLL_SECONDS",
     "jobs_ttl_seconds": "JOBS_TTL_SECONDS",
     "worker_shutdown_grace_seconds": "WORKER_SHUTDOWN_GRACE_SECONDS",
+    "worker_metrics_port": "WORKER_METRICS_PORT",
+    "worker_metrics_host": "WORKER_METRICS_HOST",
 }
 
 
@@ -68,11 +70,22 @@ def _settings(**overrides: object) -> Settings:
         "jobs_poll_seconds",
         "jobs_ttl_seconds",
         "worker_shutdown_grace_seconds",
+        "worker_metrics_port",
     ],
 )
 def test_non_positive_limits_are_rejected(field: str) -> None:
     with pytest.raises(ValidationError, match="положительной"):
         _settings(**{field: 0})
+
+
+def test_worker_metrics_port_and_host_are_validated() -> None:
+    with pytest.raises(ValidationError, match="65535"):
+        _settings(worker_metrics_port=70_000)
+    with pytest.raises(ValidationError, match="WORKER_METRICS_HOST"):
+        _settings(worker_metrics_host="   ")
+    settings = _settings(worker_metrics_port=9002, worker_metrics_host="127.0.0.1")
+    assert settings.worker_metrics_port == 9002
+    assert settings.worker_metrics_host == "127.0.0.1"
 
 
 def test_database_url_is_built_from_postgres_components() -> None:

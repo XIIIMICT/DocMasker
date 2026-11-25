@@ -132,7 +132,8 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 |---|---|
 | `config` | actionlint + `docker compose config` for `prod`/`dev` and `infra/compose.ci.yaml` |
 | `back` | locked uv sync, ruff check/format, ty, pytest with branch coverage (real PostgreSQL + Valkey integration via job services; artifact: coverage + JUnit) |
-| `front` | Bun 1.4 + Node 26, `next typegen`, `gen:labels` + freshness check, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
+| `front` | Bun **1.4.4 pinned** + Node 26, `next typegen`, `gen:labels` + freshness check, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
+| `secrets` | gitleaks over the full history (`fetch-depth: 0`); findings are reported, never allowlisted away |
 | `production` | needs `config`+`back`+`front`; builds the prod images once, boots `back`+`worker`+`front` via `infra/compose.ci.yaml`, lists the smoke tests explicitly, runs Playwright `smoke`, exports images on a `v*` tag |
 | `required` | `jq -e 'all(...result == "success")'` over `needs` — the branch-protection gate |
 
@@ -140,7 +141,8 @@ Notes:
 - The backend job enforces **80% branch coverage** (`--cov-fail-under=80`); the frontend enforces **65% line coverage** via `front/scripts/check-coverage.mjs` reading bun's lcov (measured baseline 71%, threshold chosen with headroom).
 - `production` builds the **backend image once** and starts it through compose together with the worker (the private `jobs-data` volume is shared); `/health` answers immediately, so the stack `--wait-timeout` is 180s. The smoke `--list` step asserts `health.spec.ts`, `smoke.spec.ts` and `rerender-smoke.spec.ts` are actually discovered — a renamed file must not silently drop out of CI.
 - CI ports are isolated: front **15001**, back **18001** (`infra/compose.ci.yaml` never loads the developer's `.env` or volumes).
-- `.github/workflows/codeql.yaml` runs CodeQL for `javascript-typescript`, `python` and `actions` (build-mode `none`). Enable code scanning in repo settings; use advanced setup, not default setup. CodeQL ≠ `CI required`.
+- `.github/workflows/codeql.yaml` runs CodeQL for `javascript-typescript`, `python` and `actions` (build-mode `none`). A `visibility` job queries the GitHub API and runs the analysis **only for public repositories** — free CodeQL cannot upload from a private one. Enable code scanning in repo settings; use advanced setup, not default setup. CodeQL ≠ `CI required`.
+- `.github/workflows/dependency-review.yaml` (PR dependency review) and `.github/workflows/docker-release.yaml` (publish the exact CI-tested images on `v*` tags) mirror the other two repositories. The backend CI job sets `DATABASE_URL` as well as `TEST_DATABASE_URL`: Alembic reads the former, pytest the latter.
 - `.github/dependabot.yaml` — weekly updates for actions, docker, uv and npm (patch bumps ignored for deps).
 
 Local reproduction of the `production` job: build the images (`docker compose -f infra/compose.ci.yaml build`), start them (`docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 180 back worker front`), then `E2E_BASE_URL=http://127.0.0.1:15001 bun run --cwd front test:e2e --project=smoke`. Tear down with `docker compose -f infra/compose.ci.yaml down --volumes --remove-orphans`.

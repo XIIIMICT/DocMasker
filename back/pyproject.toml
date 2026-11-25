@@ -22,6 +22,7 @@ dependencies = [
     "valkey>=6.2.0",
     "lxml>=6.0.0",
     "defusedxml>=0.7.1",
+    "prometheus-client>=0.26.0",
 ]
 
 [dependency-groups]

@@ -1,0 +1,39 @@
+name: Dependency Review
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          # Block a PR that introduces a known-vulnerable package. Licence
+          # denylist is deliberately not shared with ReportCollector: DocMasker's
+          # dependency tree has a different licence profile, and inventing a
+          # blanket denylist here would be a policy decision, not remediation.
+          fail-on-severity: moderate
+
+  dependency-review-gate:
+    runs-on: ubuntu-24.04
+    if: always()
+    needs: [dependency-review]
+    steps:
+      - name: Pass gate
+        if: ${{ !(github.event_name == 'pull_request' && needs.dependency-review.result == 'skipped') }}
+        run: exit 0
+      - name: Fail if dependency review did not pass on PR
+        if: ${{ github.event_name == 'pull_request' && needs.dependency-review.result != 'success' }}
+        run: |
+          echo "Dependency review result: ${{ needs.dependency-review.result }}"
+          exit 1

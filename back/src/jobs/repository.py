@@ -19,6 +19,8 @@ from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.orm import Session
 
+from src.metrics import inc_lease_expired, observe_job_created, set_db_pool_metrics, set_jobs_active
+
 from .models import Claim, Job, JobKind, JobPhase
 from .schema import ALLOWED_TRANSITIONS, jobs
 
@@ -88,6 +90,10 @@ class JobRepository:
             pool_pre_ping=True,
             connect_args={"connect_timeout": int(settings.db_connect_timeout_seconds)},
         )
+        set_db_pool_metrics(
+            in_use=0,
+            capacity=settings.db_pool_size + settings.db_max_overflow,
+        )
 
     @contextmanager
     def _session(self) -> Generator[Session]:
@@ -98,15 +104,31 @@ class JobRepository:
             session.close()
 
     def count_active(self) -> int:
-        """Return the number of non-terminal jobs (safe aggregate for /metrics)."""
+        """
+        Return the number of non-terminal jobs and refresh queue/pool gauges.
+
+        One grouped query feeds both the legacy integer contract (used by the
+        JSON `/metrics` view) and `dm_jobs_active{kind}` (queue depth). No job
+        ids, keys or filenames are read.
+        """
         with self._session() as session:
-            return int(
-                session.execute(
-                    select(func.count())
-                    .select_from(jobs)
-                    .where(jobs.c.status.in_(("staging", "queued", "running", "cancelling")))
-                ).scalar_one()
-            )
+            rows = session.execute(
+                select(jobs.c.kind, func.count().label("total"))
+                .where(jobs.c.status.in_(("staging", "queued", "running", "cancelling")))
+                .group_by(jobs.c.kind)
+            ).all()
+        counts = {str(row.kind): int(row.total) for row in rows}
+        set_jobs_active(counts)
+        try:
+            checkedout = getattr(self._engine.pool, "checkedout", None)
+            in_use = int(checkedout()) if callable(checkedout) else 0
+        except Exception:  # noqa: BLE001 - pool introspection is best-effort
+            in_use = 0
+        set_db_pool_metrics(
+            in_use=in_use,
+            capacity=self._settings.db_pool_size + self._settings.db_max_overflow,
+        )
+        return sum(counts.values())
 
     @staticmethod
     def _db_now(session: Session) -> datetime:
@@ -168,6 +190,7 @@ class JobRepository:
                 )
         if attached_id is not None:
             return self.get(attached_id), False
+        observe_job_created(kind)
         return self.get(str(job_id)), True
 
     def publish_staging(
@@ -282,6 +305,7 @@ class JobRepository:
                 .with_for_update(skip_locked=True)
             ).all()
             for record in stale:
+                inc_lease_expired()
                 if record.attempt + 1 >= record.max_attempts:
                     session.execute(
                         update(jobs)

@@ -1,0 +1,14 @@
+apiVersion: 1
+
+providers:
+  - name: DocMasker
+    orgId: 1
+    folder: DocMasker
+    type: file
+    # Dashboards are versioned in git; edit the JSON, not the UI copy.
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards-json
+      foldersFromFilesStructure: false

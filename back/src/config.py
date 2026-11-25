@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     keys_format_version: int = Field(default=1, validation_alias="KEYS_FORMAT_VERSION")
     docx_transformer_version: int = Field(default=2, validation_alias="DOCX_TRANSFORMER_VERSION")
     worker_shutdown_grace_seconds: float = Field(default=30.0, validation_alias="WORKER_SHUTDOWN_GRACE_SECONDS")
+    #: Dedicated, non-blocking Prometheus listener in the worker process.
+    worker_metrics_port: int = Field(default=8002, validation_alias="WORKER_METRICS_PORT")
+    worker_metrics_host: str = Field(default="0.0.0.0", validation_alias="WORKER_METRICS_HOST")  # noqa: S104
     #: Inputs at or below these thresholds stay synchronous (baseline-anchored).
     sync_max_text_chars: int = Field(default=20_000, validation_alias="SYNC_MAX_TEXT_CHARS")
     sync_max_docx_bytes: int = Field(default=1024 * 1024, validation_alias="SYNC_MAX_DOCX_BYTES")
@@ -131,6 +134,7 @@ class Settings(BaseSettings):
             "jobs_concurrency",
             "jobs_max_attempts",
             "cache_namespace_version",
+            "worker_metrics_port",
             "cache_max_entries",
             "cache_max_memory_mb",
             "masking_ruleset_version",
@@ -154,6 +158,12 @@ class Settings(BaseSettings):
             if getattr(self, name) <= 0:
                 msg = f"Настройка {name.upper()} должна быть положительной."
                 raise ValueError(msg)
+        if self.worker_metrics_port > 65535:
+            msg = "WORKER_METRICS_PORT должен быть не более 65535."
+            raise ValueError(msg)
+        if not self.worker_metrics_host.strip():
+            msg = "WORKER_METRICS_HOST не должен быть пустым."
+            raise ValueError(msg)
         if self.database_url is not None and not self.database_url.startswith("postgresql"):
             msg = "DATABASE_URL должен указывать на PostgreSQL (SQLite больше не поддерживается)."
             raise ValueError(msg)

@@ -19,6 +19,12 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   `just db-stand` then `just seed` (applies Alembic `0001_jobs` and verifies
   the `jobs` table) before starting the app. `just migrate` applies migrations
   without seeding; `just revision "msg"` creates an Alembic revision.
+- `infra/compose.monitoring.yaml` is included with **no profiles**: alloy is
+  always started (`just monitoring`, external Loki), the rest is selected by
+  `just monitoring-stand`. See `docs/ARCHITECTURE.md` (Observability) and
+  `docs/OPERATIONS.md` §8. `just drift-check` runs the workspace-level
+  `../infra/check-drift.py` to verify byte-identical shared Loki configs and
+  Alertmanager entrypoints across all three projects and the DWH stack.
 - `infra/compose.ci.yaml` is the isolated CI stack: back **18001**, front
   **15001** (loopback-only); postgres/valkey are **private** (no published
   ports), never load the developer's `.env`, and the `jobs-data` volume is
@@ -103,17 +109,23 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   does not inherit it). Replacing with a trusted corporate CA
   (`NODE_EXTRA_CA_CERTS` / system trust store) belongs to stage 6.
 - Container hardening (`read_only`, `tmpfs`, `cap_drop`, `no-new-privileges`,
-  `pids_limit`, resource limits), reverse-proxy/TLS/auth guidance and
-  observability are **deferred** — see `TODO.md`.
+  `pids_limit`, resource limits) and reverse-proxy/TLS/auth guidance are
+  **deferred** — see `TODO.md`. Observability is no longer deferred: see the
+  monitoring bullet above and `docs/OPERATIONS.md` §8.
 
 ## CI
 
 - `.github/workflows/ci.yaml` triggers on push/PR to `main`/`dev`. Jobs:
   `config` (actionlint + compose config), `back` (ruff/ty/pytest ≥80%
   branch coverage), `front` (typecheck/lint/format/unit + 65% line-coverage
-  gate via `front/scripts/check-coverage.mjs`), `production` (needs
-  config+back+front, builds prod images, boots back+worker+front, asserts the
-  smoke test list, runs Playwright `smoke`), `required` (aggregate gate).
+  gate via `front/scripts/check-coverage.mjs`), `secrets` (gitleaks over the
+  full history), `production` (needs config+back+front, builds prod images,
+  boots back+worker+front, asserts the smoke test list, runs Playwright
+  `smoke`), `required` (aggregate gate).
+- `dependency-review.yaml` (PR dependency review) and `docker-release.yaml`
+  (tag-triggered publication of the exact images CI tested) mirror the other
+  two repositories. Backend CI sets `DATABASE_URL` for Alembic in addition to
+  `TEST_DATABASE_URL` for pytest — migrations read the former.
 - Branch protection / required check `CI required` is configured in **GitHub
   repository settings** — the repo cannot enable it; keep the checklist in
   `TODO.md`, never claim it is active.

@@ -16,6 +16,7 @@ from fastapi import UploadFile
 
 from src.config import get_settings
 from src.masking.docx_validation import DocxLimits, upload_limits
+from src.metrics import observe_upload
 
 _CHUNK = 64 * 1024
 
@@ -70,7 +71,9 @@ async def stage_upload(file: UploadFile, *, limits: DocxLimits | None = None) ->
                 stream.write(chunk)
     except Exception:
         _unlink(path)
+        observe_upload(outcome="error")
         raise
+    observe_upload(outcome="ok")
     return StagedUpload(path=path, size=total, sha256=digest.hexdigest())
 
 

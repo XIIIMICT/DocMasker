@@ -36,6 +36,7 @@ The browser only calls its own origin; Next proxies `/api/*` server-side.
 | Schema / migration | `just seed` · `just migrate` · `just revision "msg"` |
 | Dev / prod app stack | `just dev` / `just prod` (after the stand is seeded) |
 | Quality | `just lint` · `just typecheck` · `just test` · `just e2e` |
+| Monitoring | `just monitoring` (Alloy only, external Loki) · `just monitoring-stand` (full stack) — see `infra/AGENTS.md`, `docs/OPERATIONS.md` §8 |
 | Backend direct | `uv run --directory back ruff check --fix` · `ruff format` · `ty check` · `pytest -q` |
 | Frontend direct | `bun run --cwd front lint` · `format` · `typecheck` · `test` |
 
@@ -53,6 +54,12 @@ The browser only calls its own origin; Next proxies `/api/*` server-side.
   per phase from `dev`, `git merge --no-ff`, no squash. `main`/`dev`/`feature/*`.
 - **Files:** UTF-8, no BOM, LF (`.gitattributes` + prek). PowerShell
   `Set-Content -Encoding UTF8` adds a BOM — use the file tools.
+- **Hook policy (shared, maintainer decision 2026-11-25):** every static checker
+  (ruff, ty, oxfmt/oxlint, `bun check`) runs on the **staged files** at commit
+  and on the **whole tree** in CI; no `manual` stage in any `prek.toml`.
+- **Docstring policy:** D100–D107 are intentionally ignored in
+  `back/pyproject.toml`. Write a docstring only for a non-obvious contract or the
+  reason behind a decision; do not add trivial ones or mass-delete existing ones.
 - **No debug artifacts** (`debug_*`, probes, stray scripts) in commits.
 - **Tooling:** `rg` over `grep`, `uv` over bare Python, `bun` over node.
 - **Ambiguous product/config/process decisions → ask the maintainer.** Only

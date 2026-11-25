@@ -1,0 +1,260 @@
+# Alerting rules for DocMasker.
+#
+# Failure signals plus provisional capacity/queue guardrails — the latter are
+# operational heuristics, not accepted SLOs. Values marked PROVISIONAL must be
+# calibrated against the real workload before production rollout. Only
+# critical/warning severities are used.
+#
+# Series names match the actual backend/worker instrumentation in
+# back/src/metrics.py (dm_* prefix) plus the Prometheus `up` series. All
+# annotations point at a Grafana dashboard in the "DocMasker" folder and say
+# where to find request_id/job_id (structured metadata in Loki).
+# No Pushgateway rule: DocMasker's worker is long-running and is scraped.
+
+groups:
+  - name: docmasker-http
+    interval: 30s
+    rules:
+      # No samples at all looks exactly like "no errors" — catch it first.
+      - alert: DocMaskerBackendScrapeDown
+        expr: up{job="docmasker-back"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus не может достучаться до бэкенда DocMasker"
+          description: >-
+            Цель docmasker-back недоступна: контейнер упал, /metrics не слушается
+            или задан неверный BACKEND_METRICS_HOST/BACKEND_PORT. Дашборд
+            «DocMasker — Ошибки API»; request_id последних запросов — в логах Loki
+            (структурное поле request_id, метка project="docmasker").
+
+      - alert: DocMaskerWorkerScrapeDown
+        expr: up{job="docmasker-worker"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Метрики воркера DocMasker недоступны"
+          description: >-
+            Воркер не открыл /metrics на WORKER_METRICS_PORT (8002) или цель
+            docmasker-worker недоступна. Очередь может расти без наблюдателя:
+            дашборд «DocMasker — Рабочая очередь»; job_id — в структурных логах
+            воркера (поле job_id).
+
+      - alert: DocMaskerBackendServerErrors
+        expr: |
+          sum(rate(dm_http_requests_total{status=~"5.."}[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Бэкенд DocMasker отвечает 5xx ({{ $value | printf \"%.2f\" }}/с)"
+          description: >-
+            Более 0,05 серверных ошибок в секунду в течение 2 минут. Дашборд
+            «DocMasker — Ошибки API»; request_id и error_code ищите в логах Loki
+            (структурные поля request_id/error_code).
+
+      # increase() misses counters first scraped at 1; the timestamp catches the
+      # very first failure even at low traffic.
+      - alert: DocMaskerBackendServerErrorImmediate
+        expr: |
+          dm_http_last_failure_timestamp_seconds{job="docmasker-back"} > 0
+          and time() - dm_http_last_failure_timestamp_seconds{job="docmasker-back"} < 300
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Единичная серверная ошибка API DocMasker"
+          description: >-
+            Последняя ошибка 5xx была менее 5 минут назад. Дашборд
+            «DocMasker — Ошибки API»; request_id и error_code — в логах Loki
+            (структурные метаданные request_id/error_code).
+
+      - alert: DocMaskerDependencyFailing
+        expr: |
+          sum by (job, instance, dependency) (
+            increase(dm_dependency_check_duration_seconds_count{outcome="error"}[5m])
+          ) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Отказ зависимости {{ $labels.dependency }} у {{ $labels.job }}"
+          description: >-
+            Проверка /ready фиксирует ошибку PostgreSQL или Valkey: приложение
+            отвечает, но хранилище/кэш недоступны. Дашборд «DocMasker — Ошибки API»;
+            request_id неудачных запросов — в структурных логах Loki.
+
+      - alert: DocMaskerDatabasePoolExhausted
+        expr: dm_db_connections_in_use >= dm_db_pool_capacity
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Пул PostgreSQL работает на пределе"
+          description: >-
+            Все соединения заняты (включая overflow). Проверьте длительные
+            транзакции и фоновые задания. Дашборд «DocMasker — Ошибки API»;
+            request_id медленных запросов — в логах Loki (поле request_id).
+
+      - alert: DocMaskerCacheFailureSpike
+        # PROVISIONAL: 0.05 failed operations/s over 5m; calibrate with cache load.
+        expr: |
+          sum(rate(dm_cache_operations_total{operation="failure"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Рост ошибок кэша DocMasker"
+          description: >-
+            Valkey/кэш отдаёт ошибки, маскировка работает в режиме деградации.
+            Дашборд «DocMasker — Кэш»; job_id/request_id операций — в логах Loki
+            (структурные поля job_id/request_id/operation).
+
+      - alert: DocMaskerEventLoopBlocked
+        # PROVISIONAL: p95 > 250 ms for 5m; recalibrate after a load baseline.
+        expr: |
+          histogram_quantile(0.95, rate(dm_runtime_event_loop_lag_seconds_bucket[10m])) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Event loop блокируется дольше 250 мс (p95)"
+          description: >-
+            CPU-ёмкая маскировка/OOXML или синхронный вызов попал в процесс API.
+            Дашборд «DocMasker — Ошибки API»; request_id медленных запросов —
+            в логах Loki (поле request_id).
+
+      - alert: DocMaskerDiskPressure
+        # PROVISIONAL: 5 GiB free on either filesystem; tune to artifact TTL/volume.
+        expr: |
+          dm_artifact_disk_free_bytes < 5368709120
+          or dm_runtime_disk_free_bytes < 5368709120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Мало места под артефакты или логи DocMasker"
+          description: >-
+            Публикация результатов и запись логов могут начать падать. Дашборд
+            «DocMasker — Диск артефактов»; job_id затронутых задач — в логах
+            воркера (структурное поле job_id).
+
+  - name: docmasker-jobs
+    interval: 30s
+    rules:
+      - alert: DocMaskerWorkerJobsFailing
+        expr: sum(increase(dm_jobs_failed_total[5m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Задания DocMasker завершаются ошибкой"
+          description: >-
+            Есть проваленные задания (attempt и безопасный error_code из БД).
+            Дашборд «DocMasker — Рабочая очередь»; job_id и error_code — в
+            структурных логах воркера, никогда не в теле ответа.
+
+      - alert: DocMaskerWorkerQueueBacklog
+        # PROVISIONAL: 5m for the p95 of OBSERVED queue age (the histogram is
+        # recorded when a job is claimed, so this is a proxy for a live backlog).
+        expr: |
+          sum(dm_jobs_active) > 0
+          and histogram_quantile(0.95, sum by (le) (rate(dm_job_queue_age_seconds_bucket[5m]))) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Очередь заданий DocMasker не продвигается"
+          description: >-
+            p95 времени ожидания выбранных заданий больше 5 минут при непустой
+            очереди. Проверьте воркер, JOBS_CONCURRENCY/JOBS_MAX_ACTIVE и пул
+            PostgreSQL. Дашборд «DocMasker — Рабочая очередь»; job_id — в логах
+            воркера (поле job_id).
+
+      - alert: DocMaskerWorkerLeaseStuck
+        # PROVISIONAL: 5m without a heartbeat, or any rejected lease renewal.
+        expr: |
+          max(dm_jobs_running) > 0
+          and (
+            time() - max(dm_worker_heartbeat_timestamp_seconds) > 300
+            or increase(dm_lease_renew_failures_total[5m]) > 0
+          )
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Задания зависли в running (lease не обновляется)"
+          description: >-
+            Есть running-задания, но heartbeat воркера пропал или обновление
+            лизы отклонено. По JOBS_LEASE_SECONDS задания будут перехвачены.
+            Дашборд «DocMasker — Рабочая очередь»; job_id/worker_id — в
+            структурных логах воркера.
+
+      - alert: DocMaskerLeaseExpiredBurst
+        # PROVISIONAL: more than 3 reclaimed leases in 15m suggests worker churn.
+        expr: sum(increase(dm_lease_expired_total[15m])) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Много истёкших лиз заданий DocMasker"
+          description: >-
+            Воркеры теряют задания или не успевают heartbeats. Дашборд
+            «DocMasker — Рабочая очередь»; job_id и worker_id ищите в логах
+            воркера (структурные поля job_id/worker_id).
+
+  - name: docmasker-stack
+    interval: 30s
+    rules:
+      # G3: full stack liveness. Pushgateway is deliberately absent — DocMasker
+      # has no batch push, the worker is job docmasker-worker above.
+      - alert: DocMaskerPrometheusSelfScrapeDown
+        expr: up{job="prometheus"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus не скрапит сам себя"
+          description: >-
+            Санити-серия up{job="prometheus"} пропала — коллектор мёртв или
+            недоступен. Дашборд «DocMasker — Ошибки API»; проверьте логи
+            контейнера dm-prometheus (request_id приложения здесь не поможет).
+
+      - alert: DocMaskerLokiDown
+        expr: up{job="loki"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki недоступен для Prometheus"
+          description: >-
+            Логи продолжают писаться в файлы, Alloy буферизует их, но поиск в
+            Grafana не работает. Дашборд «DocMasker — Ошибки API»; когда Loki
+            вернётся, ищите request_id/job_id в структурированных логах.
+
+      - alert: DocMaskerAlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager недоступен — письма не уходят"
+          description: >-
+            Правила продолжают срабатывать в Prometheus (localhost:9090/alerts),
+            но маршрутизация и SMTP-доставка остановились. Дашборд
+            «DocMasker — Ошибки API»; request_id/job_id смотрите в Loki.
+
+      - alert: DocMaskerGrafanaDown
+        expr: up{job="grafana"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grafana недоступна"
+          description: >-
+            Дашборды «DocMasker — Ошибки API / Рабочая очередь / Кэш / Диск
+            артефактов» не открываются. Loki, Prometheus и Alertmanager при этом
+            могут продолжать работать; request_id/job_id доступны через Loki API
+            напрямую.
