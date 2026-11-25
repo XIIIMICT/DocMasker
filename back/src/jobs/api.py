@@ -19,6 +19,7 @@ from .dependencies import artifact_store, job_repository
 from .repository import JobNotFoundError, JobQueueFullError
 from .routing import enqueue, enqueue_from_path, job_urls
 from .schemas import JobAccepted, JobStatusResponse
+from .storage import ArtifactError
 
 if TYPE_CHECKING:
     from .models import Job, JobKind
@@ -166,10 +167,16 @@ async def job_result(job_id: str) -> Response:
     if job.status != "succeeded" or job.result_key is None:
         raise ApiError("result_not_ready", "Результат ещё не готов.", status.HTTP_409_CONFLICT)
     store = artifact_store()
+    try:
+        # Legacy rows may still reference the shared "result" suffix; new
+        # workers publish attempt-scoped immutable keys.
+        path = store.path_for(job_id, "result") if job.result_key == "result" else store.path_for_result(job.result_key)
+    except ArtifactError as error:
+        raise ApiError("result_expired", "Некорректный идентификатор задания.", status.HTTP_404_NOT_FOUND) from error
     # Defense in depth for CodeQL: normalise the untrusted path and require it
     # to be contained in the private spool root before streaming it.
     root_real = os.path.realpath(str(store.root))  # noqa: ASYNC240 - fast realpath, required by CodeQL
-    safe_path = os.path.realpath(str(store.path_for(job_id, "result")))  # noqa: ASYNC240
+    safe_path = os.path.realpath(str(path))  # noqa: ASYNC240
     if not safe_path.startswith(root_real + os.sep):
         raise ApiError("result_expired", "Некорректный идентификатор задания.", status.HTTP_404_NOT_FOUND)
     path = Path(safe_path)

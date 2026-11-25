@@ -169,6 +169,14 @@ remains a single-host constraint; ADR-0002's SQLite text becomes historical.
       the isolated CI production-image stack (22/22 each, incl. the 202 job
       path through the PostgreSQL-backed worker).
 
+**Follow-up P0.1 (2026-11-26):** result artifacts are attempt-scoped
+(`<job_id>.result.<lease_token>`), written immutably before the fenced
+`succeeded` transition; the result endpoint streams only the DB-referenced key.
+`fail()` requires status + owner + token + live DB lease and returns explicit
+`ownership_lost` instead of an ambiguous terminal `failed`; cancellation
+acknowledgement is fenced/idempotent and drives cleanup only after PostgreSQL
+confirms `cancelled`. Lease loss and cancellation are separate worker paths.
+
 **Implemented in Phase 8 (2026-11-24):** API/agent-doc refresh and release
 verification. A lifecycle drill found that a transient PostgreSQL outage
 (database restart) killed the worker through an uncaught `OperationalError` in
