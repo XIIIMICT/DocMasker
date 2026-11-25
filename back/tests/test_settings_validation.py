@@ -88,9 +88,13 @@ def test_worker_metrics_port_and_host_are_validated() -> None:
     assert settings.worker_metrics_host == "127.0.0.1"
 
 
-def test_database_url_is_built_from_postgres_components() -> None:
+def test_database_url_is_built_from_postgres_components(monkeypatch: pytest.MonkeyPatch) -> None:
     """Host-side seed uses POSTGRES_HOST/PORT, not the docker service name."""
+    # CI sets DATABASE_URL for Alembic/tests; this case checks the component
+    # fallback, so remove the override for this test only.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     settings = _settings(
+        database_url=None,
         postgres_user="u",
         postgres_password="p",  # noqa: S106 - synthetic test value
         postgres_db="d",

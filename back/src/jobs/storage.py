@@ -37,9 +37,18 @@ class ArtifactStore:
             raise ArtifactError(msg)
         return self._root / f"{job_id}.{suffix}"
 
+    @property
+    def root(self) -> Path:
+        """Resolved spool root (for explicit containment checks by callers)."""
+        return self._root.resolve()
+
     def path_for(self, job_id: str, suffix: str) -> Path:
-        """Absolute path of a stored artifact (for streaming, no read into RAM)."""
-        return self._path(job_id, suffix)
+        """Absolute path of a stored artifact, validated against the spool root."""
+        path = self._path(job_id, suffix).resolve()
+        if not path.is_relative_to(self.root):
+            msg = "Некорректный идентификатор задания."
+            raise ArtifactError(msg)
+        return path
 
     def write(self, job_id: str, suffix: str, data: bytes) -> None:
         """Write `data` atomically (a crash never leaves a half-written file)."""
