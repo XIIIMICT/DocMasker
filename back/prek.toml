@@ -12,6 +12,7 @@ name = "ruff format"
 entry = "uv run ruff format"
 language = "system"
 files = '\.py$'
+require_serial = true
 
 [[repos.hooks]]
 id = "ruff-check"
@@ -19,14 +20,17 @@ name = "ruff check"
 entry = "uv run ruff check --fix"
 language = "system"
 files = '\.py$'
+require_serial = true
 
 [[repos.hooks]]
 id = "ty-check"
 name = "ty check"
+# Shared hook policy (maintainer decision, 2026-11-25): staged files at commit,
+# whole tree in CI. Do not switch this back to a whole-tree manual hook.
 entry = "uv run ty check"
 language = "system"
-pass_filenames = false
-files = '^(.*\.py|pyproject\.toml)$'
+files = '\.py$'
+require_serial = true
 
 [[repos.hooks]]
 id = "uv-lock"

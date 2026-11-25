@@ -9,16 +9,22 @@ repo = "local"
 [[repos.hooks]]
 id = "oxfmt"
 name = "oxfmt"
-entry = "bun format"
+# Call the binary directly: a project-wide `bun run format` would rewrite files
+# another agent is editing right now. Alignment with ReportCollector's hooks.
+entry = "bunx oxfmt"
 language = "system"
 files = '\.(cjs|css|cts|js|json|jsonc|jsx|mjs|mts|scss|ts|tsx)$'
+require_serial = true
 
 [[repos.hooks]]
 id = "oxlint"
 name = "oxlint"
-entry = "bun lint"
+# JS/TS only, exactly like ReportCollector: oxlint fails on CSS/SCSS/JSON-only
+# file lists, while oxfmt handles those.
+entry = "bunx oxlint --fix"
 language = "system"
 files = '\.(cjs|cts|js|jsx|mjs|mts|ts|tsx)$'
+require_serial = true
 
 [[repos.hooks]]
 id = "bun-test"
@@ -31,10 +37,12 @@ files = '^(package\.json|bunfig\.toml|tsconfig.*\.json|.*\.(cts|mts|ts|tsx))$'
 [[repos.hooks]]
 id = "bun-typecheck"
 name = "bun check"
+# Shared hook policy (maintainer decision, 2026-11-25): staged files at commit,
+# whole tree in CI. `bun check <files>` still resolves types across imports.
 entry = "bun typecheck"
 language = "system"
-pass_filenames = false
-files = '^(package\.json|bunfig\.toml|tsconfig.*\.json|.*\.(cts|mts|ts|tsx))$'
+files = '\.(cjs|cts|js|jsx|mjs|mts|ts|tsx)$'
+require_serial = true
 
 [[repos.hooks]]
 id = "bun-lock"

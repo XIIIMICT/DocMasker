@@ -53,6 +53,9 @@ The browser only calls its own origin; Next proxies `/api/*` server-side.
   per phase from `dev`, `git merge --no-ff`, no squash. `main`/`dev`/`feature/*`.
 - **Files:** UTF-8, no BOM, LF (`.gitattributes` + prek). PowerShell
   `Set-Content -Encoding UTF8` adds a BOM — use the file tools.
+- **Hook policy (shared, maintainer decision 2026-11-25):** every static checker
+  (ruff, ty, oxfmt/oxlint, `bun check`) runs on the **staged files** at commit
+  and on the **whole tree** in CI; no `manual` stage in any `prek.toml`.
 - **No debug artifacts** (`debug_*`, probes, stray scripts) in commits.
 - **Tooling:** `rg` over `grep`, `uv` over bare Python, `bun` over node.
 - **Ambiguous product/config/process decisions → ask the maintainer.** Only
