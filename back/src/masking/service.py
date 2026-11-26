@@ -13,7 +13,12 @@ value.
 """
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Protocol
+
+from fastapi import status
+
+from src.errors import ApiError
 
 from .mapping import (
     MaskKeys,
@@ -25,27 +30,94 @@ from .mapping import (
 from .rule_based import Entity, RuleBasedMasker, get_masker
 from .schemas import MaskedEntity, MaskRequest, MaskStats, UnmaskRequest
 
+#: Fixed Russian details for invalid spans — no offsets or entity values leak.
+_INVALID_SPAN_DETAILS = {
+    "type": "Позиции сущностей должны быть целыми числами.",
+    "bounds": "Позиции сущностей выходят за пределы текста.",
+    "empty": "Обнаружены пустые или обратные области сущностей.",
+    "overlap": "Обнаружены перекрывающиеся сущности.",
+    "mismatch": "Значение сущности не совпадает с фрагментом исходного текста.",
+}
+
+
+class InvalidSpanError(ApiError):
+    """Detected spans cannot be applied to the source without corrupting it."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__("invalid_span", _INVALID_SPAN_DETAILS[reason], status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+
+def _validated_spans(text: str, entities: Sequence[MaskedEntity]) -> list[MaskedEntity]:
+    """
+    Order entities by source offset and reject spans that cannot be applied.
+
+    Adjacent spans (``end == next.start``) are allowed; overlaps, empty or
+    reversed ranges, out-of-range offsets and values that disagree with their
+    source slice fail closed *before* any placeholder number is allocated.
+    """
+    if any(
+        isinstance(entity.start, bool)
+        or isinstance(entity.end, bool)
+        or not isinstance(entity.start, int)
+        or not isinstance(entity.end, int)
+        for entity in entities
+    ):
+        raise InvalidSpanError("type")
+
+    ordered = sorted(entities, key=lambda item: (item.start, item.end))
+    cursor = 0
+    for entity in ordered:
+        start, end = entity.start, entity.end
+        if start < 0 or end > len(text) or start > end:
+            raise InvalidSpanError("bounds")
+        if start == end:
+            raise InvalidSpanError("empty")
+        if start < cursor:
+            raise InvalidSpanError("overlap")
+        if entity.text != text[start:end]:
+            raise InvalidSpanError("mismatch")
+        cursor = end
+    return ordered
+
+
+class _SliceSource(Protocol):
+    """Read-only slice view required by `_mask_parts` (plain `str` satisfies it)."""
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, key: slice, /) -> str: ...
+
+
+def _mask_parts(text: _SliceSource, spans: Sequence[tuple[int, int, str]]) -> list[str]:
+    """Collect disjoint source slices and markers in document order, once."""
+    parts: list[str] = []
+    cursor = 0
+    for start, end, marker in spans:
+        if start > cursor:
+            parts.append(text[cursor:start])
+        parts.append(marker)
+        cursor = end
+    if cursor < len(text):
+        parts.append(text[cursor:])
+    return parts
+
 
 def mask_text(text: str, entities: list[MaskedEntity], keys: MaskKeys) -> str:
     """
-    Replace each detected span with ``[LABEL_N]``, working back-to-front.
+    Replace each detected span with ``[LABEL_N]`` in one left-to-right pass.
 
-    Positions refer to the original text; replacing in reverse keeps earlier
-    offsets valid. Numbers are allocated left-to-right first, so they follow
-    document order regardless of the rewrite order.
+    Spans are validated and sorted first; numbers are then allocated in
+    document order, so identical values still share one key and distinct
+    values keep their own number. Untouched slices and markers are appended
+    to one list and joined once — no intermediate full-string copies.
     """
-    placeholders = {
-        (entity.start, entity.end): keys.placeholder(entity.label, entity.text)
-        for entity in sorted(entities, key=lambda item: item.start)
-    }
+    ordered = _validated_spans(text, entities)
+    spans = [(entity.start, entity.end, keys.placeholder(entity.label, entity.text)) for entity in ordered]
     # Fail before any rewrite: a literal marker in the source that equals one
     # of the markers allocated here would gain a second meaning on restoration.
-    ensure_no_marker_collision([text], placeholders.values())
-    masked = text
-    for entity in sorted(entities, key=lambda item: item.start, reverse=True):
-        marker = placeholders[(entity.start, entity.end)]
-        masked = masked[: entity.start] + marker + masked[entity.end :]
-    return masked
+    ensure_no_marker_collision([text], [marker for _start, _end, marker in spans])
+    return "".join(_mask_parts(text, spans))
 
 
 def unmask_text(text: str, placeholders: Mapping[str, str]) -> str:
