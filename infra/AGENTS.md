@@ -21,8 +21,12 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   without seeding; `just revision "msg"` creates an Alembic revision.
 - `infra/compose.monitoring.yaml` is included with **no profiles**: alloy is
   always started (`just monitoring`, external Loki), the rest is selected by
-  `just monitoring-stand`. See `docs/ARCHITECTURE.md` (Observability) and
-  `docs/OPERATIONS.md` §8. `just drift-check` runs the workspace-level
+  `just monitoring-stand`. Every published monitoring/admin port is bound to
+  `127.0.0.1` by default; `infra/check-monitoring-binds.py` (CI `config` job)
+  rejects host-wide bindings in all Compose files except the deliberately
+  public `front` service. Expose a dashboard only through a separately
+  configured authenticated reverse proxy. See `docs/ARCHITECTURE.md`
+  (Observability) and `docs/OPERATIONS.md` §8. `just drift-check` runs the workspace-level
   `../infra/check-drift.py` to verify byte-identical shared Loki configs and
   Alertmanager entrypoints across all three projects and the DWH stack.
 - `infra/compose.ci.yaml` is the isolated CI stack: back **18001**, front

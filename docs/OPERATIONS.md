@@ -313,10 +313,14 @@ just monitoring-stand  # Loki + Grafana + Alloy + Prometheus + Alertmanager + re
 
 `LOKI_URL`, `GF_SECURITY_ADMIN_USER` and `GF_SECURITY_ADMIN_PASSWORD` are
 mandatory (`:?` in compose). Host ports: Alloy UI **12345**, Loki **3100**,
-Grafana **3000**, Prometheus **9090**, Alertmanager **9093**. The SMTP relay is
-internal only (port 25 inside `dm-net`). These are the same ports the other two
-projects use — run one project's full stand at a time, or remap host ports in a
-local override (the container ports stay fixed).
+Grafana **3000**, Prometheus **9090**, Alertmanager **9093** — all published on
+`127.0.0.1` only. The SMTP relay is internal only (port 25 inside `dm-net`).
+`infra/check-monitoring-binds.py` runs in CI and rejects host-wide bindings for
+internal/admin services; to expose a dashboard, put an authenticated reverse
+proxy in front of the loopback port rather than widening the Compose binding.
+These are the same ports the other two projects use — run one project's full
+stand at a time, or remap host ports in a local override (the container ports
+stay fixed). External/central Loki mode (`just monitoring`) is unchanged.
 
 Prometheus targets are rendered at container start from `.env`; for the app in
 this same compose set `BACKEND_METRICS_HOST=back` and

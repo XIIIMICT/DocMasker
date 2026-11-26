@@ -32,7 +32,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "12345:12345"
+      - "127.0.0.1:12345:12345"
 
   loki:
     container_name: dm-loki
@@ -50,7 +50,7 @@ services:
       - loki-data:/loki
     networks: [net]
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
 
   prometheus:
     container_name: dm-prometheus
@@ -82,7 +82,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
 
   alertmanager:
     container_name: dm-alertmanager
@@ -103,7 +103,7 @@ services:
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     networks: [net]
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
 
   grafana:
     container_name: dm-grafana
@@ -121,7 +121,7 @@ services:
       - loki
     networks: [net]
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
 
   # In-project relay: Alertmanager -> relay is plain SMTP:25; relay -> corporate
   # SMTP uses STARTTLS:587 with the SMTP_RELAY_* credentials from .env.
