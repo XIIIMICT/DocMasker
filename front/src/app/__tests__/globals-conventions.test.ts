@@ -1,0 +1,124 @@
+import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+
+const css = readFileSync(new URL("../globals.css", import.meta.url), "utf8");
+const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+type Rule = { selector: string; body: string };
+
+/** Flat list of innermost CSS rules; @media wrappers have nested braces and are skipped. */
+function rules(text: string): Rule[] {
+    return [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+        selector: match[1].trim().replace(/\s+/g, " "),
+        body: match[2],
+    }));
+}
+
+function reducedMotionBlock(): string {
+    const marker = "@media (prefers-reduced-motion: reduce)";
+    const start = withoutComments.indexOf(marker);
+    if (start < 0) return "";
+    const open = withoutComments.indexOf("{", start + marker.length);
+    let depth = 0;
+    for (let index = open; index < withoutComments.length; index += 1) {
+        const char = withoutComments[index];
+        if (char === "{") depth += 1;
+        if (char === "}") {
+            depth -= 1;
+            if (depth === 0) return withoutComments.slice(open + 1, index);
+        }
+    }
+    return "";
+}
+
+describe("globals.css reduced-motion policy", () => {
+    it("covers every app-owned animated selector", () => {
+        const animated = rules(withoutComments)
+            .filter((rule) =>
+                /(?:^|;)\s*(?:transition|animation|scroll-behavior)\s*:/.test(rule.body),
+            )
+            .flatMap((rule) => rule.selector.split(",").map((selector) => selector.trim()))
+            .filter((selector) => selector.length > 0 && !selector.startsWith("@"))
+            .sort();
+
+        expect(animated).toEqual([".support-link", ".support-link__label", "html"]);
+    });
+
+    it("routes every transition duration through an app motion token", () => {
+        const transitions = [...withoutComments.matchAll(/transition\s*:\s*([^;]+);/g)].map(
+            (match) => match[1],
+        );
+
+        expect(transitions).toHaveLength(3);
+        for (const transition of transitions) {
+            expect(transition).toMatch(/var\(--app-motion-[\w-]+\)/);
+            expect(transition).not.toMatch(/\d+(?:\.\d+)?m?s\b/);
+        }
+    });
+
+    it("zeroes every token referenced by an animated selector inside the reduce block", () => {
+        const block = reducedMotionBlock();
+        expect(block).not.toBe("");
+
+        const transitions = [...withoutComments.matchAll(/transition\s*:\s*([^;]+);/g)].map(
+            (match) => match[1],
+        );
+        const referenced = [
+            ...new Set(
+                [...transitions.join(" ").matchAll(/var\((--app-motion-[\w-]+)\)/g)].map(
+                    (match) => match[1],
+                ),
+            ),
+        ].sort();
+        const reducedTokens = new Map(
+            [...block.matchAll(/(--app-motion-[\w-]+)\s*:\s*([^;]+);/g)].map((match) => [
+                match[1],
+                match[2].trim(),
+            ]),
+        );
+
+        expect(referenced).toEqual([...reducedTokens.keys()].sort());
+        for (const token of referenced) {
+            expect(reducedTokens.get(token)).toBe("0ms");
+        }
+    });
+
+    it("does not override HeroUI motion policy or hide the end states", () => {
+        const block = reducedMotionBlock();
+
+        expect(rules(block).map((rule) => rule.selector)).toEqual([":root"]);
+        expect(block).not.toMatch(/!important|will-change|display\s*:|visibility\s*:|opacity\s*:/);
+        expect(css).not.toMatch(/will-change/);
+
+        const hoverRule = rules(withoutComments).find(
+            (rule) => rule.selector === ".support-link:hover, .support-link:focus-visible",
+        );
+        expect(hoverRule?.body).toMatch(/gap:\s*0\.45rem/);
+
+        const labelRule = rules(withoutComments).find(
+            (rule) =>
+                rule.selector ===
+                ".support-link:hover .support-link__label, .support-link:focus-visible .support-link__label",
+        );
+        expect(labelRule?.body).toMatch(/max-width:\s*20rem/);
+        expect(labelRule?.body).toMatch(/opacity:\s*1\b/);
+    });
+});
+
+describe("globals.css breakpoint conventions", () => {
+    it("keeps the documented HeroUI sm/md pin and app-owned layout widths", () => {
+        expect(css).toMatch(/--breakpoint-sm:\s*0rem;/);
+        expect(css).toMatch(/--breakpoint-md:\s*0rem;/);
+
+        const mediaQueries = [...css.matchAll(/@media\s*([^{}]+)\s*\{/g)].map((match) =>
+            match[1].trim(),
+        );
+        expect(mediaQueries).toContain("(width < 64rem)");
+        expect(mediaQueries).toContain("(width < 40rem)");
+        expect(mediaQueries).toContain("(prefers-reduced-motion: reduce)");
+    });
+
+    it("does not rely on Tailwind sm:/md: utilities in app stylesheets", () => {
+        expect(withoutComments).not.toMatch(/(?:^|[\s"])(?:sm|md):/);
+    });
+});
