@@ -151,7 +151,14 @@ export function useMaskerWorkflow() {
                 if (active) update({ demaskOccurrences: counts });
             })
             .catch(() => {
-                if (active) update({ demaskOccurrences: null });
+                if (!active) return;
+                // Includes a failed lazy JSZip chunk load: surface it through
+                // the same result-pane error path as every other async failure
+                // instead of swallowing it into a null count.
+                update({
+                    demaskOccurrences: null,
+                    error: "Не удалось подготовить данные документа.",
+                });
             });
         return () => {
             active = false;

@@ -1,7 +1,39 @@
 "use client";
 
-import { renderAsync } from "docx-preview";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+
+/** Rapid keys edits must not re-walk the whole rendered document on each keystroke. */
+export const HIGHLIGHT_DEBOUNCE_MS = 120;
+/** Stable default so an unhighlighted viewer never re-schedules a pass. */
+const NO_HIGHLIGHTS: string[] = [];
+
+type TimerRef = { current: ReturnType<typeof setTimeout> | null };
+
+/** Cancel pending highlight work (blob switch, unmount, or a newer keys edit). */
+export function cancelHighlightUpdate(timerRef: TimerRef): void {
+    if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+    }
+}
+
+/**
+ * Coalesce re-highlighting: only the last scheduled pass survives the delay.
+ * `isCurrent` lets the caller drop work that became stale while it waited
+ * (e.g. the generation changed under a pending timer).
+ */
+export function scheduleHighlightUpdate(
+    timerRef: TimerRef,
+    apply: () => void,
+    isCurrent: () => boolean,
+    delayMs: number,
+): void {
+    cancelHighlightUpdate(timerRef);
+    timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        if (isCurrent()) apply();
+    }, delayMs);
+}
 
 /**
  * Renders a .docx Blob into a scrollable pane via the `docx-preview` library.
@@ -15,11 +47,15 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
  * the rendered text is wrapped in a `<mark>`. The downloaded document is never
  * altered — this just tints the on-screen result. Pass the mask placeholders
  * for a masked preview, or the restored values for a demasked one.
+ *
+ * `docx-preview` (and its JSZip dependency) is loaded with a dynamic import
+ * the first time a document is actually rendered, so a text-only session
+ * never downloads the preview bundle.
  */
 export function DocxViewer({
     blob,
     surfaceRef: externalRef,
-    highlight = [],
+    highlight = NO_HIGHLIGHTS,
 }: {
     blob: Blob;
     surfaceRef?: RefObject<HTMLDivElement | null>;
@@ -28,27 +64,44 @@ export function DocxViewer({
     const internalRef = useRef<HTMLDivElement>(null);
     const surfaceRef = externalRef ?? internalRef;
     const [localError, setLocalError] = useState<string | null>(null);
-    // Latest highlight list, read by the render pass without re-triggering it.
+    // Latest values, read by async callbacks without re-triggering a render.
     const highlightRef = useRef(highlight);
     highlightRef.current = highlight;
     // Whether a document has finished rendering (so highlights can be applied).
     const renderedRef = useRef(false);
-    // Generation guard: renderAsync() is async and can resolve after the Blob
-    // changed or the component unmounted. Each render/cleanup bumps the
-    // generation; a stale render must not write its DOM or apply highlights.
+    // Generation guard: loading/rendering is async and can resolve after the
+    // Blob changed or the component unmounted. Each render/cleanup bumps the
+    // generation; a stale pass must not write its DOM or apply highlights.
     const generationRef = useRef(0);
     const lastAppliedRef = useRef(0);
+    const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const applyHighlight = useCallback(() => {
+        const container = surfaceRef.current;
+        if (!container || !renderedRef.current) return;
+        if (lastAppliedRef.current !== generationRef.current) return;
+        highlightTexts(container, highlightRef.current);
+    }, [surfaceRef]);
+    const highlightIsCurrent = useCallback(
+        () => renderedRef.current && lastAppliedRef.current === generationRef.current,
+        [],
+    );
 
     // Render once per document, then apply the current highlight. A change to
-    // the highlight list alone re-applies it without re-parsing the document.
+    // the highlight list alone re-applies it (debounced) without re-parsing
+    // the document.
     const render = useCallback(async () => {
         const container = surfaceRef.current;
         if (!container) return;
         const generation = ++generationRef.current;
+        cancelHighlightUpdate(highlightTimerRef);
         container.innerHTML = "";
         setLocalError(null);
         renderedRef.current = false;
         try {
+            const { renderAsync } = await import("docx-preview");
+            // The import itself may outlive a file switch or an unmount.
+            if (generation !== generationRef.current) return;
             await renderAsync(blob, container);
             // Ignore a stale render: a newer Blob was selected, or cleanup ran.
             if (generation !== generationRef.current) return;
@@ -59,6 +112,8 @@ export function DocxViewer({
             }
         } catch {
             if (generation !== generationRef.current) return;
+            // A failed chunk load surfaces through this component's existing
+            // error path — never a silent unhandled rejection.
             setLocalError("Не удалось отобразить предпросмотр документа.");
         }
     }, [blob, surfaceRef]);
@@ -66,23 +121,28 @@ export function DocxViewer({
     useEffect(() => {
         void render();
         return () => {
-            // Invalidate any in-flight renderAsync() before clearing the DOM.
+            // Invalidate any in-flight import/render before clearing the DOM,
+            // and drop highlight work scheduled for this generation.
             generationRef.current += 1;
             renderedRef.current = false;
+            cancelHighlightUpdate(highlightTimerRef);
             if (surfaceRef.current) {
                 surfaceRef.current.innerHTML = "";
             }
         };
     }, [render, surfaceRef]);
 
-    // Re-apply highlights when the list changes, but only once a render exists
-    // and only for the generation currently on screen.
+    // Coalesce rapid keys edits, but only once a render exists and only for
+    // the generation currently on screen. Cleanup cancels a stale timer.
     useEffect(() => {
-        const container = surfaceRef.current;
-        if (!container || !renderedRef.current) return;
-        if (lastAppliedRef.current !== generationRef.current) return;
-        highlightTexts(container, highlight);
-    }, [highlight, surfaceRef]);
+        scheduleHighlightUpdate(
+            highlightTimerRef,
+            applyHighlight,
+            highlightIsCurrent,
+            HIGHLIGHT_DEBOUNCE_MS,
+        );
+        return () => cancelHighlightUpdate(highlightTimerRef);
+    }, [highlight, surfaceRef, applyHighlight, highlightIsCurrent]);
 
     return (
         <div className="docx-viewer">

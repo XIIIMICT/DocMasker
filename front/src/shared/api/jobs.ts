@@ -1,7 +1,6 @@
-import JSZip from "jszip";
-
 import { JobFailedError } from "@/shared/api/jobs-types";
 import type { JobAccepted, JobResult, JobStatus } from "@/shared/api/jobs-types";
+import { loadJsZip } from "@/shared/api/lazy-zip";
 import { JOB_WAIT_TIMEOUT_MS, POLL_BASE_MS, POLL_MAX_MS } from "@/shared/api/timeouts";
 
 export { JobFailedError } from "@/shared/api/jobs-types";
@@ -68,7 +67,7 @@ export async function waitForJob(accepted: JobAccepted, signal?: AbortSignal): P
         if (status.status === "succeeded" && status.result_url) {
             const resultResponse = await fetch(status.result_url, { signal, cache: "no-store" });
             if (!resultResponse.ok) throw new JobFailedError("result_unavailable");
-            const zip = await JSZip.loadAsync(await resultResponse.blob());
+            const zip = await (await loadJsZip()).loadAsync(await resultResponse.blob());
             const entries = new Map<string, Blob>();
             for (const [name, entry] of Object.entries(zip.files)) {
                 if (!entry.dir) entries.set(name, await entry.async("blob"));
