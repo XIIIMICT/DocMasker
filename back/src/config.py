@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     cache_max_entries: int = Field(default=100_000, validation_alias="CACHE_MAX_ENTRIES")
     cache_max_memory_mb: int = Field(default=256, validation_alias="CACHE_MAX_MEMORY_MB")
     #: Bump when detection/masking semantics change the output (§4.3).
-    masking_ruleset_version: int = Field(default=1, validation_alias="MASKING_RULESET_VERSION")
+    #: v2: bounded long-token window scanning and single-pass demasking.
+    masking_ruleset_version: int = Field(default=2, validation_alias="MASKING_RULESET_VERSION")
     #: Bump when the result manifest / archive contract changes (§4.3).
     result_manifest_version: int = Field(default=1, validation_alias="RESULT_MANIFEST_VERSION")
     #: Validated contents of active exception/lexicon files (Phase 4). The
@@ -84,6 +85,10 @@ class Settings(BaseSettings):
     detection_min_chars: int = Field(default=8_000, validation_alias="DETECTION_MIN_CHARS")
     detection_chunk_chars: int = Field(default=4_096, validation_alias="DETECTION_CHUNK_CHARS")
     detection_overlap_chars: int = Field(default=512, validation_alias="DETECTION_OVERLAP_CHARS")
+    #: DM-5 hard ceiling for one window: when a chunk has no token boundary,
+    #: detection scans forward to the next one but never past this limit. An
+    #: even longer unbroken run fails closed instead of being cut in half.
+    detection_max_window_chars: int = Field(default=16_384, validation_alias="DETECTION_MAX_WINDOW_CHARS")
     #: Bounded queue / worker (one warm masker per thread).
     jobs_max_active: int = Field(default=16, validation_alias="JOBS_MAX_ACTIVE")
     jobs_concurrency: int = Field(default=2, validation_alias="JOBS_CONCURRENCY")
@@ -134,6 +139,7 @@ class Settings(BaseSettings):
             "detection_min_chars",
             "detection_chunk_chars",
             "detection_overlap_chars",
+            "detection_max_window_chars",
             "jobs_max_active",
             "jobs_concurrency",
             "jobs_max_attempts",
@@ -198,6 +204,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.detection_overlap_chars >= self.detection_chunk_chars:
             msg = "DETECTION_OVERLAP_CHARS должен быть меньше DETECTION_CHUNK_CHARS."
+            raise ValueError(msg)
+        if self.detection_max_window_chars < self.detection_chunk_chars:
+            msg = "DETECTION_MAX_WINDOW_CHARS должен быть не меньше DETECTION_CHUNK_CHARS."
             raise ValueError(msg)
         if self.jobs_lease_seconds <= self.db_connect_timeout_seconds:
             msg = "Время аренды задания должно превышать таймаут подключения к БД."

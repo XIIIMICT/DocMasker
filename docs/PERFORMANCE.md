@@ -86,6 +86,7 @@ tracks re-measurement.
 | `SYNC_MAX_TEXT_CHARS` | 20000 | text above this → `202 + JobAccepted` |
 | `SYNC_MAX_DOCX_BYTES` | 1048576 | DOCX bytes above this → job |
 | `SYNC_MAX_DOCX_PARAGRAPHS` | 200 | paragraph estimate above this → job |
+| `DETECTION_MAX_WINDOW_CHARS` | 16384 | hard per-window ceiling for an unbroken token (DM-5; ≥ chunk) |
 | `JOBS_MAX_ACTIVE` | 16 | bounded queue → 429 |
 | `JOBS_CONCURRENCY` | 2 | worker warm threads / sync executor slots (`×2`) |
 | `JOBS_MAX_ATTEMPTS` | 3 | retries with backoff |
@@ -117,7 +118,10 @@ The ~4.6–7.5× speedup and flat ~144 MB RSS come from these changes:
 1. `masking/windowed.py` splits long text into overlapping structural windows
    (8 KB min / 4096 chars / 512 overlap), re-bases spans to absolute offsets,
    never cuts through a token and deduplicates boundary spans deterministically
-   (§9.1). `checkpoint` runs between windows.
+   (§9.1). `checkpoint` runs between windows. DM-5 adds a 16,384-char hard
+   ceiling: when no boundary fits in a chunk, that window extends forward to the
+   next whitespace but no further; an even longer unbroken run fails with a 422
+   instead of being cut. The common case adds no extra window.
 2. `_find_addresses` feeds `AddrExtractor` only sentence-sized ranges carrying
    an anchored address marker (abbreviations/postcode/`адрес:`), instead of
    the whole document. Abbreviation dots are not treated as sentence ends.

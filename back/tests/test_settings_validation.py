@@ -19,6 +19,10 @@ _ALIASES: dict[str, str] = {
     "sync_max_text_chars": "SYNC_MAX_TEXT_CHARS",
     "sync_max_docx_bytes": "SYNC_MAX_DOCX_BYTES",
     "sync_max_docx_paragraphs": "SYNC_MAX_DOCX_PARAGRAPHS",
+    "detection_min_chars": "DETECTION_MIN_CHARS",
+    "detection_chunk_chars": "DETECTION_CHUNK_CHARS",
+    "detection_overlap_chars": "DETECTION_OVERLAP_CHARS",
+    "detection_max_window_chars": "DETECTION_MAX_WINDOW_CHARS",
     "db_pool_size": "DB_POOL_SIZE",
     "db_max_overflow": "DB_MAX_OVERFLOW",
     "db_connect_timeout_seconds": "DB_CONNECT_TIMEOUT_SECONDS",
@@ -57,6 +61,10 @@ def _settings(**overrides: object) -> Settings:
         "sync_max_text_chars",
         "sync_max_docx_bytes",
         "sync_max_docx_paragraphs",
+        "detection_min_chars",
+        "detection_chunk_chars",
+        "detection_overlap_chars",
+        "detection_max_window_chars",
         "db_pool_size",
         "db_max_overflow",
         "jobs_concurrency",
@@ -127,6 +135,19 @@ def test_sync_thresholds_cannot_exceed_hard_limits() -> None:
         _settings(max_text_chars=100, sync_max_text_chars=101)
     with pytest.raises(ValidationError, match="SYNC_MAX_DOCX_BYTES"):
         _settings(max_upload_mb=1, sync_max_docx_bytes=2 * 1024 * 1024)
+
+
+def test_detection_window_bounds_are_ordered() -> None:
+    with pytest.raises(ValidationError, match="DETECTION_OVERLAP_CHARS"):
+        _settings(detection_chunk_chars=128, detection_overlap_chars=128)
+    with pytest.raises(ValidationError, match="DETECTION_MAX_WINDOW_CHARS"):
+        _settings(detection_chunk_chars=4096, detection_max_window_chars=4095)
+    settings = _settings(
+        detection_chunk_chars=128,
+        detection_overlap_chars=48,
+        detection_max_window_chars=512,
+    )
+    assert settings.detection_max_window_chars == 512
 
 
 def test_lease_exceeds_db_connect_timeout() -> None:

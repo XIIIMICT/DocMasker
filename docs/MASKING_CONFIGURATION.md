@@ -216,8 +216,44 @@ median wall; `detect()` over all sentences):
 The extra ~50% wall on the mixed corpus buys 188 previously missed addresses;
 prose without address signals is unchanged at 0% nominations. The YAML edit
 changes `config_digest()` automatically, so cached results cannot be served from
-a stale entry; bumping `MASKING_RULESET_VERSION` is a separate maintainer
-decision (`back/src/config.py`, outside this change's scope).
+a stale entry. `MASKING_RULESET_VERSION` is now **2**: the single-pass
+demasking and bounded long-token windowing changes alter detection/restore
+semantics, so pre-v2 cache entries are no longer served.
+
+## Long-text windowing bounds (DM-5)
+
+`masking/windowed.py` detects on bounded overlapping windows for text above
+`DETECTION_MIN_CHARS`. Chunk size and overlap are explicit settings
+(`DETECTION_CHUNK_CHARS` = 4096, `DETECTION_OVERLAP_CHARS` = 512); a fourth
+setting is the hard per-window ceiling:
+
+| Setting | Default | Validation |
+|---|---|---|
+| `DETECTION_MIN_CHARS` | 8000 | positive |
+| `DETECTION_CHUNK_CHARS` | 4096 | positive, > overlap |
+| `DETECTION_OVERLAP_CHARS` | 512 | positive, < chunk |
+| `DETECTION_MAX_WINDOW_CHARS` | 16384 | positive, ≥ chunk |
+
+DM-5 fixes the "never cut a token" guarantee: if a window contains no structural
+or whitespace boundary, detection scans **forward from the chunk limit to the
+next whitespace**, extending that one window only up to
+`DETECTION_MAX_WINDOW_CHARS`. The next window still starts `overlap_chars`
+before the boundary, so offset rebasing and deterministic boundary dedupe are
+unchanged. Windows never grow past the ceiling, and `checkpoint` still runs
+between windows (not per character).
+
+An unbroken run longer than the ceiling cannot be masked safely: `iter_windows`
+raises `OversizedTokenError` (API code `oversized_token`, 422, Russian detail
+that names the setting and suggests adding separators or raising the ceiling).
+The detail never echoes the input. No entity is silently dropped, partially
+masked or cut in half. Long tokens up to the ceiling are handled normally;
+short texts (≤ `DETECTION_MIN_CHARS`) keep the single-window path and bypass the
+ceiling because the whole text is already present in one window.
+
+The conservative default of 16,384 chars is four chunk sizes: it covers any
+realistic URL, email or identifier while keeping a single window's detector
+work bounded. Raising it is a deliberate operator decision; the bound is not
+derived from input length and is never unbounded.
 
 ## Recipes
 
