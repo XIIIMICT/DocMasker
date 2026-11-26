@@ -6,8 +6,21 @@ export function downloadBlob(blob: Blob, name: string): void {
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = name;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    document.body.appendChild(anchor);
+    try {
+        anchor.click();
+    } finally {
+        anchor.remove();
+        // `click()` only queues the download: the browser starts reading the
+        // Blob URL in a later task, so a synchronous revoke can abort it
+        // (notably Safari, and large files). A zero-delay timer moves the
+        // revoke to the next macrotask — the earliest point after the click
+        // has been handed off — instead of a magic millisecond delay. A
+        // microtask would still run before the download task, so it is not
+        // enough. `finally` guarantees cleanup even if `click()` throws; the
+        // error itself is not caught.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
 }
 
 export function downloadMaskedFile(maskedFile: MaskedFileResult | null): void {
