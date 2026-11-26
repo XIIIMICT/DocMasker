@@ -3,12 +3,8 @@
 import { ACCEPTED_EXTENSIONS } from "@/features/masking/types";
 import { useMaskerWorkflow } from "@/features/masking/use-masker-workflow";
 import { Brand } from "@/shared/ui/brand";
-import {
-    DemaskInputPane,
-    MaskInputPane,
-    MaskResultPane,
-    UnmaskResultPane,
-} from "@/shared/ui/panes";
+import { DemaskInputPane, MaskInputPane } from "@/shared/ui/input-panes";
+import { MaskResultPane, UnmaskResultPane } from "@/shared/ui/result-panes";
 import { SupportButton } from "@/shared/ui/support-button";
 import { ThemeSwitcher } from "@/shared/ui/theme-switcher";
 

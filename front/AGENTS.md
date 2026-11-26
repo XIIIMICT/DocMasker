@@ -101,7 +101,8 @@ repo. Verified gotchas:
 
 `app/page.tsx` reads `SUPPORT_MAIL` and renders `app/masker-page.tsx` (thin view);
 handlers live in `features/masking/use-masker-workflow.ts`, presentation in
-`shared/ui/panes.tsx`; `shared/api/*` holds adapters and proxies; `app/api/*` are
+`shared/ui/input-panes.tsx`, `result-panes.tsx`, `doc-preview-shell.tsx` and
+`pane-types.ts`; `shared/api/*` holds adapters and proxies; `app/api/*` are
 server-side proxies (browser only calls its own origin);
 `src/instrumentation.ts` sets bounded undici timeouts.
 
