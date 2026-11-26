@@ -17,6 +17,26 @@ AGENTS/doc refresh with release verification. Per-phase evidence, test counts
 and before/after benchmarks: `docs/PRODUCTION_READINESS.md`,
 `docs/PERFORMANCE.md`.
 
+## Test-quality follow-ups (senior-qa audit, 2026-11-26)
+
+- **CI smoke discovery guard is weaker than documented.** The workflow's
+  `grep -q "smoke.spec.ts"` also matches `rerender-smoke.spec.ts` and
+  `hover-smoke.spec.ts`, so losing the main spec (24 of 36 tests) would still
+  pass. Acceptance: anchored filename match plus a minimum `--list` test count.
+- **Sleep-as-evidence waits.** `front/e2e/smoke.spec.ts:226-238` uses a 300 ms
+  sleep before asserting no request was sent, and `rerender-smoke.spec.ts:31`
+  sleeps 500 ms to prove "no re-render". Replace with deterministic route
+  interception / named debounce and a render counter. Nine magic-number sleeps
+  in `hover-smoke.spec.ts` can collapse to one named grace-period helper.
+- **Timing-dependent unit tests.** `jobs.test.ts:173` and
+  `docx-viewer-scheduling.test.ts:6` use real timers; switch to fake timers and
+  give `use-job-lifecycle.test.ts` `waitFor` calls explicit timeouts.
+- **Small cleanup:** extract the repeated raw CSS file-input selector, use
+  web-first `toHaveValue` instead of `expect.poll(inputValue())`, rename the
+  misleading "fresh baseline" coverage test, align
+  `local.playwright.config.ts` `testIgnore` with the CI config, and merge the
+  same-level duplicate assertions listed in `TEST-QUALITY-AUDIT.md`.
+
 ## Deferred by maintainer decision
 
 - **§8.2 — TypeScript types generated from live OpenAPI.** `openapi-typescript`
