@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from src.metrics import inc_lease_expired, observe_job_created, set_db_pool_metrics, set_jobs_active
 
-from .models import Claim, Job, JobKind, JobPhase
+from .models import PHASE_ORDER, Claim, Job, JobKind, JobPhase
 from .schema import ALLOWED_TRANSITIONS, jobs
 
 if TYPE_CHECKING:
@@ -42,6 +42,11 @@ class IllegalTransitionError(RuntimeError):
 
 #: Explicit fenced-mutation outcomes — never conflated with a terminal failure.
 OWNERSHIP_LOST = "ownership_lost"
+
+#: One transaction-scoped advisory lock serialises dedupe + capacity + insert.
+#: A per-key lock would not protect the *global* active-job limit; the critical
+#: section is short (three queries, no file I/O), so one lock is sufficient.
+ADMISSION_LOCK_KEY = 0x444D5F41444D494E  # "DM_ADMIN"
 
 
 def _now() -> datetime:
@@ -152,12 +157,16 @@ class JobRepository:
 
         PostgreSQL-side de-duplication: a concurrent identical submission
         reuses the existing staging/queued/running job instead of doing the
-        expensive work twice. Returns `(job, created)`.
+        expensive work twice. A transaction-scoped advisory lock serialises the
+        dedupe read, the active-count check and the insert, so neither duplicate
+        jobs nor an over-full queue can be created under concurrency. Returns
+        `(job, created)`.
         """
         job_id = uuid.uuid4()
         now = _now()
         attached_id: str | None = None
         with self._session() as session, session.begin():
+            session.execute(select(func.pg_advisory_xact_lock(ADMISSION_LOCK_KEY)))
             existing = session.execute(
                 select(jobs.c.id)
                 .where(
@@ -463,21 +472,19 @@ class JobRepository:
             cancel_requested=False,
         )
 
-    def heartbeat(
+    def renew_lease(
         self,
         job_id: str,
-        phase: JobPhase,
-        progress: int,
         *,
         lease_seconds: float,
         claim: Claim | None = None,
     ) -> bool:
         """
-        Renew the lease, fenced by the claim token when one is supplied.
+        Renew the lease only — never write phase or progress.
 
-        Phase/phase progress must be monotonic; a stale worker's update affects
-        0 rows and returns False. Cancellation is reported through the same
-        channel (`cancel_requested_at` set -> no renewal).
+        Fenced by worker/token and a live lease; cancellation is observed at
+        cooperative checkpoints, so a `cancelling` row keeps its lease while the
+        current owner drains instead of being misreported as ownership loss.
         """
         try:
             key = uuid.UUID(job_id)
@@ -487,27 +494,73 @@ class JobRepository:
             now = self._db_now(session)
             conditions = [
                 jobs.c.id == key,
-                jobs.c.status == "running",
+                jobs.c.status.in_(("running", "cancelling")),
                 jobs.c.lease_until > now,
             ]
             if claim is not None:
                 conditions += [
                     jobs.c.worker_id == claim.worker_id,
                     jobs.c.lease_token == uuid.UUID(claim.lease_token),
-                    jobs.c.cancel_requested_at.is_(None),
                 ]
             result = session.execute(
                 update(jobs)
                 .where(*conditions)
                 .values(
-                    phase=phase,
-                    progress=progress,
                     lease_until=now + timedelta(seconds=lease_seconds),
                     heartbeat_at=now,
                     updated_at=now,
                 )
             )
             return _affected(result) == 1
+
+    def report_progress(
+        self,
+        job_id: str,
+        phase: JobPhase,
+        progress: int,
+        *,
+        claim: Claim | None = None,
+    ) -> str:
+        """
+        Monotonic phase/progress update for the current owner, lease untouched.
+
+        Returns `ok` (applied or harmlessly ignored), `cancelled` or
+        `OWNERSHIP_LOST`. Stale out-of-order callbacks cannot regress a later
+        phase; cancellation is distinct from losing the lease.
+        """
+        try:
+            key = uuid.UUID(job_id)
+        except ValueError:
+            return OWNERSHIP_LOST
+        with self._session() as session, session.begin():
+            now = self._db_now(session)
+            conditions = [
+                jobs.c.id == key,
+                jobs.c.status.in_(("running", "cancelling")),
+                jobs.c.lease_until > now,
+            ]
+            if claim is not None:
+                conditions += [
+                    jobs.c.worker_id == claim.worker_id,
+                    jobs.c.lease_token == uuid.UUID(claim.lease_token),
+                ]
+            row = session.execute(
+                select(jobs.c.phase, jobs.c.progress, jobs.c.cancel_requested_at).where(*conditions).with_for_update()
+            ).one_or_none()
+            if row is None:
+                return OWNERSHIP_LOST
+            if row.cancel_requested_at is not None:
+                return "cancelled"
+            old_rank = PHASE_ORDER.index(row.phase) if row.phase in PHASE_ORDER else -1
+            new_rank = PHASE_ORDER.index(phase) if phase in PHASE_ORDER else -1
+            if new_rank < old_rank or (new_rank == old_rank and progress <= row.progress):
+                return "ok"  # stale callback: owner confirmed, no regression
+            result = session.execute(
+                update(jobs)
+                .where(jobs.c.id == key, jobs.c.status == "running")
+                .values(phase=phase, progress=progress, updated_at=now)
+            )
+            return "ok" if _affected(result) == 1 else OWNERSHIP_LOST
 
     def cancellation_requested(self, job_id: str, claim: Claim) -> bool:
         """Whether a cancel request was recorded for this owner (checkpoint)."""

@@ -4,9 +4,11 @@ Covers claims, leases, restart, TTL, staging and a PII-free schema. Requires
 TEST_DATABASE_URL.
 """
 
+import threading
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -108,23 +110,44 @@ def test_state_survives_repository_restart(settings: Settings) -> None:
     assert restored.result_key == "result"
 
 
-def test_heartbeat_updates_progress_and_lease(repo: JobRepository) -> None:
+def test_renew_lease_does_not_touch_progress(repo: JobRepository) -> None:
     job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
     repo.claim(lease_seconds=1, concurrency=1)
-    assert repo.heartbeat(job.id, "detection", 40, lease_seconds=30) is True
-    updated = repo.get(job.id)
-    assert updated.phase == "detection"
-    assert updated.progress == 40
-    assert updated.lease_until is not None
-    assert updated.lease_until > time.time()
+    assert repo.report_progress(job.id, "validation", 10) == "ok"
+    before = repo.get(job.id)
+    assert repo.renew_lease(job.id, lease_seconds=30) is True
+    after = repo.get(job.id)
+    assert (after.phase, after.progress) == (before.phase, before.progress) == ("validation", 10)
+    assert after.lease_until is not None
+    assert after.lease_until > time.time()
 
 
-def test_heartbeat_fails_without_ownership(repo: JobRepository) -> None:
+def test_renew_lease_fails_without_ownership(repo: JobRepository) -> None:
     job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
     # Never claimed: no ownership.
-    assert repo.heartbeat(job.id, "detection", 10, lease_seconds=30) is False
+    assert repo.renew_lease(job.id, lease_seconds=30) is False
     repo.claim(lease_seconds=-1, concurrency=1)
-    assert repo.heartbeat(job.id, "detection", 10, lease_seconds=30) is False
+    assert repo.renew_lease(job.id, lease_seconds=30) is False
+
+
+def test_progress_is_monotonic_and_distinguishes_cancellation(repo: JobRepository) -> None:
+    job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    repo.claim(lease_seconds=30, concurrency=1)
+    for phase, progress in (("validation", 10), ("detection", 40), ("rewrite", 85), ("archive", 95)):
+        assert repo.report_progress(job.id, phase, progress) == "ok"
+        assert (repo.get(job.id).phase, repo.get(job.id).progress) == (phase, progress)
+    # Out-of-order callbacks are ignored, not applied as ownership loss.
+    assert repo.report_progress(job.id, "detection", 0) == "ok"
+    assert repo.report_progress(job.id, "archive", 90) == "ok"
+    assert repo.report_progress(job.id, "completed", 100) == "ok"
+    assert (repo.get(job.id).phase, repo.get(job.id).progress) == ("completed", 100)
+    repo.request_cancel(job.id)
+    assert repo.report_progress(job.id, "archive", 99) == "cancelled"
+
+
+def test_progress_requires_ownership(repo: JobRepository) -> None:
+    job = repo.create("mask_text", max_active=16, ttl_seconds=3600)
+    assert repo.report_progress(job.id, "detection", 10) == "ownership_lost"
 
 
 def test_retryable_failure_requeues_then_fails(repo: JobRepository) -> None:
@@ -164,9 +187,11 @@ def test_running_cancel_is_a_request_acknowledged_by_the_worker(repo: JobReposit
     assert repo.request_cancel(job.id) == "cancelling"
     assert repo.get(job.id).status == "cancelling"
     assert repo.get(job.id).cancel_requested is True
-    assert repo.heartbeat(job.id, "detection", 50, lease_seconds=30, claim=claim) is False
-    # Heartbeat was rejected because cancellation was requested, but the live
-    # claim can still acknowledge it exactly once.
+    # The lease keeps renewing while the owner drains; progress reports the
+    # cancellation distinctly instead of misreporting ownership loss.
+    assert repo.renew_lease(job.id, lease_seconds=30, claim=claim) is True
+    assert repo.report_progress(job.id, "detection", 50, claim=claim) == "cancelled"
+    # The live claim can still acknowledge it exactly once.
     assert repo.acknowledge_cancel(job.id, claim) is True
     assert repo.get(job.id).status == "cancelled"
     assert repo.acknowledge_cancel(job.id, claim) is False  # idempotent, already terminal
@@ -395,3 +420,89 @@ def test_artifact_write_is_atomic_and_readable(store: ArtifactStore) -> None:
     store.delete(job_id)
     assert not store.exists(job_id, "input")
     assert not any(path.name.startswith(job_id) for path in Path(store._root).iterdir())
+
+
+# --- P1/P2: real concurrent admission (independent connections + barrier) -----
+
+
+def _concurrent_admission(
+    settings: Settings,
+    keys: list[str],
+    *,
+    max_active: int,
+) -> list[tuple[str, str | None]]:
+    barrier = threading.Barrier(len(keys))
+    by_index: dict[int, tuple[str, str | None]] = {}
+    guard = threading.Lock()
+    repos = [JobRepository(settings) for _ in keys]
+
+    def submit(index: int) -> None:
+        barrier.wait()
+        try:
+            job, _created = repos[index].create_staging(
+                "mask_text",
+                max_active=max_active,
+                max_attempts=3,
+                cache_key=keys[index],
+            )
+            outcome = ("ok", job.id)
+        except JobQueueFullError:
+            outcome = ("full", None)
+        with guard:
+            by_index[index] = outcome
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+            list(pool.map(submit, range(len(keys))))
+    finally:
+        for repository in repos:
+            repository.dispose()
+    return [by_index[index] for index in range(len(keys))]
+
+
+def test_concurrent_identical_submissions_attach_to_one_job(settings: Settings) -> None:
+    results = _concurrent_admission(settings, ["same-key"] * 12, max_active=12)
+    assert all(outcome == "ok" for outcome, _ in results)
+    assert len({job_id for _, job_id in results}) == 1
+    observer = JobRepository(settings)
+    try:
+        assert observer.count_active() == 1
+    finally:
+        observer.dispose()
+
+
+def test_concurrent_distinct_submissions_respect_capacity(settings: Settings) -> None:
+    results = _concurrent_admission(settings, [f"key-{index}" for index in range(12)], max_active=3)
+    assert sum(outcome == "ok" for outcome, _ in results) == 3
+    assert sum(outcome == "full" for outcome, _ in results) == 9
+    observer = JobRepository(settings)
+    try:
+        assert observer.count_active() == 3
+    finally:
+        observer.dispose()
+
+
+def test_concurrent_mixed_submissions_never_exceed_capacity(settings: Settings) -> None:
+    keys = ["shared", "shared", "shared", "a", "b", "c", "d", "e"]
+    results = _concurrent_admission(settings, keys, max_active=3)
+    accepted = [(key, job_id) for key, (outcome, job_id) in zip(keys, results, strict=True) if outcome == "ok"]
+    # Identical submissions attach to one row; distinct ones occupy the rest.
+    assert len({job_id for _, job_id in accepted}) == 3
+    assert len({job_id for key, job_id in accepted if key == "shared"}) == 1
+    observer = JobRepository(settings)
+    try:
+        assert observer.count_active() == 3
+    finally:
+        observer.dispose()
+
+
+def test_staging_failure_can_be_aborted_and_retried(repo: JobRepository) -> None:
+    job, created = repo.create_staging("mask_text", max_active=1, max_attempts=3, cache_key="retry-key")
+    assert created is True
+    repo.abort_staging(job.id, "artifact_io")
+    assert repo.get(job.id).status == "failed"
+    assert repo.count_active() == 0
+    retry, created_again = repo.create_staging("mask_text", max_active=1, max_attempts=3, cache_key="retry-key")
+    assert created_again is True
+    assert retry.id != job.id
+    assert repo.count_active() == 1
