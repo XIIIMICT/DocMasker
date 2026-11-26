@@ -1,7 +1,8 @@
 # Follow-up remediation matrix
 
-Source: `DocMasker_Follow_Up_Fixes_Agent_Prompt.md` (untracked maintainer file).
-Baseline: `dev` at `c376ecd`, 287 back tests, 1 skipped, 87% branch coverage.
+Source: the maintainer's follow-up fixes prompt (removed after completion on
+2026-11-26; this matrix is its durable record). Baseline: `dev` at `c376ecd`,
+287 back tests, 1 skipped, 87% branch coverage.
 Status legend: `todo` · `in progress` · `done` (tested) · `verified-existing`.
 
 | # | Finding | Change | Tests | Docs | Status |
