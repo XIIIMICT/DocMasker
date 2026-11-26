@@ -199,6 +199,64 @@ serially written result ZIP, and the browser's full-result Blob + JSZip
 unpacking (`front/src/shared/api/jobs.ts`) — client-side streaming is not
 claimed. Sync routes remain bounded by `SYNC_MAX_DOCX_BYTES`.
 
+## DM-4 one-pass output construction (2026-11-26)
+
+### Re-verified finding
+
+`masking/service.py::mask_text` rebuilt the whole result once per detected
+entity (`masked = masked[:start] + marker + masked[end:]`), so output
+construction was **O(spans × input length)** even though numbering and the
+`MaskKeys` de-duplication contract were correct. The detector, not this step,
+still dominates end-to-end latency (see the Phase 7 table above).
+
+### What changed
+
+Span validation (integer offsets, `0 <= start < end <= len(text)`, non-empty,
+non-overlapping, and `entity.text == text[start:end]`) runs **before** any
+placeholder is allocated; malformed or overlapping spans fail closed with a
+422 `invalid_span` (`InvalidSpanError`) carrying fixed Russian detail and no
+entity values. Numbers are then allocated left-to-right in document order (so
+identical repeats reuse one key and distinct wordings stay separate), the
+marker-collision guard runs unchanged, and untouched slices plus markers are
+appended to one list and joined **once**. Each source character is read at most
+once: output construction is **O(input length + spans)**.
+
+### Environment and commands
+
+Windows 11 10.0.26300, CPython 3.15.0 in the uv-managed `back/.venv` (host
+toolchain, no container), `time.perf_counter`, **best of 3** runs. Inputs are
+synthetic: `n` occurrences of `Иван` separated by single spaces (`4n + n - 1`
+characters), one label, one key, no detection step. Reproduce with:
+
+```sh
+uv run --directory back pytest -q tests/test_mask_one_pass.py -s
+```
+
+The old column was measured in the same process by running the pre-change
+back-to-front loop verbatim against the same entities; both produce identical
+output (asserted in the probe).
+
+| Spans | Chars | Old rewrite | One-pass join | Speedup |
+|---|---|---|---|---|
+| 250 | 1,249 | 0.317 ms | 0.135 ms | 2.35× |
+| 500 | 2,499 | 0.883 ms | 0.264 ms | 3.35× |
+| 1,000 | 4,999 | 2.842 ms | 0.534 ms | 5.32× |
+| 2,000 | 9,999 | 10.194 ms | 1.018 ms | 10.02× |
+| 4,000 | 19,999 | 41.037 ms | 2.112 ms | 19.43× |
+| 8,000 | 39,999 | 157.198 ms | 4.180 ms | 37.61× |
+| 16,000 | 79,999 | 606.487 ms | 8.879 ms | 68.31× |
+
+The `pytest -s` structural output records source slices and characters read by
+the renderer: at 250/500/1000/2000/4000 spans it is 249/499/999/1999/3999
+slices and exactly the same number of source characters (only the separator
+spaces) — never proportional to `spans × length`.
+
+These timings cover **output construction only**. Detection is unchanged and
+dominates the text pipeline (seconds for hundreds of KB), so **no end-to-end
+runtime improvement is claimed** from this change alone; the measured win is
+the removal of the quadratic rewrite, which previously dominated for dense,
+PII-heavy inputs.
+
 ## Capacity facts worth keeping
 
 - natasha's `MorphVocab` + extractors cost ~110–170 MB of in-memory dictionary

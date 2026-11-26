@@ -18,7 +18,7 @@ contracts and durable specs live in `docs/` — link, do not duplicate:
 - `docx_validation.py` — `validate_docx_package(_path)`, `upload_limits`; hard size/part checks before OPC work, incremental paragraph counting.
 - `executor.py` — `run_cpu` / `run_blocking` bounded offload pools; never call masking or DB work directly in `async def`.
 - `windowed.py` — `iter_windows`, `dedupe_boundary_spans`, `OversizedTokenError` for long-text detection.
-- `service.py` — text `mask_document` / `unmask_document` and `mask_text` (back-to-front rewrite).
+- `service.py` — text `mask_document` / `unmask_document` and `mask_text` (validated one-pass join).
 - `schemas.py` — canonical text DTOs (`MaskResponse` / `UnmaskResponse`, `MaskedEntity`, stats).
 - `validate_config.py` CLI — `uv run --directory back python -m src.masking.validate_config` validates config without the app.
 
@@ -41,7 +41,7 @@ contracts and durable specs live in `docs/` — link, do not duplicate:
 ## Keys YAML (reversibility)
 
 - Placeholders are `[LABEL_N]`, numbered per label in document order. `MaskKeys` dedupes by **exact** text: identical repeats reuse one placeholder/key; distinct wordings (case forms of one org) stay separate so restoration is lossless.
-- Allocate numbers left-to-right before the back-to-front rewrite in `mask_text`, else the last entity gets `_1`. Unmask is ONE compiled longest-first alternation scan (`compile_placeholders` in `mapping.py`): inserted values are opaque and never rescanned, so no cascade, and missing markers stay in place; `placeholders_from_document` reverses a parsed keys file. Masking first fails with 422 `marker_collision` on a source literal equal to a marker it allocates; the collision-safe versioned format is deferred (`TODO.md`).
+- `mask_text` validates spans first (integer offsets, bounds, non-empty, non-overlapping, value equals source slice) and fails closed with 422 `invalid_span` (`InvalidSpanError`) instead of corrupting text; it allocates numbers left-to-right **before** the single join, else the last entity gets `_1`. Untouched slices and markers go into one list joined once (`_mask_parts`), so output construction is O(length + spans) — see `docs/PERFORMANCE.md` §DM-4. Unmask is ONE compiled longest-first alternation scan (`compile_placeholders` in `mapping.py`): inserted values are opaque and never rescanned, so no cascade, and missing markers stay in place; `placeholders_from_document` reverses a parsed keys file. Masking first fails with 422 `marker_collision` on a source literal equal to a marker it allocates; the collision-safe versioned format is deferred (`TODO.md`).
 - Keys YAML uses `yaml12` (py-yaml12), not PyYAML 1.1 (which mangles quotes, e.g. `АО "Росхим"`). Writers emit the legacy `Профиль: russian-default` marker; readers accept it, foreign marker values and envelope-less legacy files, ignoring the marker as metadata. No `версия`/`версия_профиля` keys (retired v2 envelope). Section titles come from `labels.yaml`; empty sections are omitted.
 
 ## OOXML / DOCX (OPC package level, not python-docx runs)
