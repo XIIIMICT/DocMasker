@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement, type React
 
 const CLOSE_GRACE_MS = 250;
 
-function pointInRect(point: { x: number; y: number }, element: HTMLElement | null): boolean {
+export function pointInRect(point: { x: number; y: number }, element: HTMLElement | null): boolean {
     if (!element) return false;
     const rect = element.getBoundingClientRect();
     return (
@@ -14,6 +14,30 @@ function pointInRect(point: { x: number; y: number }, element: HTMLElement | nul
         point.y >= rect.top &&
         point.y <= rect.bottom
     );
+}
+
+/**
+ * Geometry can go stale while the pointer is stationary: an internal grid
+ * scroll or a viewport resize moves/resizes the trigger and popover. Re-run
+ * the same coalesced check through `scheduleCheck` — never a second timer,
+ * observer or per-event state. Capture on `scroll` is deliberate: scroll
+ * events on elements do not bubble, so only the capture phase sees them.
+ * Returns a disposer that removes both listeners with matching options.
+ */
+export function listenForGeometryChanges(
+    scheduleCheck: () => void,
+    isPointerOpen: () => boolean,
+): () => void {
+    const onChange = () => {
+        if (!isPointerOpen()) return;
+        scheduleCheck();
+    };
+    window.addEventListener("scroll", onChange, true);
+    window.addEventListener("resize", onChange);
+    return () => {
+        window.removeEventListener("scroll", onChange, true);
+        window.removeEventListener("resize", onChange);
+    };
 }
 
 type HoverDropdownTriggerProps = {
@@ -39,9 +63,10 @@ type HoverDropdownTriggerProps = {
  *
  * The old 60 ms polling loop is gone. `pointermove` only records coordinates;
  * one requestAnimationFrame coalesces geometry checks, and one cancellable
- * timeout owns the outside grace period. Pointer-based dismissal is armed only
- * by a real hover open, so keyboard/touch openings are never killed by a stale
- * pointer position.
+ * timeout owns the outside grace period. Scroll (capture) and window resize
+ * reuse that same frame so a stationary pointer cannot outlive a moved popover.
+ * Pointer-based dismissal is armed only by a real hover open, so keyboard/touch
+ * openings are never killed by a stale pointer position.
  */
 export function HoverDropdown({
     trigger,
@@ -164,6 +189,16 @@ export function HoverDropdown({
         window.addEventListener("pointermove", onPointerMove, { passive: true });
         return () => window.removeEventListener("pointermove", onPointerMove);
     }, []);
+
+    // Re-check geometry on internal scroll / viewport resize while open. The
+    // disposer runs on open-change and unmount, just like the pointer listener.
+    useEffect(() => {
+        if (!open) return;
+        return listenForGeometryChanges(
+            () => schedulePointerCheckRef.current(),
+            () => openedByPointerRef.current,
+        );
+    }, [open]);
 
     // Escape closes the menu; hover stays suppressed until the pointer leaves
     // the trigger. DocMasker deliberately does not stop/propagation here.
