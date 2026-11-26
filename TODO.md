@@ -47,6 +47,30 @@ and before/after benchmarks: `docs/PRODUCTION_READINESS.md`,
   a tiebreaker constant, not confidence) and broad NER benchmark platform —
   deferred in brief §0.
 
+## Frontend refactor audit (2026-11-26)
+
+- **§4.5 — DOCX scan/highlight sequencing (deferred).** Preview render and
+  placeholder counting still start together when a DOCX is selected; both
+  decompress the same file, doubling peak memory. Reliable sequencing needs a
+  render-complete callback through `DocxViewer` → `masker-page.tsx` → workflow;
+  a DOM-observation heuristic was rejected as brittle.
+- **§8.2 — animation tokens on the ReportCollector side (deferred).**
+  DocMasker's three app-owned transitions use `--app-motion-*` tokens; the
+  ReportCollector stylesheet still has ~15 ad-hoc timing values. Consolidating
+  them is a visual-risk change without a measurement.
+- **§9 — CSS split (deferred).** DocMasker's stylesheet is ~600 lines with
+  stable domains; splitting it into small files would add indirection without
+  an ownership benefit. Revisit only if tokens are extracted or a new domain
+  appears.
+- **§3.2 / §11 — runtime measurements.** No React DevTools / Performance
+  baseline was recorded before the frontend refactor, so no FPS or latency
+  improvement is claimed. Bundle before/after evidence and the explicit
+  non-claims are in the workspace root `FRONTEND-AUDIT-FINAL-REPORT.md`;
+  reduced-motion and narrow-screen browser coverage lives in
+  `front/e2e/smoke.spec.ts`.
+- **Zustand** — decision recorded in `ReportCollector/docs/FRONTEND-REFACTOR.md`:
+  not needed. Reopen only if a measured subscription/rerender problem appears.
+
 ## Blocked / external
 
 - `README.md` — the maintainer creates it; do not touch without a request.
