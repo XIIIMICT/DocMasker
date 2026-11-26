@@ -33,8 +33,19 @@ restoration use the same inverse text-node rewrite.
 
 Each text-bearing container is passed to the detector with `prefilter=True`
 (Phase 7): detectors whose cheap precondition cannot match are skipped, while
-`always_mask` literals still run over the full text. This makes documents with
-thousands of PII-free paragraphs cheap; see `docs/PERFORMANCE.md`.
+`always_mask` literals still run over the full text. The address precondition
+uses the same validated, anchored lexicon marker matcher as the expensive
+extractor, so short fragments such as `г. Москва, ул. Ленина` are not skipped
+while `ш` inside an unrelated word is not treated as an address marker. This
+makes documents with thousands of PII-free paragraphs cheap; see
+`docs/PERFORMANCE.md`.
+
+Worker jobs thread a cooperative `checkpoint` through `execute()` →
+`mask_docx_in_memory()` → `transform_package()` → `detect()`: it runs before
+each expensive OPC part and between long-text windows. A cancellation or lease
+loss therefore stops additional document work promptly, publishes no result and
+leaves no cache entry; the old worker never cleans up artifacts unless PostgreSQL
+acknowledges the terminal `cancelled` state.
 
 ## Not processed (documented limitations)
 

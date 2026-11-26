@@ -113,7 +113,7 @@ reflects the real `detect()` pipeline; raw extractor diagnostics moved behind
 | ~36 KB | 9.9 s → **2.0 s** | 1325 MB → **139 MB** | 803 |
 | ~360 KB | 211.7 s → **28.3 s** | ~10 GB → **144 MB** | 7960 |
 
-The ~4.6–7.5× speedup and flat ~144 MB RSS come from three changes:
+The ~4.6–7.5× speedup and flat ~144 MB RSS come from these changes:
 1. `masking/windowed.py` splits long text into overlapping structural windows
    (8 KB min / 4096 chars / 512 overlap), re-bases spans to absolute offsets,
    never cuts through a token and deduplicates boundary spans deterministically
@@ -123,9 +123,15 @@ The ~4.6–7.5× speedup and flat ~144 MB RSS come from three changes:
    the whole document. Abbreviation dots are not treated as sentence ends.
 3. DOCX OOXML containers use `detect(text, prefilter=True)`: detectors whose
    cheap precondition cannot match are skipped; `always_mask` still runs over
-   the full text. `get_masker()` is thread-local (natasha extractors are not
-   proven thread-safe); each thread pays ~110 MB once — keep
-   `JOBS_CONCURRENCY` conservative.
+   the full text. The address condition reuses the anchored lexicon marker
+   matcher, so short fragments without digits still run while one-letter
+   abbreviations inside unrelated words do not match. `get_masker()` is
+   thread-local (natasha extractors are not proven thread-safe); each thread
+   pays ~110 MB once — keep `JOBS_CONCURRENCY` conservative.
+4. Worker DOCX jobs pass a `checkpoint` into the OPC transformer: it runs before
+   each text-bearing part and is forwarded to `detect()` for window boundaries.
+   Cancellation therefore stops at coarse boundaries rather than after the
+   whole package; no per-character DB query is involved.
 
 `benchmarks.docx_mask` (after):
 

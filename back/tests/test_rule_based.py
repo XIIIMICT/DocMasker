@@ -11,7 +11,7 @@ from itertools import pairwise
 import pytest
 
 from src.masking.config import get_config
-from src.masking.rule_based import DETECTOR_ORDER, Entity, RuleBasedMasker, _merge_spans
+from src.masking.rule_based import DETECTOR_ORDER, Entity, RuleBasedMasker, _cheap_prefilter, _merge_spans
 
 
 def _masker() -> RuleBasedMasker:
@@ -319,3 +319,40 @@ def test_merge_long_overlapping_span_loses_to_earlier_starts() -> None:
 
 def test_empty_text_produces_no_entities() -> None:
     assert _masker().detect("") == []
+
+
+# --- P1.4: address prefilter uses the validated lexicon -----------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["г. Москва, ул. Ленина", "ул. Ленина", "пер. Смирнова", "наб. Реки", "Москва, 109012"],
+)
+def test_address_prefilter_admits_marker_fragments_without_digits(text: str) -> None:
+    assert "address" in _cheap_prefilter(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Строймонтаж заключил договор", "Компания ш consulted", "Встреча состоялась в офисе."],
+)
+def test_address_prefilter_rejects_unrelated_prose(text: str) -> None:
+    assert "address" not in _cheap_prefilter(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "г. Москва, ул. Ленина",
+        "ул. Ленина",
+        "пер. Смирнова",
+        "г. Москва, ул. Ленина, д. 12",
+        "Встреча состоялась в офисе.",
+        "Иван Петров, ivan@mail.ru",
+    ],
+)
+def test_prefilter_and_full_detection_agree_on_supported_fixtures(text: str) -> None:
+    masker = _masker()
+    prefiltered = [(entity.label, entity.text) for entity in masker.detect(text, prefilter=True)]
+    full = [(entity.label, entity.text) for entity in masker.detect(text, prefilter=False)]
+    assert prefiltered == full

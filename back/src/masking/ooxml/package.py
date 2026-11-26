@@ -11,6 +11,7 @@ modified ZIP entries are re-serialized — all other entries are copied verbatim
 
 import io
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -510,11 +511,14 @@ def transform_package(
     masker: Any = None,  # noqa: ANN401
     keys: Any = None,  # noqa: ANN401
     placeholders: Any = None,  # noqa: ANN401
+    checkpoint: Callable[[], None] | None = None,
 ) -> tuple[bytes, list[Any], list[str], CoverageReport]:
     """
     Mask or restore every supported text-bearing part.
 
-    Other ZIP entries are copied byte-for-byte. Raises `OoxmlPackageError` for
+    Other ZIP entries are copied byte-for-byte. `checkpoint` is called before
+    each expensive OPC part and forwarded to long-text window detection, so a
+    worker cancellation stops work promptly. Raises `OoxmlPackageError` for
     unsafe/uninspectable content.
     """
     parts, coverage = build_inventory(data)
@@ -531,6 +535,8 @@ def transform_package(
         for part in parts:
             if part.category not in _PROCESSABLE_CATEGORIES:
                 continue
+            if checkpoint is not None:
+                checkpoint()  # coarse boundary: before parsing/detecting a part
             root = _secure_parse(part.data)
             containers = (
                 _generic_containers(root, part.name, part.category)
@@ -549,7 +555,7 @@ def transform_package(
                     continue
                 local: list[tuple[int, int, str]] = []
                 if mode == "mask":
-                    for item in masker.detect(text, prefilter=True):
+                    for item in masker.detect(text, prefilter=True, checkpoint=checkpoint):
                         marker = keys.placeholder(item.label, item.text)
                         local.append((item.start, item.end, marker))
                         all_entities.append(

@@ -114,7 +114,7 @@ def execute(
             raise JobExecutionError("invalid_package") from error
         check()
         progress("detection", 40)
-        masked_bytes, entities, keys, coverage = mask_docx_in_memory(data, masker)
+        masked_bytes, entities, keys, coverage = mask_docx_in_memory(data, masker, checkpoint=check)
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
@@ -153,7 +153,7 @@ def execute(
             raise JobExecutionError("invalid_keys") from error
         check()
         progress("detection", 40)
-        restored, unused, coverage = unmask_docx_in_memory(data, placeholders)
+        restored, unused, coverage = unmask_docx_in_memory(data, placeholders, checkpoint=check)
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"

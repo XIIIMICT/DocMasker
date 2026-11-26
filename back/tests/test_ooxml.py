@@ -12,7 +12,7 @@ import zipfile
 import pytest
 
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
-from src.masking.mapping import parse_keys_yaml, placeholders_from_document
+from src.masking.mapping import MaskKeys, parse_keys_yaml, placeholders_from_document
 from src.masking.ooxml.manifest import build_mask_manifest, validate_manifest
 from src.masking.ooxml.package import OoxmlPackageError, build_inventory, transform_package
 from src.masking.rule_based import RuleBasedMasker
@@ -404,3 +404,24 @@ def test_sync_and_job_manifest_parity() -> None:
     assert json.dumps(sync, sort_keys=True, ensure_ascii=False) == json.dumps(job, sort_keys=True, ensure_ascii=False)
     assert sync["input"]["size_bytes"] == len(source)
     assert sync["statistics"]["total_occurrences"] == len(entities)
+
+
+def test_transform_package_checkpoints_before_each_expensive_part() -> None:
+    """A cancellation raised at a part boundary must stop OPC work immediately."""
+    calls: list[int] = []
+
+    def stop_early() -> None:
+        calls.append(1)
+        if len(calls) == 2:
+            msg = "cancelled"
+            raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        transform_package(
+            _build_package(),
+            mode="mask",
+            masker=RuleBasedMasker(),
+            keys=MaskKeys(),
+            checkpoint=stop_early,
+        )
+    assert len(calls) == 2  # stopped at the second part, not after the whole document
