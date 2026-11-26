@@ -368,7 +368,9 @@ _DETECTOR_PRECONDITIONS: dict[str, Callable[[str], bool]] = {
     "link": lambda text: "://" in text,
     "phone": lambda text: any(char.isdigit() for char in text),
     "person": lambda text: any(char.isupper() for char in text),
-    "address": lambda text: any(char.isdigit() for char in text) or "адрес" in text.lower(),
+    # Use the same validated, anchored marker matcher as the expensive address
+    # extractor; one-letter abbreviations never match loose substrings.
+    "address": lambda text: any(char.isdigit() for char in text) or bool(_address_candidate_re().search(text)),
     "organization": lambda text: any(char.isupper() for char in text),
 }
 

@@ -393,3 +393,17 @@ def test_all_header_footer_variants_restore() -> None:
     assert "Смирнов Иван Петрович" in section.first_page_header.tables[0].cell(0, 0).text
     assert "+7 900 222-33-44" in section.first_page_footer.paragraphs[0].text
     assert "+7 900 333-44-55" in section.even_page_footer.paragraphs[0].text
+
+
+def test_docx_table_cell_short_address_is_detected_with_prefilter() -> None:
+    """P1.4: a short address in a table cell must not be skipped by the prefilter."""
+    document = DocxDocument()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).paragraphs[0].add_run("г. Москва, ул. Ленина")
+    out = io.BytesIO()
+    document.save(out)
+
+    masked_bytes, entities, _keys, _coverage = mask_docx_in_memory(out.getvalue())
+    assert any(entity.label == "address" for entity in entities)
+    restored = DocxDocument(io.BytesIO(masked_bytes))
+    assert "[ADDRESS_1]" in restored.tables[0].cell(0, 0).text

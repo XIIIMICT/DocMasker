@@ -293,6 +293,51 @@ def test_cancel_before_processing_publishes_nothing(env: Settings, worker: Worke
     repo.dispose()
 
 
+def test_docx_detection_checkpoint_cancels_job_without_publishing(
+    env: Settings, worker: Worker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancellation observed inside DOCX detection stops work and publishing."""
+    from src.jobs import worker as worker_module
+    from src.masking import rule_based
+
+    accepted = enqueue("mask_file", input_bytes=_build_docx(), filename="отчёт.docx")
+    repo = JobRepository(env)
+    claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+    assert claimed is not None
+    _, claim = claimed
+
+    original_detect = rule_based.RuleBasedMasker.detect
+    inside_detection: list[int] = []
+
+    def detect_with_checkpoint(
+        self: rule_based.RuleBasedMasker,
+        text: str,
+        **kwargs: object,
+    ) -> list[rule_based.Entity]:
+        callback = kwargs.get("checkpoint")
+        if callable(callback):
+            inside_detection.append(1)
+            # Cancellation arrives while detection is already running.
+            repo.request_cancel(accepted.job_id)
+            callback()  # the detector's cooperative checkpoint observes it
+        return original_detect(self, text, prefilter=bool(kwargs.get("prefilter", False)))
+
+    monkeypatch.setattr(rule_based.RuleBasedMasker, "detect", detect_with_checkpoint)
+
+    def cancel_at_detection(job_id: str, claim: Claim, heartbeat: Heartbeat) -> None:
+        if inside_detection:
+            raise worker_module.CancelledError
+
+    monkeypatch.setattr(worker, "_checkpoint", cancel_at_detection)
+    worker.run_one(accepted.job_id, claim)
+    assert inside_detection  # the callback really reached the detector
+    job = repo.get(accepted.job_id)
+    assert job.status == "cancelled"
+    assert job.result_key is None
+    assert not ArtifactStore(env.jobs_dir).exists(accepted.job_id, "result")
+    repo.dispose()
+
+
 def test_identical_concurrent_submissions_attach_to_one_job(env: Settings) -> None:
     """§4.5/§4.6-12: identical inputs dedupe to one active job, no duplicate work."""
     first = enqueue("mask_text", input_bytes=b"same-input", filename="")

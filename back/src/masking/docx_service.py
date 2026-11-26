@@ -8,7 +8,7 @@ the transformer's plain entity dicts into the API `MaskedEntity` schema and
 building one document-wide `MaskKeys`.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from .mapping import MaskKeys
 from .ooxml.package import CoverageReport, OoxmlPackageError, transform_package
@@ -26,6 +26,7 @@ __all__ = [
 def mask_docx_in_memory(
     source_bytes: bytes,
     masker: RuleBasedMasker | None = None,
+    checkpoint: Callable[[], None] | None = None,
 ) -> tuple[bytes, list[MaskedEntity], MaskKeys, CoverageReport]:
     """
     Mask PII across the whole OPC package.
@@ -40,6 +41,7 @@ def mask_docx_in_memory(
         mode="mask",
         masker=active,
         keys=keys,
+        checkpoint=checkpoint,
     )
     entities = [MaskedEntity(**item) for item in raw_entities]  # type: ignore[arg-type]
     return masked_bytes, entities, keys, coverage
@@ -48,6 +50,7 @@ def mask_docx_in_memory(
 def unmask_docx_in_memory(
     source_bytes: bytes,
     placeholders: Mapping[str, str],
+    checkpoint: Callable[[], None] | None = None,
 ) -> tuple[bytes, list[str], CoverageReport]:
     """
     Restore every placeholder across the whole OPC package.
@@ -59,5 +62,6 @@ def unmask_docx_in_memory(
         source_bytes,
         mode="unmask",
         placeholders=placeholders,
+        checkpoint=checkpoint,
     )
     return restored_bytes, unused, coverage
