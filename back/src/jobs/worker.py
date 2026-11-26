@@ -137,10 +137,8 @@ class Heartbeat:
         # retry on the same interval; fencing will reject a stale worker.
         while not self._stop.is_set():
             try:
-                ok = self._repo.heartbeat(
+                ok = self._repo.renew_lease(
                     self._job_id,
-                    "detection",
-                    0,
                     lease_seconds=self._lease_seconds,
                     claim=self._claim,
                 )
@@ -202,18 +200,14 @@ class Worker:
         claim: Claim,
         heartbeat: Heartbeat,
     ) -> Callable[[JobPhase, int], None]:
-        """Phase/progress reporting (separate from lease renewal), fenced."""
+        """Monotonic phase/progress reporting (separate from lease renewal), fenced."""
 
         def report(phase: JobPhase, progress: int) -> None:
             self._checkpoint(job_id, claim, heartbeat)
-            ok = self._repo.heartbeat(
-                job_id,
-                phase,
-                progress,
-                lease_seconds=self._settings.jobs_lease_seconds,
-                claim=claim,
-            )
-            if not ok:
+            outcome = self._repo.report_progress(job_id, phase, progress, claim=claim)
+            if outcome == "cancelled":
+                raise CancelledError
+            if outcome == OWNERSHIP_LOST:
                 inc_lease_renew_failure()
                 heartbeat.mark_lost()
                 log_warning(

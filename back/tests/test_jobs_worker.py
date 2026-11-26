@@ -108,7 +108,7 @@ def test_heartbeat_survives_transient_db_error(env: Settings) -> None:
     """A transient heartbeat error must not kill the renewal thread."""
 
     class _FailingRepo:
-        def heartbeat(self, *_args: object, **_kwargs: object) -> bool:
+        def renew_lease(self, *_args: object, **_kwargs: object) -> bool:
             msg = "db down"
             raise RuntimeError(msg)
 
@@ -232,7 +232,7 @@ def test_stale_token_cannot_publish_a_result(env: Settings) -> None:
     assert second is not None
     _, current = second
     # Fresh token owns the row; the stale one cannot heartbeat or publish.
-    assert repo.heartbeat(job.id, "detection", 50, lease_seconds=30, claim=stale) is False
+    assert repo.renew_lease(job.id, lease_seconds=30, claim=stale) is False
     with pytest.raises(IllegalTransitionError):
         repo.succeed(job.id, "result", ttl_seconds=3600, claim=stale)
     assert repo.get(job.id).status == "running"
