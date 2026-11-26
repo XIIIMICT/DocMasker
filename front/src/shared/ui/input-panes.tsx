@@ -172,7 +172,9 @@ export function DemaskInputPane({
                     </Tooltip>
                 ) : null}
                 {keysInvalid ? (
-                    <div className="editor-pane__keys-error">Некорректный формат.</div>
+                    <div className="editor-pane__keys-error" id="demask-keys-error">
+                        Некорректный формат.
+                    </div>
                 ) : null}
             </div>
             {inputTab === "keys" ? (
@@ -184,6 +186,7 @@ export function DemaskInputPane({
                     <TextArea
                         aria-label="Ключи демаскировки"
                         aria-invalid={keysInvalid}
+                        aria-describedby={keysInvalid ? "demask-keys-error" : undefined}
                         className="result-area--keys"
                         placeholder="Вставьте ключи демаскировки или перетащите файл .yaml"
                         value={demaskKeys}

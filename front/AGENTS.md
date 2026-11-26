@@ -23,9 +23,14 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 | e2e (running stack required) | `bun run test:e2e --project=smoke` with `E2E_BASE_URL`                                  |
 
 `bun run format` can rewrite line breaks in untouched files — check `git status`
-and `git diff` afterwards. The Playwright `smoke` project (21 tests in 3 files) needs a prepared
-stack; `local.playwright.config.ts` is local-only, probe files are excluded, and
-CI explicitly lists the spec files so a rename cannot silently drop a suite.
+and `git diff` afterwards. The current unit inventory (29 test files) and the
+Playwright `smoke` discovery guard live in `docs/TESTING.md` §1. The `smoke`
+project currently lists 36 tests in four spec files (`health`, `smoke`,
+`rerender-smoke`, `hover-smoke`) and needs a prepared stack;
+`local.playwright.config.ts` is local-only, probe files are excluded, and CI
+requires all four filenames in `playwright test --project=smoke --list` so a
+rename cannot silently drop a suite. That listing needs no running stack:
+`bunx --no-install playwright test --project=smoke --list`.
 
 ## HeroUI v3 — mandatory reference
 
