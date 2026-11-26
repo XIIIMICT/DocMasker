@@ -15,13 +15,15 @@ import json
 import logging
 import os
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import valkey
 
-from src.metrics import observe_cache_operation
+from src.metrics import observe_cache_gc, observe_cache_operation
 
 if TYPE_CHECKING:
     from src.config import Settings
@@ -37,6 +39,23 @@ CACHE_ENTRY_VERSION = 1
 #: changes output (brief §4.3). The values live in Settings so operators can
 #: bump them via env without a code deploy; these defaults document the floor.
 ENGINE_COMPAT_VERSION = 1
+#: An artifact may outlive a Valkey key by this much, so an LRU/TTL removal or
+#: a stale mtime can never make a live key point at a deleted file. Reuse
+#: refreshes the artifact's mtime before the key is (re)published.
+GC_GRACE_SECONDS = 3600.0
+#: Even a misconfigured short TTL keeps artifacts for at least a day, so a key
+#: published under an earlier, longer TTL cannot become a dangling reference.
+GC_MIN_RETENTION_SECONDS = 86400.0
+#: Guards artifact write/touch/collect in one process (publishers and GC share
+#: it). The mtime re-check plus atomic unlink keeps cross-process races safe.
+_ARTIFACT_LOCK = threading.RLock()
+_GC_STATS = {"candidates": 0, "deleted": 0, "reclaimed_bytes": 0, "failures": 0}
+
+
+def cache_gc_stats() -> dict[str, int]:
+    """Safe aggregate counters (no artifact ids, keys or cache payloads)."""
+    with _ARTIFACT_LOCK:
+        return dict(_GC_STATS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +78,16 @@ class CacheEntry:
     content_type: str
     manifest_version: int
     entry_version: int = CACHE_ENTRY_VERSION
+
+
+@dataclass(slots=True)
+class CacheGcReport:
+    """Bounded result of one cache-artifact collection pass."""
+
+    candidates: int = 0
+    deleted: int = 0
+    reclaimed_bytes: int = 0
+    failures: int = 0
 
 
 def sha256_hex(data: bytes) -> str:
@@ -120,22 +149,30 @@ class CacheArtifactStore:
             raise ValueError("Некорректный идентификатор артефакта кэша.")
         return self._root / artifact_id
 
-    def publish(self, data: bytes) -> CacheEntry:
-        """Write an immutable artifact once; its id is the content hash."""
-        digest = sha256_hex(data)
-        target = self._path(digest)
-        if not target.is_file():
-            fd, tmp = tempfile.mkstemp(prefix=".cache-", dir=str(self._root))
-            try:
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(data)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                Path(tmp).replace(target)
-            finally:
-                leftover = Path(tmp)
+    def _write_atomic(self, target: Path, data: bytes) -> None:
+        fd, tmp = tempfile.mkstemp(prefix=".cache-", dir=str(self._root))
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            Path(tmp).replace(target)
+        finally:
+            leftover = Path(tmp)
+            with contextlib.suppress(OSError):
                 if leftover.exists():
                     leftover.unlink()
+
+    def publish(self, data: bytes) -> CacheEntry:
+        """Publish an immutable artifact; reuse refreshes its retention clock."""
+        digest = sha256_hex(data)
+        target = self._path(digest)
+        now_ns = time.time_ns()
+        with _ARTIFACT_LOCK:
+            try:
+                os.utime(target, ns=(now_ns, now_ns))
+            except FileNotFoundError:
+                self._write_atomic(target, data)
         return CacheEntry(
             artifact_id=digest,
             content_hash=digest,
@@ -144,12 +181,31 @@ class CacheArtifactStore:
             manifest_version=CACHE_ENTRY_VERSION,
         )
 
+    def touch(self, artifact_id: str) -> bool:
+        """Refresh retention when an existing artifact is reused (a cache hit)."""
+        now_ns = time.time_ns()
+        with _ARTIFACT_LOCK:
+            try:
+                os.utime(self._path(artifact_id), ns=(now_ns, now_ns))
+            except OSError, ValueError:
+                return False
+            else:
+                return True
+
+    def is_present(self, artifact_id: str) -> bool:
+        """Cheap existence check (no content read) for publication verification."""
+        with _ARTIFACT_LOCK:
+            try:
+                return self._path(artifact_id).is_file()
+            except OSError, ValueError:
+                return False
+
     def read(self, entry: CacheEntry) -> bytes | None:
         """Return the artifact bytes, or None when missing/corrupt (cache miss)."""
-        path = self._path(entry.artifact_id)
         try:
+            path = self._path(entry.artifact_id)
             data = path.read_bytes()
-        except OSError:
+        except OSError, ValueError:
             return None
         if len(data) != entry.size or sha256_hex(data) != entry.content_hash:
             return None
@@ -158,8 +214,82 @@ class CacheArtifactStore:
     def exists(self, entry: CacheEntry) -> bool:
         return self.read(entry) is not None
 
+    def select_gc_candidates(
+        self,
+        retention_seconds: float,
+        *,
+        now: float | None = None,
+    ) -> tuple[tuple[str, int, int], ...]:
+        """List stale artifacts by metadata only (never reads their contents)."""
+        threshold_ns = int(((time.time() if now is None else now) - retention_seconds) * 1_000_000_000)
+        candidates: list[tuple[str, int, int]] = []
+        paths: list[Path] = []
+        with _ARTIFACT_LOCK:
+            with contextlib.suppress(OSError):
+                paths = list(self._root.iterdir())
+            for path in paths:
+                if path.name.startswith(".cache-"):
+                    continue
+                try:
+                    if not path.is_file():
+                        continue
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if stat.st_mtime_ns <= threshold_ns:
+                    candidates.append((path.name, stat.st_size, stat.st_mtime_ns))
+        return tuple(sorted(candidates))
+
+    def collect(
+        self,
+        retention_seconds: float,
+        *,
+        dry_run: bool = False,
+        now: float | None = None,
+    ) -> CacheGcReport:
+        """
+        Delete only artifacts whose retention clock has expired.
+
+        A file refreshed between selection and deletion is skipped (the mtime
+        is re-checked under the shared lock), so a live Valkey reference is
+        never made dangling by this pass.
+        """
+        candidates = self.select_gc_candidates(retention_seconds, now=now)
+        report = CacheGcReport(candidates=len(candidates))
+        if not dry_run:
+            threshold_ns = int(((time.time() if now is None else now) - retention_seconds) * 1_000_000_000)
+            for artifact_id, size, mtime_ns in candidates:
+                with _ARTIFACT_LOCK:
+                    try:
+                        path = self._path(artifact_id)
+                        stat = path.stat()
+                    except OSError, ValueError:
+                        continue
+                    if stat.st_mtime_ns != mtime_ns or stat.st_mtime_ns > threshold_ns:
+                        continue
+                    try:
+                        path.unlink()
+                    except OSError:
+                        report.failures += 1
+                        continue
+                report.deleted += 1
+                report.reclaimed_bytes += size
+        with _ARTIFACT_LOCK:
+            _GC_STATS["candidates"] = report.candidates
+            _GC_STATS["deleted"] += report.deleted
+            _GC_STATS["reclaimed_bytes"] += report.reclaimed_bytes
+            _GC_STATS["failures"] += report.failures
+        observe_cache_gc(
+            candidates=report.candidates,
+            deleted=report.deleted,
+            reclaimed_bytes=report.reclaimed_bytes,
+            failures=report.failures,
+        )
+        observe_cache_operation(operation="gc", outcome="error" if report.failures else "ok")
+        return report
+
     def delete(self, artifact_id: str) -> None:
-        with contextlib.suppress(OSError, ValueError):
+        with _ARTIFACT_LOCK, contextlib.suppress(OSError, ValueError):
             self._path(artifact_id).unlink()
 
 
@@ -210,6 +340,7 @@ class ResultCache:
             "writes": self._writes,
             "failures": self._failures,
             "evictions": self._evictions,
+            **{f"gc_{name}": value for name, value in cache_gc_stats().items()},
         }
 
     def _evict(self, key: str) -> None:
@@ -251,6 +382,7 @@ class ResultCache:
         if data is None:
             self._evict(key)
             return None
+        self._store.touch(entry.artifact_id)  # best effort: reuse refreshes retention
         self._hits += 1
         observe_cache_operation(operation="hit", outcome="ok")
         return data
@@ -268,6 +400,7 @@ class ResultCache:
         """Publish an immutable artifact, then store its reference with TTL."""
         if self._client is None:
             return None
+        vanished = False
         try:
             entry = self._store.publish(data)
             payload = canonical_json(
@@ -281,14 +414,44 @@ class ResultCache:
                 }
             )
             self._client.set(key, payload, ex=int(self._settings.cache_ttl_seconds))
+            # A GC pass may have removed the artifact just before publication:
+            # never leave a live key pointing at a missing file.
+            if not self._store.is_present(entry.artifact_id):
+                self._client.delete(key)
+                vanished = True
         except Exception:  # noqa: BLE001
             self._failures += 1
             observe_cache_operation(operation="failure", outcome="error")
             LOGGER.warning("cache write failed; result is still valid uncached")
             return None
+        if vanished:
+            self._failures += 1
+            observe_cache_operation(operation="failure", outcome="error")
+            LOGGER.warning("cache artifact vanished during publication")
+            return None
         self._writes += 1
         observe_cache_operation(operation="write", outcome="ok")
         return entry
+
+    def gc(
+        self,
+        *,
+        dry_run: bool = False,
+        retention_seconds: float | None = None,
+    ) -> CacheGcReport:
+        """Collect stale artifacts; a transient error is a harmless no-op."""
+        retention = (
+            max(self._settings.cache_ttl_seconds, GC_MIN_RETENTION_SECONDS) + GC_GRACE_SECONDS
+            if retention_seconds is None
+            else retention_seconds
+        )
+        try:
+            return self._store.collect(retention, dry_run=dry_run)
+        except Exception:  # noqa: BLE001 - GC never breaks masking or jobs
+            LOGGER.warning("cache artifact GC failed; skipping this pass")
+            self._failures += 1
+            observe_cache_operation(operation="gc", outcome="error")
+            return CacheGcReport(failures=1)
 
     def invalidate(self, key: str) -> None:
         if self._client is None:

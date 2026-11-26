@@ -69,7 +69,7 @@ _JOB_ERROR_CODES = frozenset(
 )
 _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
 _STORAGES = frozenset({"logs", "jobs"})
-_CACHE_OPERATIONS = frozenset({"hit", "miss", "write", "failure", "eviction"})
+_CACHE_OPERATIONS = frozenset({"hit", "miss", "write", "failure", "eviction", "gc"})
 _UPLOAD_OUTCOMES = frozenset({"ok", "error"})
 
 REGISTRY = CollectorRegistry(auto_describe=True)
@@ -134,6 +134,26 @@ CACHE_OPERATIONS_TOTAL = Counter(
     "dm_cache_operations_total",
     "Result-cache operations by bounded operation and outcome.",
     labelnames=("operation", "outcome"),
+    registry=REGISTRY,
+)
+CACHE_GC_CANDIDATES = Gauge(
+    "dm_cache_gc_candidates",
+    "Last cache-artifact GC candidate count.",
+    registry=REGISTRY,
+)
+CACHE_GC_DELETED_TOTAL = Counter(
+    "dm_cache_gc_deleted_total",
+    "Cache artifacts removed by GC.",
+    registry=REGISTRY,
+)
+CACHE_GC_RECLAIMED_BYTES_TOTAL = Counter(
+    "dm_cache_gc_reclaimed_bytes_total",
+    "Bytes reclaimed by cache-artifact GC.",
+    registry=REGISTRY,
+)
+CACHE_GC_FAILURES_TOTAL = Counter(
+    "dm_cache_gc_failures_total",
+    "Transient failures during cache-artifact GC.",
     registry=REGISTRY,
 )
 UPLOADS_TOTAL = Counter(
@@ -338,6 +358,17 @@ def observe_cache_operation(*, operation: str, outcome: str) -> None:
     name = _safe_label(operation, _CACHE_OPERATIONS, "failure")
     result = _safe_label(outcome, frozenset({"ok", "error"}), "error")
     _emit(lambda: CACHE_OPERATIONS_TOTAL.labels(operation=name, outcome=result).inc())
+
+
+def observe_cache_gc(*, candidates: int, deleted: int, reclaimed_bytes: int, failures: int) -> None:
+    """Emit bounded, aggregate cache-GC counters (never keys or file names)."""
+    _emit(lambda: CACHE_GC_CANDIDATES.set(max(0, candidates)))
+    if deleted:
+        _emit(lambda: CACHE_GC_DELETED_TOTAL.inc(deleted))
+    if reclaimed_bytes:
+        _emit(lambda: CACHE_GC_RECLAIMED_BYTES_TOTAL.inc(reclaimed_bytes))
+    if failures:
+        _emit(lambda: CACHE_GC_FAILURES_TOTAL.inc(failures))
 
 
 def observe_upload(*, outcome: str) -> None:

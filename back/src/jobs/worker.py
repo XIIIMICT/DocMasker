@@ -503,6 +503,28 @@ class Worker:
                 error_type=type(error).__name__,
             )
 
+    def _cache_gc_safe(self) -> None:
+        """Periodic cache-artifact GC; outages are harmless no-ops."""
+        try:
+            report = dependencies.result_cache().gc()
+            if report.deleted:
+                log_event(
+                    LOGGER,
+                    "cache_artifacts_collected",
+                    "Stale cache artifacts collected.",
+                    operation="gc",
+                    outcome="ok",
+                    deleted=report.deleted,
+                )
+        except Exception as error:  # noqa: BLE001 - log only the exception type
+            log_warning(
+                LOGGER,
+                "worker_cache_gc_failed",
+                "Cache artifact GC failed.",
+                operation="gc",
+                error_type=type(error).__name__,
+            )
+
     def _claim_safe(self) -> tuple[Job, Claim] | None:
         """One poll attempt; transient PostgreSQL errors become an empty poll."""
         try:
@@ -532,11 +554,15 @@ class Worker:
             outcome="ok",
         )
         next_sweep = time.monotonic() + min(self._settings.jobs_ttl_seconds, 60.0)
+        next_cache_gc = time.monotonic() + self._settings.cache_gc_interval_seconds
         while not self._stop.is_set():
             mark_worker_heartbeat()  # liveness even while the queue is empty
             if time.monotonic() >= next_sweep:
                 self._sweep_safe()
                 next_sweep = time.monotonic() + min(self._settings.jobs_ttl_seconds, 60.0)
+            if time.monotonic() >= next_cache_gc:
+                self._cache_gc_safe()
+                next_cache_gc = time.monotonic() + self._settings.cache_gc_interval_seconds
             claimed = self._claim_safe()
             if claimed is None:
                 # Also the backoff after a DB outage: no tight hot loop, and a
@@ -567,6 +593,7 @@ class Worker:
             except Exception:  # noqa: BLE001 - outcome already recorded in run_one
                 log_warning(LOGGER, "drain_failed", "In-flight job finished with an error.", operation="drain")
         self._sweep_safe()
+        self._cache_gc_safe()
         log_event(LOGGER, "worker_stopped", "Worker stopped.", worker_id=self._worker_id, operation="poll")
 
 

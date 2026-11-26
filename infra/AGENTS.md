@@ -60,7 +60,8 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   `VALKEY_PASSWORD` (Valkey runs with `--requirepass`; prod `back`/`worker`
   get the password via `VALKEY_URL`), `CACHE_ENABLED`, `CACHE_KEY_SECRET`
   (stable HMAC secret ≥16 chars; startup fails without it when caching is
-  on), `CACHE_TTL_SECONDS`, `CACHE_NAMESPACE_VERSION`, `CACHE_MAX_ENTRIES`,
+  on), `CACHE_TTL_SECONDS`, `CACHE_GC_INTERVAL_SECONDS` (worker cache-artifact
+  collection, default 900 s), `CACHE_NAMESPACE_VERSION`, `CACHE_MAX_ENTRIES`,
   `CACHE_MAX_MEMORY_MB`, `MASKING_RULESET_VERSION`,
   `RESULT_MANIFEST_VERSION`, `MASKING_CONFIG_DIGEST`, `KEYS_FORMAT_VERSION`,
   `DOCX_TRANSFORMER_VERSION`.

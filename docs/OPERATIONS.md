@@ -129,7 +129,7 @@ never a blind `rm` (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). Today
   `/ready`** — wiring it (and a front readiness route) is deferred stage 6
   (`infra/AGENTS.md`, `TODO.md`).
 - **`GET /metrics`** keeps the legacy coarse JSON answer for a plain request,
-  e.g. `{"active_jobs":0,"cache":{"hits":3,"misses":1,"writes":1,"failures":0,"evictions":0}}`;
+  e.g. `{"active_jobs":0,"cache":{"hits":3,"misses":1,"writes":1,"failures":0,"evictions":0,"gc_candidates":0,"gc_deleted":0,"gc_reclaimed_bytes":0,"gc_failures":0}}`;
   a DB outage degrades to `active_jobs: null` and a cache outage to zeroed
   counters; neither returns 500. With `Accept: text/plain` (what Prometheus
   sends) the same route returns the full `dm_*` exposition instead. No ids,
@@ -207,6 +207,26 @@ keys or exception messages into tickets or chat.
   is disposable and will rebuild. A missing/corrupt artifact is treated as a
   cache miss and evicted (`back/src/jobs/cache.py`). Keep the version settings
   unchanged unless output semantics actually changed.
+
+### Cache artifact GC
+
+- Cache artifacts are immutable, content-addressed files in the private `cache/`
+  spool; Valkey stores only compact references. Valkey TTL/LRU eviction never
+  triggers a delete by itself.
+- The worker runs a bounded collection pass every `CACHE_GC_INTERVAL_SECONDS`
+  (default 900 s, must be positive). Retention is `max(CACHE_TTL_SECONDS, 24 h)
+  + 1 h`; an artifact is deleted only when its mtime is older than that. Reuse
+  (hit or re-publish of the same hash) refreshes mtime before the Valkey key is
+  published, and the publisher verifies the file after `SET` — a live key never
+  points at a deleted artifact. Selection uses `stat` only (no file contents in
+  memory), re-checks mtime atomically before unlink, and is idempotent.
+- A corrupt/missing artifact or hostile `artifact_id` is a cache miss plus
+  eviction, never an operation failure. Valkey/disk errors are logged by type
+  and the pass is skipped; masking and jobs continue.
+- Safe aggregates: `/metrics` JSON `cache.gc_candidates`, `gc_deleted`,
+  `gc_reclaimed_bytes`, `gc_failures`, plus the worker Prometheus counters
+  `dm_cache_gc_*` / `dm_cache_operations_total{operation="gc"}`. No artifact
+  ids, keys or payloads are exposed.
 
 ### Disk / artifact volume full
 

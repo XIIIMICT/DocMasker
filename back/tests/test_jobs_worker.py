@@ -53,6 +53,29 @@ def worker(env: Settings) -> Worker:
     return Worker(env, JobRepository(env), ArtifactStore(env.jobs_dir))
 
 
+def test_worker_cache_gc_is_periodic_and_outage_tolerant(worker: Worker, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.jobs import worker as worker_module
+    from src.jobs.cache import CacheGcReport
+
+    calls: list[int] = []
+
+    class _FakeCache:
+        def gc(self) -> CacheGcReport:
+            calls.append(1)
+            return CacheGcReport(candidates=1, deleted=1, reclaimed_bytes=4)
+
+    monkeypatch.setattr(worker_module.dependencies, "result_cache", _FakeCache)
+    worker._cache_gc_safe()
+    assert calls == [1]
+
+    def _broken() -> None:
+        msg = "cache dependency unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(worker_module.dependencies, "result_cache", _broken)
+    worker._cache_gc_safe()  # a transient failure must never kill the worker
+
+
 def _run(worker: Worker, env: Settings, accepted_id: str) -> Job:
     repo = JobRepository(env)
     claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)

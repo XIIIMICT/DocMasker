@@ -1,5 +1,9 @@
 """Valkey result-cache tests (Phase 3, brief §4.6)."""
 
+import json
+import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -9,6 +13,7 @@ from src.jobs.cache import (
     CacheArtifactStore,
     ResultCache,
     build_cache_key,
+    cache_gc_stats,
     canonical_json,
     fingerprint_for,
     sha256_hex,
@@ -153,7 +158,6 @@ def test_hit_miss_write_and_eviction(tmp_path: Path, settings: Settings) -> None
     assert cache.metrics["hits"] == 1
     # Corrupt the referenced artifact -> eviction, not a failed request.
     entry_json = cache._client.data[key]
-    import json
 
     artifact_id = json.loads(entry_json)["artifact_id"]
     store.delete(artifact_id)
@@ -215,7 +219,6 @@ def test_real_valkey_hit_miss_and_version_invalidation(live_cache: ResultCache) 
 
 
 def test_real_valkey_corrupt_entry_evicts(live_cache: ResultCache) -> None:
-    import json
 
     cfg = live_cache._settings
     key = _key(cfg, op="mask_text", data=b"corrupt-entry")
@@ -226,3 +229,150 @@ def test_real_valkey_corrupt_entry_evicts(live_cache: ResultCache) -> None:
     client.set(key, json.dumps({"broken": True}))
     assert live_cache.get(key) is None
     assert live_cache.metrics["evictions"] >= 1
+
+
+# --- P1.3: bounded cache-artifact lifecycle ----------------------------------
+
+
+def _cache_with_store(tmp_path: Path, settings: Settings) -> tuple[ResultCache, CacheArtifactStore]:
+    store = CacheArtifactStore(tmp_path)
+    cache = ResultCache(settings, store)
+    cache._client = _FakeValkey()
+    return cache, store
+
+
+def _age(path: Path, seconds: float) -> None:
+    old = time.time() - seconds
+    os.utime(path, (old, old))
+
+
+def test_expired_key_releases_its_artifact(tmp_path: Path, settings: Settings) -> None:
+    cache, store = _cache_with_store(tmp_path, settings)
+    key = "cached-result"
+    entry = cache.put(key, b"payload")
+    assert entry is not None
+    _age(store._path(entry.artifact_id), 100)
+    report = cache.gc(retention_seconds=10)
+    assert report.deleted == 1
+    assert report.reclaimed_bytes == len(b"payload")
+    assert not store.is_present(entry.artifact_id)
+    # A stale Valkey reference becomes a miss, never an error.
+    assert cache.get(key) is None
+
+
+def test_lru_evicted_key_does_not_leak_files_forever(tmp_path: Path, settings: Settings) -> None:
+    cache, store = _cache_with_store(tmp_path, settings)
+    entry = cache.put("evicted-key", b"payload")
+    assert entry is not None
+    cache._client.delete("evicted-key")  # LRU-style removal, key is gone
+    _age(store._path(entry.artifact_id), 100)
+    assert cache.gc(retention_seconds=10).deleted == 1
+
+
+def test_invalid_artifact_reference_is_evicted(tmp_path: Path, settings: Settings) -> None:
+    cache, _store = _cache_with_store(tmp_path, settings)
+    cache._client.set(
+        "key",
+        json.dumps(
+            {
+                "artifact_id": "../outside-spool",
+                "content_hash": "0" * 64,
+                "size": 1,
+                "content_type": "application/zip",
+                "manifest_version": 1,
+                "entry_version": 1,
+            }
+        ),
+    )
+    assert cache.get("key") is None
+    assert cache.metrics["evictions"] >= 1
+
+
+def test_shared_hash_is_not_deleted_when_one_key_is_invalidated(tmp_path: Path, settings: Settings) -> None:
+    cache, _store = _cache_with_store(tmp_path, settings)
+    first = cache.put("key-a", b"shared")
+    second = cache.put("key-b", b"shared")
+    assert first is not None
+    assert second is not None
+    assert first.artifact_id == second.artifact_id
+    cache.invalidate("key-a")
+    assert cache.gc(retention_seconds=3600).deleted == 0
+    assert cache.get("key-b") == b"shared"
+
+
+def test_republishing_an_old_hash_refreshes_retention(tmp_path: Path, settings: Settings) -> None:
+    cache, store = _cache_with_store(tmp_path, settings)
+    entry = cache.put("key-old", b"same")
+    assert entry is not None
+    path = store._path(entry.artifact_id)
+    _age(path, 100)
+    refreshed = cache.put("key-new", b"same")
+    assert refreshed is not None
+    assert time.time() - path.stat().st_mtime < 5
+    assert cache.gc(retention_seconds=10).deleted == 0
+    assert cache.get("key-new") == b"same"
+
+
+def test_gc_dry_run_reports_without_deleting(tmp_path: Path, settings: Settings) -> None:
+    cache, store = _cache_with_store(tmp_path, settings)
+    entry = cache.put("key", b"payload")
+    assert entry is not None
+    _age(store._path(entry.artifact_id), 100)
+    selected = store.select_gc_candidates(10)
+    assert [artifact for artifact, _size, _mtime in selected] == [entry.artifact_id]
+    dry = cache.gc(retention_seconds=10, dry_run=True)
+    assert dry.candidates == 1
+    assert dry.deleted == 0
+    assert store.is_present(entry.artifact_id)
+
+
+def test_concurrent_get_put_and_gc_never_serve_wrong_bytes(tmp_path: Path, settings: Settings) -> None:
+    cache, _store = _cache_with_store(tmp_path, settings)
+    cache.put("key", b"result")
+    errors: list[str] = []
+
+    def reader() -> None:
+        for _ in range(20):
+            value = cache.get("key")
+            if value is not None and value != b"result":
+                errors.append("wrong-result")
+
+    def collector() -> None:
+        for _ in range(20):
+            # Large retention: never delete a live artifact during this test.
+            cache.gc(retention_seconds=3600)
+
+    threads = [threading.Thread(target=reader) for _ in range(3)] + [threading.Thread(target=collector)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors
+
+
+def test_outage_and_recent_artifacts_are_not_aggressively_collected(tmp_path: Path) -> None:
+    settings = Settings.model_validate(
+        {
+            "database_url": "postgresql+psycopg://dm:dm@localhost:5432/dm",
+            "jobs_dir": str(tmp_path),
+            "cache_enabled": False,
+        }
+    )
+    store = CacheArtifactStore(tmp_path)
+    entry = store.publish(b"payload")  # no Valkey client at all
+    report = ResultCache(settings, store).gc(retention_seconds=10)
+    assert report.deleted == 0
+    assert store.read(entry) == b"payload"
+
+
+def test_gc_metrics_are_safe_aggregates(tmp_path: Path, settings: Settings) -> None:
+    cache, store = _cache_with_store(tmp_path, settings)
+    entry = cache.put("key", b"payload")
+    assert entry is not None
+    _age(store._path(entry.artifact_id), 100)
+    cache.gc(retention_seconds=10)
+    stats = cache_gc_stats()
+    assert stats["candidates"] >= 1
+    assert stats["deleted"] >= 1
+    assert stats["reclaimed_bytes"] >= len(b"payload")
+    assert all(isinstance(value, int) for value in stats.values())
