@@ -25,8 +25,13 @@ back/config/masking/
 `MaskingConfig` snapshot. Invalid YAML, unknown label/match mode, duplicate
 normalized values, `always_mask` ↔ `never_mask` conflicts, a leftover `order`
 field or a missing required file fail startup with a clear
-`MaskingConfigError`. The snapshot's non-reversible digest is part of the
-versioned cache key (§4.3), so any exception change invalidates cached results.
+`MaskingConfigError`. The non-reversible digest is computed from the **entire
+canonical effective snapshot** — schema version, ordered label ids/titles,
+every lexicon value, all `common.yaml` character sets, and every exception's
+primary literal, match mode and ordered variants. YAML comments/formatting alone
+do not change it; any effective value does. The digest is always part of the
+versioned cache key (§4.3), even when `MASKING_CONFIG_DIGEST` is pinned manually,
+so no config change can be silently served from a stale cache entry.
 
 Validate without starting the app:
 
@@ -129,14 +134,24 @@ never_mask:
   address: []
 ```
 
-- `match` is `exact` / `case_insensitive` / `token_sequence`. Values are NFC
-  normalized, trimmed, whitespace-collapsed; `ё`/`е` are **not** equivalent.
+- `match` is `exact` / `case_insensitive` / `token_sequence`, and each mode has
+  real, tested semantics:
+  - `exact` — case-sensitive literal;
+  - `case_insensitive` — case-insensitive literal;
+  - `token_sequence` — ordered tokens separated by arbitrary whitespace, also
+    case-insensitive (useful when DOCX splits a name across lines or spaces).
+  All are NFC normalized, trimmed, whitespace-collapsed and word-boundary
+  guarded; `ё`/`е` are **not** equivalent. Configuration supplies literals only,
+  never executable regex.
 - No substring matching by default (word boundaries); a `never_mask` entry
   suppresses **only** an exact whole detected span, never a larger overlapping
   one. `always_mask` spans pass through the normal overlap policy and key
-  numbering.
-- A normalized value present in both `always_mask` and `never_mask` fails
-  startup. `Росхим` force-mask behavior is preserved from the old hardcode.
+  numbering. The mode applies to primaries and variants alike.
+- Empty, duplicate and case-insensitively repeated variants are rejected; the
+  same check covers primaries and variants across all entries of one side. A
+  normalized literal present in both `always_mask` and `never_mask` (including
+  variants) fails startup. `Росхим` force-mask behavior is preserved from the
+  old hardcode.
 
 ## Recipes
 
@@ -164,7 +179,7 @@ with file contents, so cached results are invalidated.
 |---|---|
 | `CACHE_NAMESPACE_VERSION` | key construction or stored cache-entry structure changes |
 | `MASKING_RULESET_VERSION` | detection/masking semantics change the output |
-| `MASKING_CONFIG_DIGEST` | `auto` computes it from the loaded snapshot (any config change) |
+| `MASKING_CONFIG_DIGEST` | extra manual salt only; the loaded snapshot digest is always included |
 | `RESULT_MANIFEST_VERSION` | result archive/manifest contract changes |
 | `KEYS_FORMAT_VERSION` | keys YAML format changes |
 | `DOCX_TRANSFORMER_VERSION` | OOXML transformation changes |

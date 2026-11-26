@@ -286,20 +286,65 @@ def _surname_accepted(morph: MorphVocab, token: str) -> bool:
 # --- exceptions (always_mask / never_mask) -----------------------------------
 
 
-def _exception_regex(values: tuple[ExceptionValue, ...]) -> re.Pattern[str] | None:
-    """Word-boundary-safe literal matcher; never a substring match by default."""
-    if not values:
+@dataclass(frozen=True, slots=True)
+class _ExceptionPattern:
+    """Word-boundary-guarded literal matchers for one exception group."""
+
+    patterns: tuple[re.Pattern[str], ...]
+
+    def finditer(self, text: str) -> Iterator[re.Match[str]]:
+        for pattern in self.patterns:
+            yield from pattern.finditer(text)
+
+
+_BOUNDARY_LEFT = r"(?<![\wА-Яа-яЁё])"
+_BOUNDARY_RIGHT = r"(?![\wА-Яа-яЁё])"
+
+
+def _compile_exception_literals(
+    literals: Iterable[str],
+    *,
+    ignore_case: bool,
+    token_sequence: bool,
+) -> re.Pattern[str] | None:
+    parts: set[str] = set()
+    for literal in literals:
+        if token_sequence:
+            parts.add(r"\s+".join(re.escape(token) for token in _normalize(literal).split()))
+        else:
+            parts.add(re.escape(_normalize(literal)))
+    if not parts:
         return None
-    parts: list[str] = []
+    body = "|".join(sorted(parts, key=len, reverse=True))
+    flags = re.IGNORECASE if ignore_case else 0
+    return re.compile(f"{_BOUNDARY_LEFT}(?:{body}){_BOUNDARY_RIGHT}", flags)
+
+
+def _exception_pattern(values: tuple[ExceptionValue, ...]) -> _ExceptionPattern:
+    """
+    Compile each declared match mode with its documented semantics.
+
+    `exact` is a case-sensitive literal, `case_insensitive` a case-insensitive
+    literal and `token_sequence` an ordered token sequence with arbitrary
+    whitespace between tokens (also case-insensitive). All are NFC-normalised,
+    word-boundary guarded and built from literals only — never from regex data
+    supplied by configuration.
+    """
+    by_mode: dict[str, list[str]] = {}
     for value in values:
-        literals = (value.value, *value.variants)
-        for literal in literals:
-            parts.append(re.escape(_normalize(literal)))
-    pattern = "|".join(sorted(set(parts), key=len, reverse=True))
-    return re.compile(rf"(?<![\wА-Яа-яЁё])(?:{pattern})(?![\wА-Яа-яЁё])", re.IGNORECASE)
+        by_mode.setdefault(value.match, []).extend((value.value, *value.variants))
+    compiled = (
+        _compile_exception_literals(
+            by_mode[mode],
+            ignore_case=mode != "exact",
+            token_sequence=mode == "token_sequence",
+        )
+        for mode in sorted(by_mode)
+    )
+    return _ExceptionPattern(tuple(pattern for pattern in compiled if pattern is not None))
 
 
-def _suppressed(entity: Entity, patterns: dict[str, re.Pattern[str] | None]) -> bool:
+def _suppressed(entity: Entity, patterns: dict[str, _ExceptionPattern]) -> bool:
     """
     Suppress only when the configured value covers the whole detected span.
 
@@ -365,8 +410,8 @@ class RuleBasedMasker:
         self._org_abbrev_re = re.compile(rf"\b(?:{abbrev})\b\.?[\s,;\-–—]*(?:{_ORG_NAME_PART})", re.IGNORECASE)
         lead = "|".join(re.escape(item) for item in cfg.org_lead_words)
         self._org_lead_re = re.compile(rf"\b(?:{lead})\s+(?:{_ORG_QUOTED}|{_ORG_NAME})")
-        self._always_patterns = {label: _exception_regex(values) for label, values in cfg.always_mask.items()}
-        self._never_patterns = {label: _exception_regex(values) for label, values in cfg.never_mask.items()}
+        self._always_patterns = {label: _exception_pattern(values) for label, values in cfg.always_mask.items()}
+        self._never_patterns = {label: _exception_pattern(values) for label, values in cfg.never_mask.items()}
 
     @classmethod
     def for_labels(cls, labels: Iterable[str]) -> RuleBasedMasker:

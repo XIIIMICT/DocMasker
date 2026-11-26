@@ -72,7 +72,9 @@ still be treated as sensitive operational data.
   input/keys hashes, normalized output name, masking ruleset version, config
   digest, result-manifest version, keys-format version, DOCX-transformer version
   and engine/entry/key-schema versions (`back/src/jobs/cache.py`, ADR-0003 §Phase 3
-  implementation note). `CACHE_KEY_SECRET` must be stable across restarts
+  implementation note). The canonical config snapshot digest is always in the
+  payload: a manual `MASKING_CONFIG_DIGEST` can only add invalidation, never
+  disable it. `CACHE_KEY_SECRET` must be stable across restarts
   (≥16 chars); rotating it deliberately invalidates the whole cache. Bump the
   version settings whenever output semantics change, or stale results will be
   served (`back/src/jobs/AGENTS.md`).

@@ -111,6 +111,22 @@ def _string_list(container: dict[str, Any], key: str, path: Path) -> tuple[str, 
     return tuple(_normalize(item) for item in values)
 
 
+def _char_set(container: dict[str, Any], key: str, path: Path) -> str:
+    """Keep a literal character set verbatim: whitespace is semantic here."""
+    value = container.get(key, "")
+    if not isinstance(value, str):
+        msg = f"Конфигурация маскирования: {key} в {path.name} должен быть строкой."
+        raise MaskingConfigError(msg)
+    return value
+
+
+def _literals(groups: dict[str, tuple[ExceptionValue, ...]]) -> set[str]:
+    """Every primary literal and variant, casefolded, for conflict detection."""
+    return {
+        literal.casefold() for group in groups.values() for entry in group for literal in (entry.value, *entry.variants)
+    }
+
+
 def _exceptions(container: dict[str, Any], side: str, path: Path) -> dict[str, tuple[ExceptionValue, ...]]:
     raw = container.get(side, {})
     if not isinstance(raw, dict):
@@ -147,7 +163,24 @@ def _exceptions(container: dict[str, Any], side: str, path: Path) -> dict[str, t
                 msg = f"Конфигурация маскирования: дублирующееся значение в {path.name}."
                 raise MaskingConfigError(msg)
             seen.add(normalized)
-            parsed.append(ExceptionValue(value, mode, tuple(_normalize(item) for item in variants)))
+            normalized_variants: list[str] = []
+            variant_seen: set[str] = set()
+            for item in variants:
+                variant = _normalize(item)
+                if not variant:
+                    msg = f"Конфигурация маскирования: пустой вариант в {path.name}."
+                    raise MaskingConfigError(msg)
+                folded = variant.casefold()
+                if folded in variant_seen:
+                    msg = f"Конфигурация маскирования: дублирующийся вариант в {path.name}."
+                    raise MaskingConfigError(msg)
+                variant_seen.add(folded)
+                if folded in seen:
+                    msg = f"Конфигурация маскирования: дублирующееся значение в {path.name}."
+                    raise MaskingConfigError(msg)
+                seen.add(folded)
+                normalized_variants.append(variant)
+            parsed.append(ExceptionValue(value, mode, tuple(normalized_variants)))
         result[label] = tuple(parsed)
     return result
 
@@ -187,14 +220,16 @@ def load_config(root: str | Path | None = None) -> MaskingConfig:
     org_doc = _load_yaml(lex / "organizations.yaml")
     phrases = org_doc.get("legal_form_phrases", [])
     if not isinstance(phrases, list) or not all(
-        isinstance(form, list) and form and all(isinstance(word, str) for word in form) for form in phrases
+        isinstance(form, list) and form and all(isinstance(word, str) and word.strip() for word in form)
+        for form in phrases
     ):
         msg = "Конфигурация маскирования: некорректные legal_form_phrases."
         raise MaskingConfigError(msg)
 
     person_doc = _load_yaml(lex / "persons.yaml")
     address_doc = _load_yaml(lex / "addresses.yaml")
-    common_doc = _load_yaml(lex / "common.yaml")
+    common_path = lex / "common.yaml"
+    common_doc = _load_yaml(common_path)
 
     exceptions_path = base / "exceptions.yaml"
     if not exceptions_path.is_file():
@@ -202,24 +237,42 @@ def load_config(root: str | Path | None = None) -> MaskingConfig:
     exceptions_doc = _load_yaml(exceptions_path)
     always = _exceptions(exceptions_doc, "always_mask", exceptions_path)
     never = _exceptions(exceptions_doc, "never_mask", exceptions_path)
-    conflicts = {value.normalized for group in always.values() for value in group} & {
-        value.normalized for group in never.values() for value in group
-    }
-    if conflicts:
+    if _literals(always) & _literals(never):
         msg = "Конфигурация маскирования: конфликт always_mask и never_mask."
         raise MaskingConfigError(msg)
 
-    # Digest over the canonicalized, validated data (never over raw values in logs).
+    # One canonical snapshot feeds both the runtime config and the cache digest:
+    # no hand-maintained partial list can drift away from an effective value.
+    org_abbreviations = _string_list(org_doc, "legal_form_abbreviations", labels_path)
+    org_legal_phrases = tuple(tuple(_normalize(word) for word in form) for form in phrases)
+    org_lead_words = _string_list(org_doc, "lead_words", labels_path)
+    person_roles = frozenset(_string_list(person_doc, "role_exclusions", labels_path))
+    address_abbreviations = frozenset(_string_list(address_doc, "abbreviations", labels_path))
+    address_keywords = _string_list(address_doc, "keywords", labels_path)
+    url_trim_chars = _char_set(common_doc, "url_trim_chars", common_path)
+    org_separators = _char_set(common_doc, "organization_separators", common_path)
+    address_trim_chars = _char_set(common_doc, "address_trim_chars", common_path)
+
+    def exception_payload(groups: dict[str, tuple[ExceptionValue, ...]]) -> dict[str, list[list[object]]]:
+        return {
+            label: [[entry.value, entry.match, list(entry.variants)] for entry in group]
+            for label, group in groups.items()
+        }
+
     digest_payload = {
+        "schema_version": SCHEMA_VERSION,
         "labels": entries,
-        "always": {k: [v.normalized for v in values] for k, values in always.items()},
-        "never": {k: [v.normalized for v in values] for k, values in never.items()},
-        "org_abbrev": _string_list(org_doc, "legal_form_abbreviations", labels_path),
-        "org_phrases": phrases,
-        "org_lead": _string_list(org_doc, "lead_words", labels_path),
-        "person_roles": _string_list(person_doc, "role_exclusions", labels_path),
-        "address_abbrev": _string_list(address_doc, "abbreviations", labels_path),
-        "address_keywords": _string_list(address_doc, "keywords", labels_path),
+        "always": exception_payload(always),
+        "never": exception_payload(never),
+        "org_abbrev": list(org_abbreviations),
+        "org_phrases": [list(form) for form in org_legal_phrases],
+        "org_lead": list(org_lead_words),
+        "person_roles": sorted(person_roles),
+        "address_abbrev": sorted(address_abbreviations),
+        "address_keywords": list(address_keywords),
+        "url_trim_chars": url_trim_chars,
+        "org_separators": org_separators,
+        "address_trim_chars": address_trim_chars,
     }
     digest = hashlib.sha256(json.dumps(digest_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -227,15 +280,15 @@ def load_config(root: str | Path | None = None) -> MaskingConfig:
         labels=LabelCatalogue(tuple(entries)),
         always_mask=always,
         never_mask=never,
-        org_abbreviations=_string_list(org_doc, "legal_form_abbreviations", labels_path),
-        org_legal_phrases=tuple(tuple(form) for form in phrases),
-        org_lead_words=_string_list(org_doc, "lead_words", labels_path),
-        person_roles=frozenset(_string_list(person_doc, "role_exclusions", labels_path)),
-        address_abbreviations=frozenset(_string_list(address_doc, "abbreviations", labels_path)),
-        address_keywords=_string_list(address_doc, "keywords", labels_path),
-        url_trim_chars=str(common_doc.get("url_trim_chars", "")),
-        org_separators=str(common_doc.get("organization_separators", "")),
-        address_trim_chars=str(common_doc.get("address_trim_chars", "")),
+        org_abbreviations=org_abbreviations,
+        org_legal_phrases=org_legal_phrases,
+        org_lead_words=org_lead_words,
+        person_roles=person_roles,
+        address_abbreviations=address_abbreviations,
+        address_keywords=address_keywords,
+        url_trim_chars=url_trim_chars,
+        org_separators=org_separators,
+        address_trim_chars=address_trim_chars,
         digest=digest,
     )
 
