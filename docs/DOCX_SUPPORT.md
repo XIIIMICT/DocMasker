@@ -7,6 +7,27 @@ files (QName/URI, never hardcoded prefixes), parses selected XML parts with
 text-node slices. Only modified ZIP entries are re-serialized; **all other
 entries are copied byte-for-byte**. `python-docx` is no longer used for masking.
 
+## Bounded inventory and single-pass transform (DM-3)
+
+`build_inventory()` now returns **metadata only** — part names, content types,
+relationship type/mode, category, disposition and `CoverageReport`. It never
+retains a processable part's decompressed XML. The transform keeps the input
+`ZipFile` open and calls `_read_part()` immediately before parsing each part;
+the payload and its tree are released before the next part is read. Secure
+parsing (`defusedxml.lxml`, no DTD/entities/network, 32 MiB part cap),
+namespace-URI matching, split-across-runs handling, fail-closed unsupported text
+parts and the `checkpoint` hooks (before each part and between detection
+windows) are unchanged. The path-based worker transform stays on disk: unchanged
+entries are stream-copied and the result is written straight to the spool file.
+
+The job path replaces the per-occurrence `all_entities` list with `EntityStats`
+(total, per-label occurrences and distinct counts reusing `MaskKeys` numbering);
+`build_mask_manifest()` accepts those aggregate stats. The sync bytes API still
+returns occurrence detail for callers that need it. Unmask compiles one
+longest-first alternation per transform and performs one bounded scan per
+logical text container, so repeated markers and markers split across runs stay
+correct and re-applying a restore does not cascade.
+
 ## Processed (masked and restored)
 
 | Part / content | How |
@@ -112,5 +133,9 @@ endnotes, comments, tracked deletions, text boxes, content controls, core/app
 properties, alt-text attributes, external relationship targets, shared parts,
 malformed XML, embedded objects, and mask → keys → unmask round-trips with
 byte-for-byte preservation of an unrelated PNG entry. Sync/job manifest parity
-is asserted with the same source and config. `front/e2e/smoke.spec.ts` includes
-a manifest-required/validated-statistics case.
+is asserted with the same source and config. `back/tests/test_ooxml_bounded.py`
+adds DM-3 regressions: metadata-only inventory, a refcount-tracked bytes probe
+proving only one decompressed part is resident, high-occurrence stats parity
+without an occurrence list, file/memory equivalence, cancellation at part and
+window boundaries, one unmask scan per container and worker-manifest parity.
+`front/e2e/smoke.spec.ts` includes a manifest-required/validated-statistics case.

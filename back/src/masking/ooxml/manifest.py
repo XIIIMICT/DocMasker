@@ -18,26 +18,41 @@ def _input_metadata(source_bytes: bytes, digest: tuple[str, int] | None) -> dict
     return {"sha256": _sha256(source_bytes), "size_bytes": len(source_bytes)}
 
 
+def _mask_statistics(
+    entities: list[dict[str, Any]] | None,
+    stats: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Prefer the bounded accumulator; aggregate detail only for legacy callers."""
+    if stats is not None:
+        return stats
+    occurrences: dict[str, int] = {}
+    unique_values: dict[str, set[str]] = {}
+    for entity in entities or []:
+        label = entity["label"]
+        occurrences[label] = occurrences.get(label, 0) + 1
+        unique_values.setdefault(label, set()).add(entity["text"])
+    return {
+        "total_occurrences": len(entities or []),
+        "occurrences_by_label": occurrences,
+        "unique_by_label": {label: len(values) for label, values in unique_values.items()},
+    }
+
+
 def build_mask_manifest(
     *,
     source_bytes: bytes,
     document_name: str,
     keys_name: str,
-    entities: list[dict[str, Any]],
     coverage: dict[str, Any],
     cache_hit: bool,
     namespace_version: int,
     masking_ruleset_version: int,
     exception_config_digest: str,
+    entities: list[dict[str, Any]] | None = None,
+    stats: dict[str, Any] | None = None,
     input_digest: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
     """Canonical `manifest.json` for `mask_file` (same from sync and worker)."""
-    occurrences: dict[str, int] = {}
-    unique_values: dict[str, set[str]] = {}
-    for entity in entities:
-        label = entity["label"]
-        occurrences[label] = occurrences.get(label, 0) + 1
-        unique_values.setdefault(label, set()).add(entity["text"])
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "operation": "mask_file",
@@ -47,11 +62,7 @@ def build_mask_manifest(
         "exception_config_digest": exception_config_digest,
         "input": _input_metadata(source_bytes, input_digest),
         "output": {"document_name": document_name, "keys_name": keys_name},
-        "statistics": {
-            "total_occurrences": len(entities),
-            "occurrences_by_label": occurrences,
-            "unique_by_label": {label: len(values) for label, values in unique_values.items()},
-        },
+        "statistics": _mask_statistics(entities, stats),
         "coverage": coverage,
         "cache": {"hit": cache_hit, "namespace_version": namespace_version},
     }
