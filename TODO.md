@@ -60,19 +60,6 @@ and before/after benchmarks: `docs/PRODUCTION_READINESS.md`,
   deployment with network/reverse-proxy isolation. If a public deployment is
   ever wanted: OIDC/proxy auth + IDOR/CSRF protections, new ADR.
 
-## Deferred from the follow-up brief
-
-- **P2.11 — bounded-memory DOCX transform path.** The worker still holds a
-  per-part XML tree, the transformed DOCX and the result ZIP in memory; only
-  the HTTP edges stream. Needs a path-based OPC transform (one part at a time,
-  streamed copy of unchanged media), path-based cache publication/read, a
-  file-backed result ZIP, and a reproducible before/after wall-clock/RSS/disk
-  benchmark matrix (small/medium/large DOCX, large media, large XML, many XML
-  parts, high `JOBS_CONCURRENCY`). Do not claim large-document processing is
-  fully streaming until those measurements exist. Tracked in
-  `docs/FOLLOW_UP_MATRIX.md`; not attempted in this pass to avoid destabilising
-  the verified OPC/manifest path.
-
 ## Still to verify on target hardware
 
 The local isolated CI-stack drill covered queue pressure, identical-job

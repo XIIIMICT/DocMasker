@@ -14,20 +14,24 @@ metrics carry only bounded labels (kind and safe error code). Metrics emission
 is best-effort: it never affects job execution or fencing.
 """
 
+import contextlib
 import logging
+import os
 import shutil
 import signal
+import tempfile
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from src.app_logging import configure_application_logging, log_event, log_warning
 from src.config import Settings, get_settings
-from src.masking.archives import mark_cache_hit
+from src.masking.archives import mark_cache_hit_file, write_archive_to_path
 from src.metrics import (
     inc_lease_expired,
     inc_lease_renew_failure,
@@ -229,6 +233,8 @@ class Worker:
         kind_label = safe_kind(kind) if kind is not None else "unmatched"
         started = time.perf_counter()
         running = False
+        result_path: Path | None = None
+        entries: dict[str, Any] = {}
         heartbeat = Heartbeat(self._repo, job_id, claim, self._settings)
         heartbeat.start()
         try:
@@ -250,41 +256,25 @@ class Worker:
                 outcome="ok",
             )
             cache_key = current.cache_key
-            cached = cache.get(cache_key) if cache_key else None
-            if cached is not None:
+            result_path = _temp_result_path(self._store.root)
+            from_cache = bool(cache_key and cache.get_to_path(cache_key, result_path))
+            if from_cache:
                 # A verified cache hit still goes through the fenced publish:
                 # no cancelled/stale worker can expose it.
                 self._checkpoint(job_id, claim, heartbeat)
-                result_key = self._store.write_result(job_id, claim.lease_token, mark_cache_hit(cached))
-                self._repo.succeed(
+                mark_cache_hit_file(result_path)
+            else:
+                entries = execute(
+                    self._store,
                     job_id,
-                    result_key,
-                    ttl_seconds=self._settings.jobs_ttl_seconds,
-                    claim=claim,
+                    progress=self._progress(job_id, claim, heartbeat),
+                    checkpoint=lambda: self._checkpoint(job_id, claim, heartbeat),
                 )
-                self._store.delete_attempt_artifacts(job_id, keep_key=result_key)
-                observe_job_succeeded(kind_label)
-                log_event(
-                    LOGGER,
-                    "job_succeeded",
-                    "Job succeeded from cache.",
-                    job_id=job_id,
-                    kind=kind_label,
-                    operation="execute",
-                    outcome="ok",
-                )
-                return
-            entries = execute(
-                self._store,
-                job_id,
-                progress=self._progress(job_id, claim, heartbeat),
-                checkpoint=lambda: self._checkpoint(job_id, claim, heartbeat),
-            )
-            self._checkpoint(job_id, claim, heartbeat)
-            result = _zip_entries(entries)
-            # Publish to an attempt-scoped immutable key: a stale worker cannot
-            # overwrite the artifact a newer claim will publish.
-            result_key = self._store.write_result(job_id, claim.lease_token, result)
+                self._checkpoint(job_id, claim, heartbeat)
+                write_archive_to_path(result_path, entries)
+            # Publish to an attempt-scoped immutable key from a streamed file:
+            # a stale worker cannot overwrite a newer claim's result.
+            result_key = self._store.write_result_from_path(job_id, claim.lease_token, result_path)
             self._repo.succeed(
                 job_id,
                 result_key,
@@ -295,12 +285,12 @@ class Worker:
             observe_job_succeeded(kind_label)
             # Populate the cache only after the fenced succeeded transition
             # was accepted (§4.5); a stale/cancelled job never caches.
-            if cache_key:
-                cache.put(cache_key, result)
+            if cache_key and not from_cache:
+                cache.put_from_path(cache_key, result_path)
             log_event(
                 LOGGER,
                 "job_succeeded",
-                "Job succeeded.",
+                "Job succeeded from cache." if from_cache else "Job succeeded.",
                 job_id=job_id,
                 kind=kind_label,
                 operation="execute",
@@ -352,6 +342,13 @@ class Worker:
             self._fail(job_id, claim, ErrorClass("internal_error", retryable=True), kind_label)
         finally:
             heartbeat.stop()
+            for payload in entries.values():
+                if isinstance(payload, Path):
+                    with contextlib.suppress(OSError):
+                        payload.unlink()
+            if result_path is not None:
+                with contextlib.suppress(OSError):
+                    result_path.unlink()
             if running:
                 set_job_running(kind=kind_label, running=False)
             observe_job_duration(kind_label, time.perf_counter() - started)
@@ -590,6 +587,14 @@ class Worker:
         self._sweep_safe()
         self._cache_gc_safe()
         log_event(LOGGER, "worker_stopped", "Worker stopped.", worker_id=self._worker_id, operation="poll")
+
+
+def _temp_result_path(root: Path) -> Path:
+    """Create a free path inside the private spool for a streamed result ZIP."""
+    handle, name = tempfile.mkstemp(prefix=".dm-result-", suffix=".zip", dir=str(root))
+    os.close(handle)
+    Path(name).unlink()
+    return Path(name)
 
 
 def _zip_entries(entries: dict[str, Any]) -> bytes:

@@ -163,6 +163,38 @@ dedupe undercount; the wall-time comparison is still valid (same input shapes).
   needs an ADR; PostgreSQL coordinates workers but the artifact spool is
   single-host by decision (ADR-0003).
 
+## P2.11 bounded-memory DOCX path (2026-11-26)
+
+File jobs now use `transform_package_to_file()`: the OPC inventory materialises
+only parts that will be transformed, unchanged media/binary entries are copied
+from the source ZIP by 1 MiB chunks, one XML part tree is processed at a time,
+and the transformed DOCX / result ZIP are written to files in the private spool
+before an atomic fenced result publication. Cache artifacts are published and
+read by path (`CacheArtifactStore.publish_from_path` / `copy_to`) with streaming
+hash verification — no base64 ZIP in JSON and no full in-memory result on a hit.
+
+Reproduce with `uv run --directory back python -m benchmarks.bounded_memory`;
+raw JSON is `back/benchmarks/bounded-memory-results.json`. Host (Windows) values:
+
+| Case | Input / uncompressed | Wall | Peak tracked | Temp files |
+|---|---|---|---|---|
+| small | 35 KB / 827 KB | 0.09 s | 3.4 MB | 1 |
+| medium | 37 KB / 871 KB | 1.42 s | 5.1 MB | 1 |
+| large-near-max (22 MB media) | 23.1 MB / 23.9 MB | 0.58 s | 4.5 MB | 1 |
+| large-media (8 MB) | 8.4 MB / 9.2 MB | 0.11 s | 3.6 MB | 1 |
+| large-xml (6,000 paragraphs) | 53 KB / 1.37 MB | 17.9 s | 12.8 MB | 1 |
+| many XML parts (200) | 71 KB / 843 KB | 0.36 s | 3.8 MB | 1 |
+| 4 concurrent transforms | 4 × 36 KB | 2.70 s | 10.4 MB | 4 |
+
+The 23.9 MB decompressed package needs only 4.5 MB of tracked Python peak:
+memory no longer scales with all ZIP entries at once. `peak_rss_bytes` is
+POSIX-only and was `null` on this Windows host; record it in the Linux target
+run. Remaining bounded limits, stated explicitly: **one XML part tree** per
+worker (32 MiB XML-part cap in `_secure_parse`), the current container's
+serially written result ZIP, and the browser's full-result Blob + JSZip
+unpacking (`front/src/shared/api/jobs.ts`) — client-side streaming is not
+claimed. Sync routes remain bounded by `SYNC_MAX_DOCX_BYTES`.
+
 ## Capacity facts worth keeping
 
 - natasha's `MorphVocab` + extractors cost ~110–170 MB of in-memory dictionary

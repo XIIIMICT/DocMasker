@@ -8,13 +8,20 @@ a supported part is silently skipped. No real PII is used.
 import io
 import json
 import zipfile
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from src.masking.mapping import MaskKeys, parse_keys_yaml, placeholders_from_document
 from src.masking.ooxml.manifest import build_mask_manifest, validate_manifest
-from src.masking.ooxml.package import OoxmlPackageError, build_inventory, transform_package
+from src.masking.ooxml.package import (
+    OoxmlPackageError,
+    build_inventory,
+    transform_package,
+    transform_package_to_file,
+)
 from src.masking.rule_based import RuleBasedMasker
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -378,7 +385,7 @@ def test_sync_and_job_manifest_parity() -> None:
     """Same source + config => same logical manifest fields (§7.3)."""
     source = _build_package()
     _masked, entities, _keys, coverage = mask_docx_in_memory(source)
-    ctx = {
+    ctx: dict[str, Any] = {
         "masking_ruleset_version": 1,
         "exception_config_digest": "digest",
         "namespace_version": 1,
@@ -404,6 +411,36 @@ def test_sync_and_job_manifest_parity() -> None:
     assert json.dumps(sync, sort_keys=True, ensure_ascii=False) == json.dumps(job, sort_keys=True, ensure_ascii=False)
     assert sync["input"]["size_bytes"] == len(source)
     assert sync["statistics"]["total_occurrences"] == len(entities)
+
+
+def test_bounded_inventory_leaves_media_unread(tmp_path: Path) -> None:
+    source = _build_package()
+    parts, _coverage = build_inventory(source)
+    media = next(part for part in parts if part.name.endswith(".png"))
+    assert media.data is None  # never decompressed into memory
+    document = next(part for part in parts if part.name == "word/document.xml")
+    assert document.data is not None
+
+
+def test_file_transform_matches_in_memory_transform(tmp_path: Path) -> None:
+    source = _build_package()
+    source_path = tmp_path / "source.docx"
+    out_path = tmp_path / "masked.docx"
+    source_path.write_bytes(source)
+
+    keys = MaskKeys()
+    in_memory, entities, _unused, coverage = transform_package(source, mode="mask", masker=RuleBasedMasker(), keys=keys)
+    file_entities, _unused, file_coverage = transform_package_to_file(
+        source_path,
+        out_path,
+        mode="mask",
+        masker=RuleBasedMasker(),
+        keys=MaskKeys(),
+    )
+    assert out_path.read_bytes() == in_memory
+    assert file_entities == entities
+    assert file_coverage.as_manifest() == coverage.as_manifest()
+    assert keys.to_yaml()  # both paths allocate document-wide keys
 
 
 def test_transform_package_checkpoints_before_each_expensive_part() -> None:

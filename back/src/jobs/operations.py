@@ -7,15 +7,19 @@ thin orchestration. Each call runs in a worker thread; the masker itself is a
 process-wide cached singleton built from one immutable config snapshot.
 """
 
+import hashlib
 import json
+import os
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from src.config import get_settings
 from src.masking.archives import safe_stem
 from src.masking.config import get_config
-from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
-from src.masking.docx_validation import upload_limits, validate_docx_package
+from src.masking.docx_service import mask_docx_to_file, unmask_docx_to_file
+from src.masking.docx_validation import upload_limits, validate_docx_package_path
 from src.masking.mapping import placeholders_from_document, validate_keys_yaml
 from src.masking.ooxml.manifest import (
     MANIFEST_NAME,
@@ -28,6 +32,25 @@ from src.masking.service import mask_document, mask_stats, unmask_document
 
 from .models import JobPhase
 from .storage import ArtifactStore
+
+
+def _stream_digest(path: Path) -> tuple[str, int]:
+    """SHA-256 and size from a streamed file (never materialises the input)."""
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _temp_output(store: ArtifactStore) -> Path:
+    """Create a bounded temporary output path inside the private spool."""
+    handle, name = tempfile.mkstemp(prefix=".dm-transform-", dir=str(store.root))
+    os.close(handle)
+    Path(name).unlink()
+    return Path(name)
 
 
 def _manifest_ctx() -> dict[str, Any]:
@@ -55,7 +78,7 @@ def execute(
     *,
     progress: Callable[[JobPhase, int], None],
     checkpoint: Callable[[], None] | None = None,
-) -> dict[str, bytes]:
+) -> dict[str, bytes | Path]:
     """
     Run the operation for `job_id` and return the result-archive entries.
 
@@ -107,14 +130,15 @@ def execute(
         return {"result.json": json.dumps({"text": restored}, ensure_ascii=False).encode("utf-8")}
 
     if kind == "mask_file":
-        data = safe_read("input")
+        source_path = store.path_for(job_id, "input")
         try:
-            validate_docx_package(data, upload_limits())
+            validate_docx_package_path(source_path, upload_limits())
         except Exception as error:
             raise JobExecutionError("invalid_package") from error
         check()
         progress("detection", 40)
-        masked_bytes, entities, keys, coverage = mask_docx_in_memory(data, masker, checkpoint=check)
+        output_path = _temp_output(store)
+        entities, keys, coverage = mask_docx_to_file(source_path, output_path, masker, checkpoint=check)
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
@@ -123,7 +147,8 @@ def execute(
         keys_name = f"{base} (ключи демаскировки).yaml"
         ctx = _manifest_ctx()
         manifest = build_mask_manifest(
-            source_bytes=data,
+            source_bytes=b"",
+            input_digest=_stream_digest(source_path),
             document_name=document_name,
             keys_name=keys_name,
             entities=[entity.model_dump() for entity in entities],
@@ -135,15 +160,15 @@ def execute(
         )
         progress("archive", 95)
         return {
-            document_name: masked_bytes,
+            document_name: output_path,
             keys_name: keys.to_yaml().encode("utf-8"),
             MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
         }
 
     if kind == "unmask_file":
-        data = safe_read("input")
+        source_path = store.path_for(job_id, "input")
         try:
-            validate_docx_package(data, upload_limits())
+            validate_docx_package_path(source_path, upload_limits())
         except Exception as error:
             raise JobExecutionError("invalid_package") from error
         keys_yaml = safe_read("keys").decode("utf-8")
@@ -153,7 +178,8 @@ def execute(
             raise JobExecutionError("invalid_keys") from error
         check()
         progress("detection", 40)
-        restored, unused, coverage = unmask_docx_in_memory(data, placeholders, checkpoint=check)
+        output_path = _temp_output(store)
+        unused, coverage = unmask_docx_to_file(source_path, output_path, placeholders, checkpoint=check)
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
@@ -161,7 +187,8 @@ def execute(
         document_name = f"{base} (демаскированный).docx"
         ctx = _manifest_ctx()
         manifest = build_unmask_manifest(
-            source_bytes=data,
+            source_bytes=b"",
+            input_digest=_stream_digest(source_path),
             document_name=document_name,
             unused_keys=unused,
             coverage=coverage.as_manifest(),
@@ -172,7 +199,7 @@ def execute(
         )
         progress("archive", 95)
         return {
-            document_name: restored,
+            document_name: output_path,
             MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
         }
 

@@ -10,9 +10,11 @@ modified ZIP entries are re-serialized — all other entries are copied verbatim
 """
 
 import io
+import shutil
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from defusedxml.lxml import fromstring as safe_fromstring
@@ -209,7 +211,8 @@ class CoverageReport:
 @dataclass(frozen=True, slots=True)
 class _Part:
     name: str
-    data: bytes
+    #: Only processable parts are materialised; copy-only media stay on disk.
+    data: bytes | None
     category: str
     is_xml: bool
 
@@ -298,16 +301,18 @@ def _resolve(base: str, target: str) -> str:
     return "/".join(stack)
 
 
-def build_inventory(data: bytes) -> tuple[list[_Part], CoverageReport]:
+def build_inventory(source: bytes | Path) -> tuple[list[_Part], CoverageReport]:
     """
     Deterministic OPC inventory, resolved by URI.
 
     Content type, relationship type, part name, processor and disposition
-    (§6.1). Shared parts are listed exactly once.
+    (§6.1). Shared parts are listed exactly once. Only parts that will be
+    transformed are read into memory; unchanged media/binary entries are left
+    in the archive for a bounded streaming copy.
     """
     coverage = CoverageReport()
     try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
+        archive = zipfile.ZipFile(source if isinstance(source, Path) else io.BytesIO(source))
     except zipfile.BadZipFile as error:
         msg = "Файл не является корректным DOCX (повреждённый архив)."
         raise OoxmlPackageError(msg) from error
@@ -368,7 +373,8 @@ def build_inventory(data: bytes) -> tuple[list[_Part], CoverageReport]:
             elif disposition == "unprocessed":
                 coverage.unprocessed_text_parts.append(name)
             is_xml = name.endswith((".xml", ".rels"))
-            parts.append(_Part(name, archive.read(name), category, is_xml=is_xml))
+            data = archive.read(name) if disposition == "process" else None
+            parts.append(_Part(name, data, category, is_xml=is_xml))
     return parts, coverage
 
 
@@ -504,6 +510,82 @@ def _rewrite_container(container: _Container, spans: list[tuple[int, int, str]])
                 ref.set(value[:left] + value[right:])
 
 
+def _transform_part(
+    part: _Part,
+    *,
+    mode: str,
+    masker: Any,  # noqa: ANN401
+    keys: Any,  # noqa: ANN401
+    placeholders: Any,  # noqa: ANN401
+    checkpoint: Callable[[], None] | None,
+    coverage: CoverageReport,
+    all_entities: list[Any],
+    used_placeholders: set[str],
+) -> bytes | None:
+    """Transform one processable part; return its serialised bytes if changed."""
+    if checkpoint is not None:
+        checkpoint()  # coarse boundary: before parsing/detecting a part
+    data = part.data
+    if data is None:
+        msg = "Внутренняя ошибка: часть документа не была загружена для обработки."
+        raise OoxmlPackageError(msg)
+    root = _secure_parse(data)
+    containers = (
+        _generic_containers(root, part.name, part.category)
+        if part.category == "generic_xml"
+        else _containers(root, part.name, part.category)
+    )
+    text_nodes = sum(len(container.refs) for container in containers)
+    # Every inspected supported part is recorded even with zero detections.
+    coverage.processed_parts.append(part.category)
+    coverage.processed.append(ProcessedPart(part.name, part.category, text_nodes))
+    modified = False
+    for container in containers:
+        text = container.text()
+        if not text.strip():
+            continue
+        local: list[tuple[int, int, str]] = []
+        if mode == "mask":
+            for item in masker.detect(text, prefilter=True, checkpoint=checkpoint):
+                marker = keys.placeholder(item.label, item.text)
+                local.append((item.start, item.end, marker))
+                all_entities.append(
+                    {
+                        "label": item.label,
+                        "text": item.text,
+                        "start": item.start,
+                        "end": item.end,
+                        "score": item.score,
+                    }
+                )
+        else:
+            for placeholder, value in placeholders.items():
+                cursor = 0
+                while True:
+                    found = text.find(placeholder, cursor)
+                    if found < 0:
+                        break
+                    local.append((found, found + len(placeholder), value))
+                    used_placeholders.add(placeholder)
+                    cursor = found + len(placeholder)
+        if local:
+            _rewrite_container(container, local)
+            modified = True
+    if modified:
+        return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    return None
+
+
+def _copy_zip_info(info: zipfile.ZipInfo) -> zipfile.ZipInfo:
+    """Preserve metadata so unchanged entries stay semantically equal."""
+    clone = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+    clone.compress_type = info.compress_type
+    clone.external_attr = info.external_attr
+    clone.internal_attr = info.internal_attr
+    clone.create_system = info.create_system
+    return clone
+
+
 def transform_package(
     data: bytes,
     *,
@@ -535,53 +617,19 @@ def transform_package(
         for part in parts:
             if part.category not in _PROCESSABLE_CATEGORIES:
                 continue
-            if checkpoint is not None:
-                checkpoint()  # coarse boundary: before parsing/detecting a part
-            root = _secure_parse(part.data)
-            containers = (
-                _generic_containers(root, part.name, part.category)
-                if part.category == "generic_xml"
-                else _containers(root, part.name, part.category)
+            result = _transform_part(
+                part,
+                mode=mode,
+                masker=masker,
+                keys=keys,
+                placeholders=placeholders,
+                checkpoint=checkpoint,
+                coverage=coverage,
+                all_entities=all_entities,
+                used_placeholders=used_placeholders,
             )
-            text_nodes = sum(len(container.refs) for container in containers)
-            # Every successfully inspected supported part is recorded, even
-            # when it contains no PII (P0.3 coverage semantics).
-            coverage.processed_parts.append(part.category)
-            coverage.processed.append(ProcessedPart(part.name, part.category, text_nodes))
-            modified = False
-            for container in containers:
-                text = container.text()
-                if not text.strip():
-                    continue
-                local: list[tuple[int, int, str]] = []
-                if mode == "mask":
-                    for item in masker.detect(text, prefilter=True, checkpoint=checkpoint):
-                        marker = keys.placeholder(item.label, item.text)
-                        local.append((item.start, item.end, marker))
-                        all_entities.append(
-                            {
-                                "label": item.label,
-                                "text": item.text,
-                                "start": item.start,
-                                "end": item.end,
-                                "score": item.score,
-                            }
-                        )
-                else:
-                    for placeholder, value in placeholders.items():
-                        cursor = 0
-                        while True:
-                            found = text.find(placeholder, cursor)
-                            if found < 0:
-                                break
-                            local.append((found, found + len(placeholder), value))
-                            used_placeholders.add(placeholder)
-                            cursor = found + len(placeholder)
-                if local:
-                    _rewrite_container(container, local)
-                    modified = True
-            if modified:
-                edited[part.name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+            if result is not None:
+                edited[part.name] = result
 
         unused = (
             [value for placeholder, value in placeholders.items() if placeholder not in used_placeholders]
@@ -603,3 +651,62 @@ def transform_package(
                 clone.create_system = info.create_system
                 target.writestr(clone, payload)
         return out.getvalue(), all_entities, unused, coverage
+
+
+def transform_package_to_file(
+    source: Path,
+    target: Path,
+    *,
+    mode: str,
+    masker: Any = None,  # noqa: ANN401
+    keys: Any = None,  # noqa: ANN401
+    placeholders: Any = None,  # noqa: ANN401
+    checkpoint: Callable[[], None] | None = None,
+) -> tuple[list[Any], list[str], CoverageReport]:
+    """
+    Bounded-memory transform: one XML part at a time, streamed copy for the rest.
+
+    Unchanged media/binary entries are never decompressed into `bytes`, and the
+    output DOCX is written straight to `target`. Only the currently processed
+    XML part's tree and its serialised bytes are resident at any moment.
+    """
+    parts, coverage = build_inventory(source)
+    if coverage.rejected_parts or coverage.unprocessed_text_parts:
+        msg = "Документ содержит неподдерживаемое содержимое, которое нельзя безопасно обработать."
+        raise OoxmlPackageError(msg)
+
+    processable = {part.name: part for part in parts if part.category in _PROCESSABLE_CATEGORIES}
+    all_entities: list[Any] = []
+    used_placeholders: set[str] = set()
+    with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as output:
+        for info in sorted(original.infolist(), key=lambda item: item.filename):
+            if info.is_dir():
+                continue
+            part = processable.get(info.filename)
+            payload = (
+                _transform_part(
+                    part,
+                    mode=mode,
+                    masker=masker,
+                    keys=keys,
+                    placeholders=placeholders,
+                    checkpoint=checkpoint,
+                    coverage=coverage,
+                    all_entities=all_entities,
+                    used_placeholders=used_placeholders,
+                )
+                if part is not None
+                else None
+            )
+            if payload is not None:
+                output.writestr(_copy_zip_info(info), payload)
+                continue
+            # Byte-for-byte semantics without materialising the entry.
+            with original.open(info) as src, output.open(_copy_zip_info(info), "w") as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+    unused = (
+        [value for placeholder, value in placeholders.items() if placeholder not in used_placeholders]
+        if mode == "unmask"
+        else []
+    )
+    return all_entities, unused, coverage

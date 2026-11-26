@@ -1,8 +1,12 @@
 """One archive builder + manifest serializer shared by sync and job (§7.1)."""
 
+import contextlib
 import io
 import json
+import os
 import re
+import shutil
+import tempfile
 import unicodedata
 import zipfile
 from pathlib import Path
@@ -42,6 +46,45 @@ def _write_archive(entries: dict[str, bytes]) -> bytes:
                 raise ValueError(msg)
             archive.writestr(name, payload)
     return buffer.getvalue()
+
+
+def write_archive_to_path(target: Path, entries: dict[str, bytes | Path]) -> None:
+    """Write a flat result ZIP to a file; file-valued entries are streamed."""
+    with zipfile.ZipFile(target, "w", _ZIP_DEFLATED) as archive:
+        for name, payload in entries.items():
+            if "/" in name or "\\" in name or not name:
+                msg = "Некорректное имя файла результата."
+                raise ValueError(msg)
+            if isinstance(payload, Path):
+                with payload.open("rb") as source, archive.open(name, "w") as sink:
+                    shutil.copyfileobj(source, sink, length=1024 * 1024)
+            else:
+                archive.writestr(name, payload)
+
+
+def mark_cache_hit_file(path: Path) -> None:
+    """Rewrite one result ZIP on disk so its manifest reports the current hit."""
+    handle, name = tempfile.mkstemp(prefix=".cache-hit-", dir=str(path.parent))
+    os.close(handle)
+    tmp = Path(name)
+    try:
+        with zipfile.ZipFile(path) as source, zipfile.ZipFile(tmp, "w", _ZIP_DEFLATED) as target:
+            for info in source.infolist():
+                clone = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+                clone.compress_type = info.compress_type
+                clone.external_attr = info.external_attr
+                if info.filename == MANIFEST_NAME:
+                    manifest = json.loads(source.read(info))
+                    manifest["cache"]["hit"] = True
+                    target.writestr(clone, json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+                else:
+                    with source.open(info) as reader, target.open(clone, "w") as writer:
+                        shutil.copyfileobj(reader, writer, length=1024 * 1024)
+        tmp.replace(path)
+    finally:
+        with contextlib.suppress(OSError):
+            if tmp.exists():
+                tmp.unlink()
 
 
 def mask_archive(

@@ -9,6 +9,7 @@ paths, and TTL sweeping removes every artifact of expired jobs.
 
 import os
 import re
+import shutil
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -104,6 +105,25 @@ class ArtifactStore:
         key = self.result_key(job_id, lease_token)
         target = self.path_for_result(key)
         self._write_at(target, data)
+        return key
+
+    def write_result_from_path(self, job_id: str, lease_token: str, source: Path) -> str:
+        """Publish an attempt-scoped result by streaming a file into the spool."""
+        key = self.result_key(job_id, lease_token)
+        target = self.path_for_result(key)
+        fd, tmp = tempfile.mkstemp(prefix=".dm-", dir=str(self._root))
+        os.close(fd)
+        try:
+            with source.open("rb") as reader, Path(tmp).open("wb") as writer:
+                shutil.copyfileobj(reader, writer, length=1024 * 1024)
+                writer.flush()
+                os.fsync(writer.fileno())
+            Path(tmp).replace(target)
+        finally:
+            leftover = Path(tmp)
+            with suppress(OSError):
+                if leftover.exists():
+                    leftover.unlink()
         return key
 
     def read_result(self, key: str) -> bytes:
