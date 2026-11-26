@@ -16,6 +16,31 @@ dev stack + isolated prod-image CI stack each passed **21/21** Playwright smoke
 Still outstanding: target-hardware run and the job-lifecycle stress scenarios
 (crash/restart, queue full, disk full, expired result, cancel) — see `TODO.md`.
 
+## Follow-up remediation (2026-11-26)
+
+The follow-up brief `DocMasker_Follow_Up_Fixes_Agent_Prompt.md` supersedes the
+historical evidence counts in the table below. Verified on `dev` after the
+remediation pass: **361 back tests (3 skipped), 86.22% branch**, 74 front unit
+tests, ruff + ty(linux) + oxlint/oxfmt + actionlint + both compose configs green,
+24/24 Playwright smoke on the running dev stack. No push was made; `dev` is
+ahead of `origin/dev`.
+
+- P0/P1 complete: fenced worker ownership and attempt-scoped results, staging/
+  cancelling recovery, cooperative cancellation inside DOCX detection, honest
+  OPC inventory/coverage, unified input limits and hostile ZIP-name checks,
+  full canonical config digest with real exception match modes, bounded
+  Valkey-referenced cache-artifact GC, atomic queue admission, monotonic job
+  progress, frontend cancellation honesty, loopback monitoring bindings and
+  truthful `manifest.cache.hit` on hits.
+- The historical F-17/F-18/F-20/F-21/F-22/F-23 rows are **baseline** claims;
+  their new edge cases are covered by the follow-up matrix in
+  `docs/FOLLOW_UP_MATRIX.md` and the tests named there.
+- Still deferred: P2.11 bounded-memory DOCX transform path and reproducible
+  before/after memory benchmarks; the current worker still materialises one
+  XML part tree, the transformed DOCX and the result ZIP in memory (bounded by
+  `SYNC_MAX_DOCX_BYTES` on sync routes, not claimed as fully streaming).
+  Branch protection / required check remains a GitHub-side setting.
+
 ## Baseline environment (2026-11-22)
 
 - Host: Windows, Docker Desktop 29.8.2 / compose v5.6.0, uv 0.13.8, Bun 1.4.4, Node 26.13.1.
