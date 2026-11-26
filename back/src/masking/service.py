@@ -15,7 +15,13 @@ value.
 from collections import Counter
 from collections.abc import Mapping
 
-from .mapping import MaskKeys, placeholders_from_document, validate_keys_yaml
+from .mapping import (
+    MaskKeys,
+    compile_placeholders,
+    ensure_no_marker_collision,
+    placeholders_from_document,
+    validate_keys_yaml,
+)
 from .rule_based import Entity, RuleBasedMasker, get_masker
 from .schemas import MaskedEntity, MaskRequest, MaskStats, UnmaskRequest
 
@@ -32,6 +38,9 @@ def mask_text(text: str, entities: list[MaskedEntity], keys: MaskKeys) -> str:
         (entity.start, entity.end): keys.placeholder(entity.label, entity.text)
         for entity in sorted(entities, key=lambda item: item.start)
     }
+    # Fail before any rewrite: a literal marker in the source that equals one
+    # of the markers allocated here would gain a second meaning on restoration.
+    ensure_no_marker_collision([text], placeholders.values())
     masked = text
     for entity in sorted(entities, key=lambda item: item.start, reverse=True):
         marker = placeholders[(entity.start, entity.end)]
@@ -41,16 +50,17 @@ def mask_text(text: str, entities: list[MaskedEntity], keys: MaskKeys) -> str:
 
 def unmask_text(text: str, placeholders: Mapping[str, str]) -> str:
     """
-    Replace every known placeholder back with its original value.
+    Restore every known placeholder in one non-cascading scan.
 
-    A plain left-to-right substitution: placeholders are self-delimiting
-    (``[LABEL_N]``), so no ordering or back-to-front dance is needed. A
+    A compiled longest-first alternation replaces each match with its mapped
+    value; `re.sub` does not rescan inserted text, so a value that itself
+    contains a valid marker stays opaque instead of collapsing further. A
     placeholder missing from the keys is left in place rather than dropped.
     """
-    restored = text
-    for placeholder, value in placeholders.items():
-        restored = restored.replace(placeholder, value)
-    return restored
+    pattern = compile_placeholders(placeholders)
+    if pattern is None:
+        return text
+    return pattern.sub(lambda match: placeholders[match.group(0)], text)
 
 
 def to_schema(entity: Entity) -> MaskedEntity:
