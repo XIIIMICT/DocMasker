@@ -197,6 +197,27 @@ test("на демаскировке три кнопки видны сразу", 
     await expect(demask).not.toHaveAttribute("aria-disabled", "true");
 });
 
+test("пустые ключи блокируют демаскировку и не отправляют запрос", async ({ page }) => {
+    await page.goto("/");
+    await switchMode(page, "Демаскировка");
+    await page.getByRole("textbox", { name: DEMASK_DATA }).fill("[PERSON_1]");
+    const demask = page.getByRole("button", { name: "Демаскировать" });
+    await expect(demask).toHaveAttribute("aria-disabled", "true");
+    const requests: string[] = [];
+    page.on("request", (request) => requests.push(request.url()));
+    // Keyboard activation and a forced DOM event must both be blocked by the
+    // operation-boundary predicate, not by the visual disabled styling.
+    await demask.press("Enter");
+    await page.evaluate(() => {
+        const button = [...document.querySelectorAll("button")].find((el) =>
+            el.textContent?.includes("Демаскировать"),
+        );
+        button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await page.waitForTimeout(300);
+    expect(requests.filter((url) => url.includes("unmask"))).toEqual([]);
+});
+
 test("на демаскировке выбранный файл данных даёт кнопку удаления", async ({ page }) => {
     await page.goto("/");
     await switchMode(page, "Демаскировка");

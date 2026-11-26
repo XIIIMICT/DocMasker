@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
+import { canDemask } from "@/features/masking/demask-guard";
 import {
     emptyModeState,
     fileKind,
@@ -270,7 +271,13 @@ export function useMaskerWorkflow() {
     const keysError = demaskKeys.trim().length > 0 ? validateKeysYaml(demaskKeys) : null;
     const keysInvalid = keysError !== null;
     const hasDemaskKeys = demaskKeys.trim().length > 0 && !keysInvalid;
-    const unmaskEnabled = !busy && (hasText || hasFile) && hasDemaskKeys;
+    const unmaskEnabled = canDemask({
+        busy,
+        hasText,
+        hasFile,
+        hasKeys: hasDemaskKeys,
+        keysError,
+    });
     // For demasking, the counts mirror masking; entries whose placeholder is
     // absent from the masked input are reported as "не применено". In file mode
     // the document text is only known to the backend, so the unused list comes
@@ -506,14 +513,23 @@ export function useMaskerWorkflow() {
     }
 
     async function handleUnmask() {
-        if (busy) return;
-        update({ error: null });
-        if (!hasText && !hasFile) return;
-        // Never send malformed keys to the backend; the editor shows the reason.
-        if (keysError !== null) {
-            update({ error: keysError });
+        // Revalidate at the operation boundary: a visual `isDisabled` state is
+        // not a guard against Enter/Space or a direct handler invocation.
+        if (
+            !canDemask({
+                busy,
+                hasText,
+                hasFile,
+                hasKeys: hasDemaskKeys,
+                keysError,
+            })
+        ) {
+            // Keep the existing UX: a malformed keys string shows the reason,
+            // while empty input or a busy state is a silent no-op.
+            if (keysError !== null) update({ error: keysError });
             return;
         }
+        update({ error: null });
 
         update({ busy: true });
         try {
