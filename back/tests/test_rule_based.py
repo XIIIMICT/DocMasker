@@ -326,7 +326,15 @@ def test_empty_text_produces_no_entities() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["г. Москва, ул. Ленина", "ул. Ленина", "пер. Смирнова", "наб. Реки", "Москва, 109012"],
+    [
+        "г. Москва, ул. Ленина",
+        "ул. Ленина",
+        "пер. Смирнова",
+        "наб. Реки",
+        "Москва, 109012",
+        "улица Ленина",  # full-word marker, no digits
+        "г Москва",  # bare abbreviation, no digits
+    ],
 )
 def test_address_prefilter_admits_marker_fragments_without_digits(text: str) -> None:
     assert "address" in _cheap_prefilter(text)
@@ -347,6 +355,8 @@ def test_address_prefilter_rejects_unrelated_prose(text: str) -> None:
         "ул. Ленина",
         "пер. Смирнова",
         "г. Москва, ул. Ленина, д. 12",
+        "Москва, улица Ленина, дом 10",
+        "г Москва, ул Ленина, д 10",
         "Встреча состоялась в офисе.",
         "Иван Петров, ivan@mail.ru",
     ],

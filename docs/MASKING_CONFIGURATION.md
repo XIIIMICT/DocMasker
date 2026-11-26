@@ -175,6 +175,50 @@ never_mask:
   variants) fails startup. `Росхим` force-mask behavior is preserved from the
   old hardcode.
 
+## Address candidate prefilter (DM-2)
+
+`lexicons/addresses.yaml` is the single source of truth for **nomination** of
+address candidates — no parallel Python vocabulary list is allowed:
+
+- `address_keywords`: alphabetic entries of 3+ letters are whole-word markers
+  (`улица`, `дом`, `переулок`, …) matched with Unicode `\b`; hyphenated literals
+  such as `р-н` are matched verbatim.
+- `address_abbreviations`: every entry matches a dotted form (`ул.`) or a bare
+  form (`ул Ленина`). Bare forms additionally require a capitalised word or
+  digit immediately after the token, so `ш` inside `Строймонтаж` and a bare
+  `ш consulted` never nominate. A preceding dot is excluded so the tail of
+  `и т.д.` is not a marker.
+- The `адрес:` label and a 6-digit postcode are structural signals.
+
+`rule_based._address_candidate_re()` compiles these literals lazily from the
+validated snapshot. A match **only nominates** a sentence-sized range for the
+expensive `AddrExtractor`; it never auto-masks the sentence. The `адрес:` full-
+line path and `AddrExtractor` still decide the actual span, and `never_mask` /
+deduplication are unchanged.
+
+Abbreviation dots are not sentence ends, and a bare newline is a soft boundary
+when the next line continues the address (trailing comma, or a marker/digit at
+the start of the line), so a wrapped address reaches the extractor in one piece.
+Text with no marker nominates nothing — the short-text / OOXML fast path is
+preserved.
+
+Benchmark (host Windows, uv 0.13.8 / CPython 3.15.0, deterministic synthetic
+corpus of 1,000 sentences — 60% prose / 20% dotted / 20% full-or-bare — 3 runs,
+median wall; `detect()` over all sentences):
+
+| Prefilter | Wall (median) | Nominated ranges | Address entities |
+|---|---|---|---|
+| Previous dotted-only | 6.26 s | 201/1000 (20.1%) | 201 |
+| Candidate-filtered | 9.40 s | 389/1000 (38.9%) | 389 |
+| Previous, prose-only | 1.25 s | 0/1000 (0%) | 0 |
+| Candidate, prose-only | 1.21 s | 0/1000 (0%) | 0 |
+
+The extra ~50% wall on the mixed corpus buys 188 previously missed addresses;
+prose without address signals is unchanged at 0% nominations. The YAML edit
+changes `config_digest()` automatically, so cached results cannot be served from
+a stale entry; bumping `MASKING_RULESET_VERSION` is a separate maintainer
+decision (`back/src/config.py`, outside this change's scope).
+
 ## Recipes
 
 ### Add a new label
