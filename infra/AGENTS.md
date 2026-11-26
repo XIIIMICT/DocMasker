@@ -30,7 +30,8 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   `../infra/check-drift.py` to verify byte-identical shared Loki configs and
   Alertmanager entrypoints across all three projects and the DWH stack.
 - `infra/compose.ci.yaml` is the isolated CI stack: back **18001**, front
-  **15001** (loopback-only); postgres/valkey are **private** (no published
+  **15001** (loopback-only), with a synthetic `SUPPORT_MAIL` fixture so e2e
+  sees the real header support link; postgres/valkey are **private** (no published
   ports), never load the developer's `.env`, and the `jobs-data` volume is
   mounted into `back` and `worker`. CI boots `back worker front` with
   `--wait --wait-timeout 180` after the infra healthchecks pass.

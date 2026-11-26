@@ -196,7 +196,7 @@ jobs:
         run: |
           bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
           cat smoke-tests.txt
-          for name in "rerender-smoke.spec.ts" "smoke.spec.ts" "health.spec.ts"; do
+          for name in "rerender-smoke.spec.ts" "smoke.spec.ts" "health.spec.ts" "hover-smoke.spec.ts"; do
             grep -q "$name" smoke-tests.txt || { echo "Missing smoke test: $name"; exit 1; }
           done
       - name: Browser smoke

@@ -89,6 +89,10 @@ services:
     environment:
       PORT: "5001"
       BACKEND_INTERNAL_URL: http://back:8001
+      # Synthetic mailbox for e2e: the header support link is rendered only
+      # when SUPPORT_MAIL is set (page.tsx reads it at runtime), and the
+      # reduced-motion smoke test asserts that real control and its hover state.
+      SUPPORT_MAIL: support@example.ru
     ports: ["127.0.0.1:15001:5001"]
     depends_on:
       back:
