@@ -14,6 +14,7 @@ from pathlib import Path
 from .mapping import MaskKeys
 from .ooxml.package import (
     CoverageReport,
+    EntityStats,
     OoxmlPackageError,
     transform_package,
     transform_package_to_file,
@@ -23,6 +24,7 @@ from .schemas import MaskedEntity
 
 __all__ = [
     "CoverageReport",
+    "EntityStats",
     "OoxmlPackageError",
     "mask_docx_in_memory",
     "mask_docx_to_file",
@@ -60,11 +62,11 @@ def mask_docx_to_file(
     target_path: Path,
     masker: RuleBasedMasker | None = None,
     checkpoint: Callable[[], None] | None = None,
-) -> tuple[list[MaskedEntity], MaskKeys, CoverageReport]:
+) -> tuple[EntityStats, MaskKeys, CoverageReport]:
     """Bounded-memory mask: read the source and write the result by path."""
     active = masker or get_masker()
     keys = MaskKeys()
-    raw_entities, _unused, coverage = transform_package_to_file(
+    stats, _unused, coverage = transform_package_to_file(
         source_path,
         target_path,
         mode="mask",
@@ -72,8 +74,7 @@ def mask_docx_to_file(
         keys=keys,
         checkpoint=checkpoint,
     )
-    entities = [MaskedEntity(**item) for item in raw_entities]  # type: ignore[arg-type]
-    return entities, keys, coverage
+    return stats, keys, coverage
 
 
 def unmask_docx_to_file(

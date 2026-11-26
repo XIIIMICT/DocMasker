@@ -212,11 +212,52 @@ class CoverageReport:
 
 @dataclass(frozen=True, slots=True)
 class _Part:
+    """OPC metadata only: no part payload is kept after inventory (DM-3)."""
+
     name: str
-    #: Only processable parts are materialised; copy-only media stay on disk.
-    data: bytes | None
+    content_type: str
     category: str
+    disposition: str
+    relationship_type: str
+    relationship_mode: str
     is_xml: bool
+
+
+@dataclass(slots=True)
+class EntityStats:
+    """
+    O(labels + distinct values) aggregate in place of a per-occurrence list.
+
+    `key_number` comes from `MaskKeys`, which already deduplicates by exact
+    (label, text), so the maximum number seen per label is the distinct count —
+    no second copy of the original values is needed on the job path.
+    """
+
+    total: int = 0
+    occurrences_by_label: dict[str, int] = field(default_factory=dict)
+    unique_by_label: dict[str, int] = field(default_factory=dict)
+    _seen: dict[str, set[str]] = field(default_factory=dict)
+
+    def add(self, label: str, text: str, *, key_number: int | None = None) -> None:
+        """Record one occurrence without retaining occurrence-level detail."""
+        self.total += 1
+        self.occurrences_by_label[label] = self.occurrences_by_label.get(label, 0) + 1
+        if key_number is not None:
+            if key_number > self.unique_by_label.get(label, 0):
+                self.unique_by_label[label] = key_number
+            return
+        values = self._seen.setdefault(label, set())
+        if text not in values:
+            values.add(text)
+            self.unique_by_label[label] = len(values)
+
+    def as_manifest_stats(self) -> dict[str, Any]:
+        """Return the versioned `statistics` block consumed by `manifest.json`."""
+        return {
+            "total_occurrences": self.total,
+            "occurrences_by_label": dict(self.occurrences_by_label),
+            "unique_by_label": dict(self.unique_by_label),
+        }
 
 
 def _qname(tag: str, uri: str) -> str:
@@ -237,6 +278,11 @@ def _secure_parse(data: bytes) -> etree._Element:
     except Exception as error:
         msg = "Документ содержит некорректную или небезопасную XML-часть."
         raise OoxmlPackageError(msg) from error
+
+
+def _read_part(archive: zipfile.ZipFile, name: str) -> bytes:
+    """Decompress one part exactly when it is about to be parsed (DM-3)."""
+    return archive.read(name)
 
 
 def _content_types(archive: zipfile.ZipFile) -> tuple[dict[str, str], dict[str, str]]:
@@ -307,10 +353,10 @@ def build_inventory(source: bytes | Path) -> tuple[list[_Part], CoverageReport]:
     """
     Deterministic OPC inventory, resolved by URI.
 
-    Content type, relationship type, part name, processor and disposition
-    (§6.1). Shared parts are listed exactly once. Only parts that will be
-    transformed are read into memory; unchanged media/binary entries are left
-    in the archive for a bounded streaming copy.
+    Content type, relationship type, part name, category and disposition
+    (§6.1). Shared parts are listed exactly once. The inventory retains only
+    metadata — no XML payload is decompressed or held here (DM-3): the transform
+    opens the same archive and reads each part immediately before parsing it.
     """
     coverage = CoverageReport()
     try:
@@ -365,7 +411,7 @@ def build_inventory(source: bytes | Path) -> tuple[list[_Part], CoverageReport]:
         for name in sorted(names):
             safe_name(name)
             ctype = content_type_of(name)
-            rel_category, _mode = by_name.get(name, ("other", ""))
+            rel_category, rel_mode = by_name.get(name, ("other", ""))
             disposition = _disposition(name, ctype, rel_category)
             category = _CATEGORY_BY_PART.get(name, rel_category) if disposition == "process" else disposition
             if disposition == "process" and category in ("other", ""):
@@ -374,9 +420,17 @@ def build_inventory(source: bytes | Path) -> tuple[list[_Part], CoverageReport]:
                 coverage.rejected_parts.append(name)
             elif disposition == "unprocessed":
                 coverage.unprocessed_text_parts.append(name)
-            is_xml = name.endswith((".xml", ".rels"))
-            data = archive.read(name) if disposition == "process" else None
-            parts.append(_Part(name, data, category, is_xml=is_xml))
+            parts.append(
+                _Part(
+                    name=name,
+                    content_type=ctype,
+                    category=category,
+                    disposition=disposition,
+                    relationship_type=rel_category,
+                    relationship_mode=rel_mode,
+                    is_xml=name.endswith((".xml", ".rels")),
+                )
+            )
     return parts, coverage
 
 
@@ -475,30 +529,6 @@ def _generic_containers(root: etree._Element, part_name: str, category: str) -> 
     return [_Container(refs=refs, part_name=part_name, category=category)] if refs else []
 
 
-def _source_marker_tokens(parts: list[_Part]) -> frozenset[str]:
-    """
-    Collect marker-shaped literals from every processable part before masking.
-
-    This only inspects already-loaded XML parts and keeps marker strings, not a
-    second copy of the document. It lets the mask path reject a source literal
-    that collides with any marker allocated anywhere in the package, without
-    running detection twice or buffering whole documents in memory.
-    """
-    found: set[str] = set()
-    for part in parts:
-        if part.data is None or part.category not in _PROCESSABLE_CATEGORIES:
-            continue
-        root = _secure_parse(part.data)
-        containers = (
-            _generic_containers(root, part.name, part.category)
-            if part.category == "generic_xml"
-            else _containers(root, part.name, part.category)
-        )
-        for container in containers:
-            found.update(marker_tokens(container.text()))
-    return frozenset(found)
-
-
 def _closest_paragraph(element: etree._Element) -> etree._Element | None:
     current = element.getparent()
     while current is not None:
@@ -538,25 +568,34 @@ def _rewrite_container(container: _Container, spans: list[tuple[int, int, str]])
 
 def _transform_part(
     part: _Part,
+    archive: zipfile.ZipFile,
     *,
     mode: str,
     masker: Any,  # noqa: ANN401
     keys: Any,  # noqa: ANN401
     placeholders: Any,  # noqa: ANN401
-    source_markers: frozenset[str],
+    pattern: Any,  # noqa: ANN401 - compiled once per transform, not per part
     checkpoint: Callable[[], None] | None,
     coverage: CoverageReport,
-    all_entities: list[Any],
+    stats: EntityStats,
+    detail: list[dict[str, Any]] | None,
+    source_markers: set[str],
+    allocated_markers: set[str],
     used_placeholders: set[str],
 ) -> bytes | None:
-    """Transform one processable part; return its serialised bytes if changed."""
+    """
+    Transform one processable part; return its serialised bytes if changed.
+
+    The payload is decompressed here, parsed once and released on return; the
+    inventory keeps no XML bytes (DM-3). Marker-shaped source literals are
+    collected in the same pass, before any rewrite, so collision detection needs
+    no second parse of the package.
+    """
     if checkpoint is not None:
         checkpoint()  # coarse boundary: before parsing/detecting a part
-    data = part.data
-    if data is None:
-        msg = "Внутренняя ошибка: часть документа не была загружена для обработки."
-        raise OoxmlPackageError(msg)
+    data = _read_part(archive, part.name)
     root = _secure_parse(data)
+    del data  # only the tree stays resident until this part is done
     containers = (
         _generic_containers(root, part.name, part.category)
         if part.category == "generic_xml"
@@ -567,30 +606,33 @@ def _transform_part(
     coverage.processed_parts.append(part.category)
     coverage.processed.append(ProcessedPart(part.name, part.category, text_nodes))
     modified = False
-    pattern = compile_placeholders(placeholders) if mode == "unmask" else None
     for container in containers:
         text = container.text()
         if not text.strip():
             continue
         local: list[tuple[int, int, str]] = []
         if mode == "mask":
+            source_markers.update(marker_tokens(text))
             for item in masker.detect(text, prefilter=True, checkpoint=checkpoint):
+                number = keys.number(item.label, item.text)
                 marker = keys.placeholder(item.label, item.text)
-                if marker in source_markers:
-                    raise MarkerCollisionError([marker])
+                allocated_markers.add(marker)
                 local.append((item.start, item.end, marker))
-                all_entities.append(
-                    {
-                        "label": item.label,
-                        "text": item.text,
-                        "start": item.start,
-                        "end": item.end,
-                        "score": item.score,
-                    }
-                )
+                stats.add(item.label, item.text, key_number=number)
+                if detail is not None:
+                    detail.append(
+                        {
+                            "label": item.label,
+                            "text": item.text,
+                            "start": item.start,
+                            "end": item.end,
+                            "score": item.score,
+                        }
+                    )
         elif pattern is not None:
-            # One non-cascading scan per logical container: inserted values are
-            # written afterwards by `_rewrite_container` and are never rescanned.
+            # One bounded non-cascading scan per logical container: inserted
+            # values are written afterwards by `_rewrite_container` and are
+            # never rescanned, even when split across runs or re-applied.
             for match in pattern.finditer(text):
                 placeholder = match.group(0)
                 local.append((match.start(), match.end(), placeholders[placeholder]))
@@ -598,9 +640,16 @@ def _transform_part(
         if local:
             _rewrite_container(container, local)
             modified = True
-    if modified:
-        return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
-    return None
+    result = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True) if modified else None
+    del root, containers  # release this part's tree before the next one is read
+    return result
+
+
+def _fail_on_marker_collision(source_markers: set[str], allocated_markers: set[str]) -> None:
+    """Fail closed after the single pass when a source literal equals a marker."""
+    collisions = sorted(source_markers & allocated_markers)
+    if collisions:
+        raise MarkerCollisionError(collisions)
 
 
 def _copy_zip_info(info: zipfile.ZipInfo) -> zipfile.ZipInfo:
@@ -634,31 +683,42 @@ def transform_package(
     if coverage.rejected_parts or coverage.unprocessed_text_parts:
         msg = "Документ содержит неподдерживаемое содержимое, которое нельзя безопасно обработать."
         raise OoxmlPackageError(msg)
-    source_markers = _source_marker_tokens(parts) if mode == "mask" else frozenset()
+    pattern = compile_placeholders(placeholders) if mode == "unmask" else None
+    source_markers: set[str] = set()
+    allocated_markers: set[str] = set()
+    stats = EntityStats()
+    # The bytes API still returns occurrence detail to its callers (§6.6); only
+    # the bounded file path drops it in favour of `stats`.
+    all_entities: list[dict[str, Any]] = []
+    used_placeholders: set[str] = set()
 
     with zipfile.ZipFile(io.BytesIO(data)) as source:
         infos = {info.filename: info for info in source.infolist() if not info.is_dir()}
         edited: dict[str, bytes] = {}
-        all_entities: list[Any] = []
-        used_placeholders: set[str] = set()
 
         for part in parts:
             if part.category not in _PROCESSABLE_CATEGORIES:
                 continue
             result = _transform_part(
                 part,
+                source,
                 mode=mode,
                 masker=masker,
                 keys=keys,
                 placeholders=placeholders,
-                source_markers=source_markers,
+                pattern=pattern,
                 checkpoint=checkpoint,
                 coverage=coverage,
-                all_entities=all_entities,
+                stats=stats,
+                detail=all_entities,
+                source_markers=source_markers,
+                allocated_markers=allocated_markers,
                 used_placeholders=used_placeholders,
             )
             if result is not None:
                 edited[part.name] = result
+        if mode == "mask":
+            _fail_on_marker_collision(source_markers, allocated_markers)
 
         unused = (
             [value for placeholder, value in placeholders.items() if placeholder not in used_placeholders]
@@ -670,7 +730,8 @@ def transform_package(
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
             for name in sorted(infos):
                 info = infos[name]
-                payload = edited.get(name, source.read(name))
+                # Do not decompress an entry that was already rewritten.
+                payload = edited[name] if name in edited else source.read(name)
                 # Preserve the original ZipInfo (timestamps, external attrs,
                 # compression type) so unchanged entries stay semantically equal.
                 clone = zipfile.ZipInfo(name, date_time=info.date_time)
@@ -691,22 +752,24 @@ def transform_package_to_file(
     keys: Any = None,  # noqa: ANN401
     placeholders: Any = None,  # noqa: ANN401
     checkpoint: Callable[[], None] | None = None,
-) -> tuple[list[Any], list[str], CoverageReport]:
+) -> tuple[EntityStats, list[str], CoverageReport]:
     """
     Bounded-memory transform: one XML part at a time, streamed copy for the rest.
 
     Unchanged media/binary entries are never decompressed into `bytes`, and the
     output DOCX is written straight to `target`. Only the currently processed
-    XML part's tree and its serialised bytes are resident at any moment.
+    XML part's tree and its serialised bytes are resident at any moment; the
+    caller gets aggregate `EntityStats`, never an occurrence-level list.
     """
     parts, coverage = build_inventory(source)
     if coverage.rejected_parts or coverage.unprocessed_text_parts:
         msg = "Документ содержит неподдерживаемое содержимое, которое нельзя безопасно обработать."
         raise OoxmlPackageError(msg)
-    source_markers = _source_marker_tokens(parts) if mode == "mask" else frozenset()
-
+    pattern = compile_placeholders(placeholders) if mode == "unmask" else None
     processable = {part.name: part for part in parts if part.category in _PROCESSABLE_CATEGORIES}
-    all_entities: list[Any] = []
+    stats = EntityStats()
+    source_markers: set[str] = set()
+    allocated_markers: set[str] = set()
     used_placeholders: set[str] = set()
     with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as output:
         for info in sorted(original.infolist(), key=lambda item: item.filename):
@@ -716,14 +779,18 @@ def transform_package_to_file(
             payload = (
                 _transform_part(
                     part,
+                    original,
                     mode=mode,
                     masker=masker,
                     keys=keys,
                     placeholders=placeholders,
-                    source_markers=source_markers,
+                    pattern=pattern,
                     checkpoint=checkpoint,
                     coverage=coverage,
-                    all_entities=all_entities,
+                    stats=stats,
+                    detail=None,
+                    source_markers=source_markers,
+                    allocated_markers=allocated_markers,
                     used_placeholders=used_placeholders,
                 )
                 if part is not None
@@ -735,9 +802,11 @@ def transform_package_to_file(
             # Byte-for-byte semantics without materialising the entry.
             with original.open(info) as src, output.open(_copy_zip_info(info), "w") as dst:
                 shutil.copyfileobj(src, dst, length=1024 * 1024)
+    if mode == "mask":
+        _fail_on_marker_collision(source_markers, allocated_markers)
     unused = (
         [value for placeholder, value in placeholders.items() if placeholder not in used_placeholders]
         if mode == "unmask"
         else []
     )
-    return all_entities, unused, coverage
+    return stats, unused, coverage

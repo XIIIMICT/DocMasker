@@ -138,7 +138,7 @@ def execute(
         check()
         progress("detection", 40)
         output_path = _temp_output(store)
-        entities, keys, coverage = mask_docx_to_file(source_path, output_path, masker, checkpoint=check)
+        stats, keys, coverage = mask_docx_to_file(source_path, output_path, masker, checkpoint=check)
         check()
         progress("rewrite", 80)
         name = safe_read("name").decode("utf-8") or "document.docx"
@@ -151,7 +151,7 @@ def execute(
             input_digest=_stream_digest(source_path),
             document_name=document_name,
             keys_name=keys_name,
-            entities=[entity.model_dump() for entity in entities],
+            stats=stats.as_manifest_stats(),
             coverage=coverage.as_manifest(),
             cache_hit=False,
             namespace_version=ctx["namespace_version"],

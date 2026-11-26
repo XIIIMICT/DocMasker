@@ -413,13 +413,28 @@ def test_sync_and_job_manifest_parity() -> None:
     assert sync["statistics"]["total_occurrences"] == len(entities)
 
 
-def test_bounded_inventory_leaves_media_unread(tmp_path: Path) -> None:
+def test_bounded_inventory_leaves_media_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inventory metadata only: no XML payload is read or retained (DM-3)."""
+    import dataclasses
+    import zipfile as _zipfile
+
     source = _build_package()
+    read_names: list[str] = []
+    original = _zipfile.ZipFile.read
+
+    def recording_read(self: _zipfile.ZipFile, name: str, pwd: bytes | None = None) -> bytes:
+        read_names.append(name)
+        return original(self, name, pwd)
+
+    monkeypatch.setattr(_zipfile.ZipFile, "read", recording_read)
     parts, _coverage = build_inventory(source)
+    assert not {field.name for field in dataclasses.fields(parts[0]) if field.name in {"data", "payload", "xml"}}
+    assert all(name == "[Content_Types].xml" or name.endswith(".rels") for name in read_names)
+    assert "word/document.xml" not in read_names
     media = next(part for part in parts if part.name.endswith(".png"))
-    assert media.data is None  # never decompressed into memory
     document = next(part for part in parts if part.name == "word/document.xml")
-    assert document.data is not None
+    assert media.disposition == "copy"
+    assert document.disposition == "process"
 
 
 def test_file_transform_matches_in_memory_transform(tmp_path: Path) -> None:
@@ -430,7 +445,7 @@ def test_file_transform_matches_in_memory_transform(tmp_path: Path) -> None:
 
     keys = MaskKeys()
     in_memory, entities, _unused, coverage = transform_package(source, mode="mask", masker=RuleBasedMasker(), keys=keys)
-    file_entities, _unused, file_coverage = transform_package_to_file(
+    stats, _unused, file_coverage = transform_package_to_file(
         source_path,
         out_path,
         mode="mask",
@@ -438,7 +453,15 @@ def test_file_transform_matches_in_memory_transform(tmp_path: Path) -> None:
         keys=MaskKeys(),
     )
     assert out_path.read_bytes() == in_memory
-    assert file_entities == entities
+    assert stats.total == len(entities)
+    assert stats.occurrences_by_label == {
+        label: sum(entity["label"] == label for entity in entities)
+        for label in {entity["label"] for entity in entities}
+    }
+    assert stats.unique_by_label == {
+        label: len({entity["text"] for entity in entities if entity["label"] == label})
+        for label in stats.occurrences_by_label
+    }
     assert file_coverage.as_manifest() == coverage.as_manifest()
     assert keys.to_yaml()  # both paths allocate document-wide keys
 

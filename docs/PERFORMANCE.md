@@ -257,6 +257,48 @@ runtime improvement is claimed** from this change alone; the measured win is
 the removal of the quadratic rewrite, which previously dominated for dense,
 PII-heavy inputs.
 
+## DM-3 bounded OPC inventory (2026-11-26)
+
+### Re-verified mismatch
+
+`build_inventory()` used to call `archive.read()` for **every processable part**
+and store the bytes on each `_Part`, while `docs/DOCX_SUPPORT.md` and
+`back/src/masking/AGENTS.md` claimed only one XML part tree is resident at a
+time. On the synthetic fixture below the pre-change inventory retained **202
+decompressed XML payloads / 3,133,094 bytes**, i.e. the whole processable XML
+content, before detection started. A second hotspot was the per-occurrence
+`all_entities` dict list used only for aggregate manifest statistics.
+
+### Environment and method
+
+Windows 11 10.0.26300, CPython 3.15.0 in the uv-managed `back/.venv` (host
+toolchain, no container), `RuleBasedMasker.for_labels(["email"])` so detection
+is regex-only and identical in both columns, `transform_package_to_file()` (the
+job path) writing to a temporary spool path. `time.perf_counter`,
+`tracemalloc.get_traced_memory()` and Windows PSAPI `GetProcessMemoryInfo`
+(`WorkingSetSize` sampled from the `checkpoint` hook, `PeakWorkingSetSize` for
+the process — the closest Windows equivalent of RSS; POSIX `getrusage` is
+unavailable here). **Best of 3 separate processes per column**, same detached
+worktree and the same freshly created uv venv. Synthetic DOCX: 200 `customXml`
+XML parts of 7,800 characters each plus the required OPC parts; 43,954 B
+compressed / 3,133,468 B uncompressed; 201 email occurrences; 54,447 B output.
+No production data, no network.
+
+| Metric (best of 3) | Before | After | Delta |
+|---|---|---|---|
+| Wall time | 1.470 s | 1.454 s | ~1% (noise) |
+| Peak tracked Python allocations | 4,613,956 B (4.40 MiB) | 1,436,642 B (1.37 MiB) | 3.21× lower |
+| Peak working set, process | 142,008,320 B (135.4 MiB) | 138,924,032 B (132.5 MiB) | 3,084,288 B lower |
+| Peak working set sampled during transform | 141,963,264 B | 138,911,744 B | 3,051,520 B lower |
+| Inventory-retained XML payload bytes | 3,133,094 B (202 parts) | 0 B | removed |
+
+The memory reduction is measured; **no end-to-end speedup is claimed** —
+detection and ZIP I/O dominate this fixture and the wall-time difference is
+within run-to-run noise. Structural linearity is asserted in
+`tests/test_ooxml_bounded.py` (tracked bytes are refcount-checked one part at a
+time, and the worker path passes `detail=None` to the transformer). The
+browser's full-result Blob and JSZip unpacking remain the client-side bound.
+
 ## Capacity facts worth keeping
 
 - natasha's `MorphVocab` + extractors cost ~110–170 MB of in-memory dictionary
