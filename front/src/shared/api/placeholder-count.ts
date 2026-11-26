@@ -1,4 +1,4 @@
-import JSZip from "jszip";
+import { loadJsZip } from "@/shared/api/lazy-zip";
 
 /**
  * Count `[LABEL_N]` placeholders in a masked DOCX by inspecting its XML parts.
@@ -9,6 +9,7 @@ import JSZip from "jszip";
  * header is just as real as one in the body).
  */
 export async function countPlaceholdersInDocx(blob: Blob): Promise<Record<string, number>> {
+    const JSZip = await loadJsZip();
     const archive = await JSZip.loadAsync(await blob.arrayBuffer());
     const counts: Record<string, number> = {};
     const pattern = /\[([A-Z]+)_\d+\]/g;

@@ -1,4 +1,4 @@
-import JSZip from "jszip";
+import { loadJsZip } from "@/shared/api/lazy-zip";
 
 /** Versioned result manifest shared by sync and job file operations (§7). */
 export interface ResultManifest {
@@ -101,6 +101,7 @@ export interface MaskedBundle {
  * from parsing key placeholders.
  */
 export async function unpackMaskArchive(archive: Blob): Promise<MaskedBundle> {
+    const JSZip = await loadJsZip();
     const zip = await JSZip.loadAsync(archive);
     const entries = Object.values(zip.files).filter((entry) => !entry.dir);
     const resultEntry = entries.find((entry) => entry.name.toLowerCase().endsWith(".docx"));
@@ -129,6 +130,7 @@ export interface RestoredBundle {
 
 /** Unpack the flat ZIP returned by `/api/unmask-file`. */
 export async function unpackRestoreArchive(archive: Blob): Promise<RestoredBundle> {
+    const JSZip = await loadJsZip();
     const zip = await JSZip.loadAsync(archive);
     const entries = Object.values(zip.files).filter((entry) => !entry.dir);
     const docxEntry = entries.find((entry) => entry.name.toLowerCase().endsWith(".docx"));
