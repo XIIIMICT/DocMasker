@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     valkey_url: str = Field(default="redis://valkey:6379/0", validation_alias="VALKEY_URL")
     cache_enabled: bool = Field(default=False, validation_alias="CACHE_ENABLED")
     cache_ttl_seconds: float = Field(default=86400.0, validation_alias="CACHE_TTL_SECONDS")
+    #: Worker maintenance interval for collecting stale cache artifacts.
+    cache_gc_interval_seconds: float = Field(default=900.0, validation_alias="CACHE_GC_INTERVAL_SECONDS")
     cache_namespace_version: int = Field(default=1, validation_alias="CACHE_NAMESPACE_VERSION")
     #: Stable HMAC secret: rotating it intentionally invalidates all entries.
     cache_key_secret: str = Field(default="", validation_alias="CACHE_KEY_SECRET")
@@ -153,6 +155,7 @@ class Settings(BaseSettings):
             "jobs_poll_seconds",
             "jobs_ttl_seconds",
             "cache_ttl_seconds",
+            "cache_gc_interval_seconds",
             "cache_connect_timeout_seconds",
             "cache_socket_timeout_seconds",
             "staging_lease_seconds",

@@ -129,5 +129,14 @@ async def metrics(request: Request) -> Response:
     try:
         cache = await run_blocking(lambda: dict(result_cache().metrics))
     except Exception:  # noqa: BLE001 - cache is never a correctness dependency
-        cache = {"hits": 0, "misses": 0, "writes": 0, "evictions": 0}
+        cache = {
+            "hits": 0,
+            "misses": 0,
+            "writes": 0,
+            "evictions": 0,
+            "gc_candidates": 0,
+            "gc_deleted": 0,
+            "gc_reclaimed_bytes": 0,
+            "gc_failures": 0,
+        }
     return JSONResponse(content={"active_jobs": active, "cache": cache})

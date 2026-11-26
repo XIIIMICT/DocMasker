@@ -91,12 +91,13 @@ remains part of the deferred observability stage.
 Coarse counters only, never PII/keys/job ids/cache keys:
 
 ```json
-{"active_jobs": 0, "cache": {"hits": 3, "misses": 1, "writes": 1, "failures": 0, "evictions": 0}}
+{"active_jobs": 0, "cache": {"hits": 3, "misses": 1, "writes": 1, "failures": 0, "evictions": 0, "gc_candidates": 0, "gc_deleted": 0, "gc_reclaimed_bytes": 0, "gc_failures": 0}}
 ```
 
 A PostgreSQL outage degrades to `active_jobs: null` instead of a 500; a cache
-outage yields zeroed cache counters. Full metrics/latency/structured logs remain
-deferred (TODO stage 6).
+outage yields zeroed cache counters. The `gc_*` fields are safe aggregate counts
+from the bounded cache-artifact collection pass (`docs/OPERATIONS.md` §"Cache
+artifact GC"). Full metrics/latency/structured logs remain deferred (TODO stage 6).
 
 ## Proxy timeout policy (canonical: `front/src/shared/api/timeouts.ts`)
 

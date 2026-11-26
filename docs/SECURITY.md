@@ -85,6 +85,10 @@ still be treated as sensitive operational data.
   eviction, never a failed request (`back/src/jobs/cache.py`,
   `test_cache.py::test_artifact_store_verifies_integrity`,
   `::test_corrupt_artifact_is_a_miss`, `::test_real_valkey_corrupt_entry_evicts`).
+  A bounded, age-based worker GC collects only artifacts older than the
+  retention floor plus grace; reuse refreshes mtime and publication verifies
+  the file after `SET`, so no live reference is deliberately deleted. GC
+  reports only aggregate counts/bytes (`docs/OPERATIONS.md`).
 - **Private spool.** Job inputs/keys/results are id-keyed files
   (`<jobs_dir>/<job_id>.input|.keys|.result`) in the private `dm-jobs-data`
   volume, shared only by `back` and `worker`; paths are uuid4-validated (no
