@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 
 import { canDemask } from "@/features/masking/demask-guard";
 import {
@@ -21,11 +21,12 @@ import {
 import { countPlaceholdersInDocx } from "@/shared/api/placeholder-count";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import {
-    countKeysValues,
     type MaskStats,
     statsFromAggregate,
     statsFromManifest,
+    statsFromParsedKeys,
 } from "@/shared/mask-stats";
+import { parseKeys } from "@/shared/masking/keys-parse";
 import type { AppMode } from "@/shared/ui/brand";
 import type { DragHandlers } from "@/shared/ui/panes";
 
@@ -138,7 +139,7 @@ export function useMaskerWorkflow() {
 
     // Demasking a DOCX: the masked placeholders live inside the file, so
     // count them asynchronously for the tooltip's "с повторами" part. Text
-    // mode counts them synchronously from the input string in countKeysValues.
+    // mode counts them synchronously from the input string via the shared parse.
     useEffect(() => {
         if (inMaskMode || selectedFile === null || fileKind(selectedFile) !== "docx") {
             if (demaskOccurrences !== null) update({ demaskOccurrences: null });
@@ -266,9 +267,10 @@ export function useMaskerWorkflow() {
     const inFileMode = hasFile;
     const maskEnabled = !busy && (hasText || hasFile);
     // Demasking needs both an input (text or DOCX) and valid keys. The keys are
-    // validated on the client so an invalid file never reaches the backend; the
-    // editor is marked invalid while non-empty and malformed.
-    const keysError = demaskKeys.trim().length > 0 ? validateKeysYaml(demaskKeys) : null;
+    // parsed once per edit and the same result feeds validation, the tooltip
+    // counts and (through mask.ts) the preview highlights.
+    const parsedDemaskKeys = useMemo(() => parseKeys(demaskKeys), [demaskKeys]);
+    const keysError = demaskKeys.trim().length > 0 ? validateKeysYaml(parsedDemaskKeys) : null;
     const keysInvalid = keysError !== null;
     const hasDemaskKeys = demaskKeys.trim().length > 0 && !keysInvalid;
     const unmaskEnabled = canDemask({
@@ -284,8 +286,8 @@ export function useMaskerWorkflow() {
     // from its response (`demaskUnused`); in text mode it is derived live.
     const demaskStats: MaskStats | null = hasDemaskKeys
         ? {
-              ...countKeysValues(
-                  demaskKeys,
+              ...statsFromParsedKeys(
+                  parsedDemaskKeys,
                   inFileMode ? null : input,
                   inFileMode ? (demaskOccurrences ?? undefined) : undefined,
               ),
@@ -754,6 +756,7 @@ export function useMaskerWorkflow() {
         unmaskEnabled,
         keysInvalid,
         demaskKeys,
+        parsedDemaskKeys,
         inputTab,
         demaskStats,
         drag,

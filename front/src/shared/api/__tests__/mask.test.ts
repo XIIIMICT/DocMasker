@@ -8,6 +8,7 @@ import {
     validateKeysYaml,
     valuesFromKeys,
 } from "@/shared/api/mask";
+import { parseKeys } from "@/shared/masking/keys-parse";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 const ORIGINAL_URL = process.env.BACKEND_INTERNAL_URL;
@@ -192,6 +193,21 @@ describe("parseSimpleYaml", () => {
             Физлица: ["Иван"],
             Организации: ["АО Ромашка"],
         });
+    });
+});
+
+describe("shared parse result", () => {
+    it("lets validation and extraction reuse one parsed document", () => {
+        const keys = "Физлица:\n  - ЗНАЧЕНИЕ-1\n  - ЗНАЧЕНИЕ-2";
+        const parsed = parseKeys(keys);
+        expect(validateKeysYaml(parsed)).toBeNull();
+        expect(placeholdersFromKeys(parsed)).toEqual(["[PERSON_1]", "[PERSON_2]"]);
+        expect(valuesFromKeys(parsed)).toEqual(["ЗНАЧЕНИЕ-1", "ЗНАЧЕНИЕ-2"]);
+    });
+
+    it("reports the same error from a parsed result and from raw YAML", () => {
+        const bad = "Физлица:\n  - ЗНАЧЕНИЕ-1\n  - ЗНАЧЕНИЕ-1";
+        expect(validateKeysYaml(parseKeys(bad))).toBe(validateKeysYaml(bad));
     });
 });
 

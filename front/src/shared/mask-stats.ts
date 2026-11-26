@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { createElement } from "react";
 
 import { LABEL_CATALOGUE } from "@/shared/api/labels.generated";
-import { keyEntries, type MaskStatsPayload } from "@/shared/api/mask";
+import { parseKeys, type MaskStatsPayload, type ParsedKeysDocument } from "@/shared/api/mask";
 import type { ResultManifest } from "@/shared/api/mask-archive";
 
 /**
@@ -113,27 +113,59 @@ export function statsFromManifest(manifest: ResultManifest): MaskStats {
     };
 }
 
+/** Placeholder-shaped tokens in a masked document (`[PERSON_1]`, `[PHONE_2]`, …). */
+const PLACEHOLDER_TOKEN = /\[[A-Z][A-Z0-9]*_\d+\]/g;
+
 /**
  * Build demasking stats from the keys and the placeholders they are applied to.
+ *
+ * Accepts the raw YAML or an already parsed document, so a caller that has just
+ * validated the keys does not parse them again on the same edit.
+ */
+export function countKeysValues(
+    keysYaml: string | ParsedKeysDocument,
+    documentText: string | null,
+    occurrencesByLabel?: Record<string, number>,
+): MaskStats {
+    return statsFromParsedKeys(
+        typeof keysYaml === "string" ? parseKeys(keysYaml) : keysYaml,
+        documentText,
+        occurrencesByLabel,
+    );
+}
+
+/**
+ * Count occurrences with one scan of the document instead of one `split` per
+ * key. Distinct-key counts come from the parsed entries, independently of how
+ * many times a placeholder appears. Tokens not present in the keys are ignored,
+ * so an unknown placeholder never changes the totals.
  *
  * `uniqueByLabel` comes from the distinct key values. Occurrences are counted
  * from `documentText` when it is known (text mode); for a DOCX the caller passes
  * the counts extracted from the masked file via `occurrencesByLabel`. Any key
  * whose placeholder is absent from the document is reported as "не применено".
  */
-export function countKeysValues(
-    keysYaml: string,
+export function statsFromParsedKeys(
+    parsed: ParsedKeysDocument,
     documentText: string | null,
     occurrencesByLabel?: Record<string, number>,
 ): MaskStats {
     const unique: Record<string, Set<string>> = {};
     const byLabel: Record<string, number> = { ...occurrencesByLabel };
     const unused: string[] = [];
-    for (const [placeholder, value] of keyEntries(keysYaml)) {
-        const label = placeholder.slice(1, -1).replace(/_\d+$/, "").toLowerCase();
+
+    const known = new Set(parsed.entries.map(({ placeholder }) => placeholder));
+    const occurrences: Record<string, number> = {};
+    if (documentText !== null && known.size > 0) {
+        for (const match of documentText.matchAll(PLACEHOLDER_TOKEN)) {
+            const token = match[0];
+            if (known.has(token)) occurrences[token] = (occurrences[token] ?? 0) + 1;
+        }
+    }
+    for (const { placeholder, label, value } of parsed.entries) {
         (unique[label] ??= new Set()).add(value);
         if (documentText !== null) {
-            const count = documentText.split(placeholder).length - 1;
+            const count = occurrences[placeholder] ?? 0;
             if (count > 0) byLabel[label] = (byLabel[label] ?? 0) + count;
             else unused.push(value);
         } else if (occurrencesByLabel === undefined) {

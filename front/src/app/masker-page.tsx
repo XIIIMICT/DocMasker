@@ -93,7 +93,7 @@ export function MaskerPage({ supportMail }: { supportMail: string }) {
                                 restored={w.restored}
                                 restoredFile={w.restoredFile}
                                 restoredDocRef={w.restoredDocRef}
-                                demaskKeys={w.demaskKeys}
+                                parsedDemaskKeys={w.parsedDemaskKeys}
                                 inFileMode={w.inFileMode}
                                 canDownload={w.canDownloadRestored}
                                 onDownload={w.downloadRestored}
