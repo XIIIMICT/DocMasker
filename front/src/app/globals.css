@@ -369,9 +369,12 @@ html {
     color: var(--text-secondary);
 }
 
-/* Visually-disabled primary button (we avoid the native `disabled` attribute
-   on the react-aria ButtonGroup child to dodge the SSR/client hydration
-   mismatch; the handler guards the disabled state). */
+/* Visually-disabled primary button. HeroUI 3.2.8's `isDisabled` on these
+   react-aria ButtonGroup children was reproduced breaking the app's Tooltip
+   hover behaviour in the e2e suite, and the native attribute also risks an
+   SSR/client mismatch. Keep the visual workaround, but NEVER rely on it as a
+   guard: Enter/Space and direct handler calls are blocked by `canDemask()`
+   at the operation boundary. */
 .action-disabled {
     color: var(--muted) !important;
     background: var(--default) !important;
