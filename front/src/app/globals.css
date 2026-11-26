@@ -1,9 +1,19 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 
+/* This test reads the stylesheet as text; its regex tokens must not become
+   Tailwind utility candidates in the emitted CSS. */
+@source not "../app/__tests__/globals-conventions.test.ts";
+
+/* Keep HeroUI 3.2.8's sm/md tiers active at every viewport: with these two
+   tokens pinned to 0 the build emits 51 HeroUI responsive rules as
+   `min-width:0` instead of 40rem/48rem (button/icon heights, textarea/input
+   font sizes, Toast layout, …). Removing the pin changes today's control
+   sizes at >=40rem, so it is intentional. The app has no `sm:`/`md:`
+   utilities of its own and its layout breakpoints use literal widths in the
+   @media rules below, so standard Tailwind breakpoint values are preserved
+   for app-authored CSS. */
 @theme {
-    /* Freeze HeroUI's responsive scaling (see ReportCollector): pin sm/md to 0
-       so every component keeps its roomier base look on all viewports. */
     --breakpoint-sm: 0rem;
     --breakpoint-md: 0rem;
 }
@@ -51,6 +61,12 @@
 
     --radius: 0.5rem;
     --field-radius: 1rem;
+
+    /* DocMasker's own motion only; HeroUI ships its own reduce-motion policy. */
+    --app-motion-fast: 140ms;
+    --app-motion-gap: 180ms;
+    --app-motion-theme: 200ms;
+    --app-motion-expand: 220ms;
 }
 
 .dark,
@@ -92,8 +108,8 @@
 /* NextThemesProvider: плавная смена темы */
 html {
     transition:
-        background-color 200ms ease,
-        color 200ms ease;
+        background-color var(--app-motion-theme) ease,
+        color var(--app-motion-theme) ease;
 }
 
 /* ─── DocMasker workspace ───────────────────────── */
@@ -150,8 +166,8 @@ html {
     text-decoration: none;
     cursor: pointer;
     transition:
-        gap 180ms cubic-bezier(0.22, 1, 0.36, 1),
-        background-color 140ms ease;
+        gap var(--app-motion-gap) cubic-bezier(0.22, 1, 0.36, 1),
+        background-color var(--app-motion-fast) ease;
 }
 
 .support-link > svg {
@@ -168,8 +184,8 @@ html {
     white-space: nowrap;
     opacity: 0;
     transition:
-        max-width 220ms cubic-bezier(0.22, 1, 0.36, 1),
-        opacity 140ms ease;
+        max-width var(--app-motion-expand) cubic-bezier(0.22, 1, 0.36, 1),
+        opacity var(--app-motion-fast) ease;
 }
 
 .support-link:hover,
@@ -583,5 +599,17 @@ textarea.result-area--error {
     .app-header {
         gap: 0.5rem;
         padding: 0 1rem;
+    }
+}
+
+/* DocMasker-owned transitions become instantaneous when motion is reduced.
+   HeroUI's own prefers-reduced-motion rules live in @heroui/styles and are not
+   touched here; the hover/focus/theme end states keep their final values. */
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --app-motion-fast: 0ms;
+        --app-motion-gap: 0ms;
+        --app-motion-theme: 0ms;
+        --app-motion-expand: 0ms;
     }
 }
