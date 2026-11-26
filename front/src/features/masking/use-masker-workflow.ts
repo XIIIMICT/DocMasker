@@ -90,13 +90,26 @@ export function useMaskerWorkflow() {
         update({ busy: false });
     }
 
-    /** Cancel the server-side job (AbortController only stops polling). */
+    /** Cancel the server-side job (AbortController only stops local polling). */
     async function onCancelJob() {
         if (!activeJob) return;
-        await cancelJob(activeJob);
-        pollingController.current?.abort();
-        endJob();
-        update({ busy: false, error: "Задание отменено." });
+        const outcome = await cancelJob(activeJob);
+        if (outcome.kind === "accepted") {
+            pollingController.current?.abort();
+            endJob();
+            update({ busy: false, error: "Задание отменено." });
+            return;
+        }
+        if (outcome.kind === "already_terminal") {
+            // The job won the race and finished before the DELETE arrived.
+            pollingController.current?.abort();
+            endJob();
+            update({ busy: false, error: "Задание уже завершено. Проверьте результат." });
+            return;
+        }
+        // Server/network failure: keep the active job and polling so the user
+        // can retry; never claim the worker was stopped.
+        update({ error: "Не удалось подтвердить отмену задания. Повторите попытку." });
     }
 
     const pollingController = useRef<AbortController | null>(null);

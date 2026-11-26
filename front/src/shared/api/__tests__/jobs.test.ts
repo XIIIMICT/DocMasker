@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 
 import JSZip from "jszip";
 
-import { JobFailedError, waitForJob } from "@/shared/api/jobs";
+import { cancelJob, JobFailedError, waitForJob } from "@/shared/api/jobs";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -30,6 +30,33 @@ async function zipResponse(entries: Record<string, string>): Promise<Response> {
     const blob = await zip.generateAsync({ type: "blob" });
     return new Response(blob, { status: 200, headers: { "Content-Type": "application/zip" } });
 }
+
+describe("cancelJob", () => {
+    it("reports an accepted server cancellation only on 2xx", async () => {
+        globalThis.fetch = (async () =>
+            new Response(null, { status: 204 })) as unknown as typeof fetch;
+        expect(await cancelJob(ACCEPTED)).toEqual({ kind: "accepted" });
+    });
+
+    it("does not claim cancellation on a server error", async () => {
+        globalThis.fetch = (async () =>
+            new Response(null, { status: 500 })) as unknown as typeof fetch;
+        expect(await cancelJob(ACCEPTED)).toEqual({ kind: "failed", reason: "server" });
+    });
+
+    it("does not claim cancellation on a network failure", async () => {
+        globalThis.fetch = (async () => {
+            throw new TypeError("network down");
+        }) as unknown as typeof fetch;
+        expect(await cancelJob(ACCEPTED)).toEqual({ kind: "failed", reason: "network" });
+    });
+
+    it("reports a job that finished just before the DELETE", async () => {
+        globalThis.fetch = (async () =>
+            new Response(null, { status: 404 })) as unknown as typeof fetch;
+        expect(await cancelJob(ACCEPTED)).toEqual({ kind: "already_terminal" });
+    });
+});
 
 describe("waitForJob", () => {
     it("polls through queued/running and unpacks the result ZIP", async () => {
@@ -95,6 +122,55 @@ describe("waitForJob", () => {
                 result_url: null,
             });
         }) as unknown as typeof fetch;
+        await expect(waitForJob(ACCEPTED, controller.signal)).rejects.toBeInstanceOf(
+            JobFailedError,
+        );
+    });
+
+    it("removes one abort listener for every poll delay", async () => {
+        const addSpy = spyOn(AbortSignal.prototype, "addEventListener");
+        const removeSpy = spyOn(AbortSignal.prototype, "removeEventListener");
+        let polls = 0;
+        globalThis.fetch = (async (url: string | URL | Request) => {
+            if (String(url) === ACCEPTED.result_url) {
+                return zipResponse({ "result.json": "{}" });
+            }
+            polls += 1;
+            return jsonResponse({
+                job_id: ACCEPTED.job_id,
+                status: polls >= 2 ? "succeeded" : "running",
+                phase: polls >= 2 ? "completed" : "detection",
+                progress: polls >= 2 ? 100 : 40,
+                attempt: 1,
+                error_code: null,
+                result_url: polls >= 2 ? ACCEPTED.result_url : null,
+            });
+        }) as unknown as typeof fetch;
+        try {
+            await waitForJob(ACCEPTED, new AbortController().signal);
+            const added = addSpy.mock.calls.filter((call) => call[0] === "abort").length;
+            const removed = removeSpy.mock.calls.filter((call) => call[0] === "abort").length;
+            expect(added).toBe(1);
+            expect(removed).toBe(1);
+        } finally {
+            addSpy.mockRestore();
+            removeSpy.mockRestore();
+        }
+    });
+
+    it("aborts cleanly during a polling delay", async () => {
+        const controller = new AbortController();
+        globalThis.fetch = (async () =>
+            jsonResponse({
+                job_id: ACCEPTED.job_id,
+                status: "running",
+                phase: "detection",
+                progress: 10,
+                attempt: 1,
+                error_code: null,
+                result_url: null,
+            })) as unknown as typeof fetch;
+        setTimeout(() => controller.abort(), 10);
         await expect(waitForJob(ACCEPTED, controller.signal)).rejects.toBeInstanceOf(
             JobFailedError,
         );

@@ -88,8 +88,14 @@ repo. Verified gotchas:
    `endJob()` clears the id on a terminal state or dismissal.
 7. Job cancel/resume: only the opaque job id is kept in
    `sessionStorage["docmasker.activeJob"]`; `DELETE /api/jobs/{id}` cancels the
-   server job, an `AbortController` only stops polling. A result ZIP without
-   `result.json` clears cleanly.
+   server job, an `AbortController` only stops polling. `cancelJob()` returns
+   `accepted` / `already_terminal` / `failed` and never treats a non-2xx or
+   network error as confirmed; the UI only clears active state on accepted or
+   terminal, and leaves polling running when cancellation could not be
+   confirmed. `waitForJob()` removes each abort listener when its poll timer
+   fires and clears the timer on abort. A result ZIP without `result.json`
+   clears cleanly; the browser retains the full result Blob while JSZip
+   unpacks it (documented client-side memory limit, not streaming).
 
 ## Layout (detail — docs/ARCHITECTURE.md)
 

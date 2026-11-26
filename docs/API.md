@@ -342,7 +342,13 @@ artifact expired (TTL `JOBS_TTL_SECONDS`). The front unpacks `result.json` via
 
 ### `DELETE /api/jobs/{id}`
 
-Request cancellation of a queued/running job → 204. Unknown id → 404.
+Request cancellation of a queued/running job → 204. Unknown id → 404; a job
+that already reached a terminal state returns 409/404 (the cancellation was
+not accepted). The client must check the HTTP status: only a 2xx counts as
+confirmed, a network error or 5xx leaves the job active and polling running.
+Aborting local polling (`AbortController`) never cancels the server job.
+Worker cancellation is cooperative at window/part checkpoints and is fenced;
+a lease loss is reported separately and never triggers stale-owner cleanup.
 
 ## Frontend proxy contract
 

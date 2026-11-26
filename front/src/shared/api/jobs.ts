@@ -10,12 +10,26 @@ export type { JobAccepted, JobResult, JobStatus } from "@/shared/api/jobs-types"
 /** sessionStorage key for resuming an active job in the same tab after reload. */
 export const ACTIVE_JOB_KEY = "docmasker.activeJob";
 
-/** Request server-side cancellation. Aborting polling alone must NOT cancel it. */
-export async function cancelJob(accepted: JobAccepted): Promise<void> {
+/** Truthful outcome of a server-side cancellation request. */
+export type CancelJobResult =
+    | { kind: "accepted" }
+    | { kind: "already_terminal" }
+    | { kind: "failed"; reason: "network" | "server" };
+
+/**
+ * Request server-side cancellation. Aborting polling alone must NOT cancel it.
+ * A non-2xx response or network error is never reported as accepted.
+ */
+export async function cancelJob(accepted: JobAccepted): Promise<CancelJobResult> {
     try {
-        await fetch(`/api/jobs/${encodeURIComponent(accepted.job_id)}`, { method: "DELETE" });
+        const response = await fetch(`/api/jobs/${encodeURIComponent(accepted.job_id)}`, {
+            method: "DELETE",
+        });
+        if (response.ok) return { kind: "accepted" };
+        if (response.status === 404 || response.status === 409) return { kind: "already_terminal" };
+        return { kind: "failed", reason: "server" };
     } catch {
-        /* best effort: the server job is still fenced by its lease/expiry */
+        return { kind: "failed", reason: "network" };
     }
 }
 
@@ -40,8 +54,8 @@ function buildResult(entries: Map<string, Blob>): JobResult {
  * Poll a job until it reaches a terminal state, then download and unpack its
  * result. Uses exponential backoff and a bounded attempt count; the caller's
  * AbortSignal cancels polling (e.g. when the user switches modes). Job
- * results are one flat ZIP whose entries are turned into Blobs (no full
- * archive copy kept in memory).
+ * results are one flat ZIP; the browser keeps the full response Blob while
+ * JSZip unpacks it (a documented client-side memory limit, not streaming).
  */
 export async function waitForJob(accepted: JobAccepted, signal?: AbortSignal): Promise<JobResult> {
     let delay = POLL_BASE_MS;
@@ -69,15 +83,18 @@ export async function waitForJob(accepted: JobAccepted, signal?: AbortSignal): P
             throw new JobFailedError(status.error_code ?? status.status);
         }
         await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(resolve, delay);
-            signal?.addEventListener(
-                "abort",
-                () => {
-                    clearTimeout(timer);
-                    reject(new JobFailedError("cancelled"));
-                },
-                { once: true },
-            );
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const onAbort = () => {
+                if (timer !== undefined) clearTimeout(timer);
+                reject(new JobFailedError("cancelled"));
+            };
+            timer = setTimeout(() => {
+                signal?.removeEventListener("abort", onAbort);
+                resolve();
+            }, delay);
+            // One listener per delay; it is removed when the timer fires, and
+            // the timer is cleared when polling is aborted.
+            signal?.addEventListener("abort", onAbort, { once: true });
         });
         delay = Math.min(delay * 1.5, POLL_MAX_MS);
     }
