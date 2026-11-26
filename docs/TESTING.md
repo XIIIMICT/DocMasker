@@ -46,7 +46,10 @@ a real PostgreSQL/Valkey stand (`just db-stand` + `just seed`, then
 `shared/__tests__/config.test.ts`, `shared/__tests__/mask-stats.test.ts`,
 `shared/api/__tests__/mask.test.ts`, `shared/api/__tests__/mask-archive.test.ts`,
 `shared/api/__tests__/jobs.test.ts`, `shared/api/__tests__/timeouts.test.ts`,
-`shared/ui/__tests__/docx-viewer.test.ts`, `shared/ui/__tests__/theme-switcher.test.ts`,
+`shared/ui/__tests__/docx-viewer.test.ts`,
+`shared/ui/__tests__/docx-viewer-lifecycle.test.tsx` (injectable
+`DocxViewer.renderDocument` seam — lazy default renderer is unchanged),
+`shared/ui/__tests__/theme-switcher.test.ts`,
 `shared/ui/__tests__/support-button.test.ts`,
 `shared/hooks/__tests__/use-synced-scroll.test.ts`, plus the gate's own
 `src/__tests__/check-coverage.test.ts`. The coverage gate is a thin CLI wrapper

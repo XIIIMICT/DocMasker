@@ -7,6 +7,24 @@ export const HIGHLIGHT_DEBOUNCE_MS = 120;
 /** Stable default so an unhighlighted viewer never re-schedules a pass. */
 const NO_HIGHLIGHTS: string[] = [];
 
+/**
+ * Injectable async renderer. `isCurrent` is the component's generation guard,
+ * checked by the default renderer between the dynamic import and `renderAsync`
+ * so a stale import never starts an expensive render.
+ */
+export type DocxRender = (
+    blob: Blob,
+    container: HTMLElement,
+    isCurrent: () => boolean,
+) => Promise<void>;
+
+/** Default renderer: the preview bundle is fetched only when a blob is shown. */
+const defaultRenderDocument: DocxRender = async (blob, container, isCurrent) => {
+    const { renderAsync } = await import("docx-preview");
+    if (!isCurrent()) return;
+    await renderAsync(blob, container);
+};
+
 type TimerRef = { current: ReturnType<typeof setTimeout> | null };
 
 /** Cancel pending highlight work (blob switch, unmount, or a newer keys edit). */
@@ -50,19 +68,26 @@ export function scheduleHighlightUpdate(
  *
  * `docx-preview` (and its JSZip dependency) is loaded with a dynamic import
  * the first time a document is actually rendered, so a text-only session
- * never downloads the preview bundle.
+ * never downloads the preview bundle. `renderDocument` is an optional seam for
+ * deterministic lifecycle tests; production always uses the lazy default.
  */
 export function DocxViewer({
     blob,
     surfaceRef: externalRef,
     highlight = NO_HIGHLIGHTS,
+    renderDocument = defaultRenderDocument,
 }: {
     blob: Blob;
     surfaceRef?: RefObject<HTMLDivElement | null>;
     highlight?: string[];
+    renderDocument?: DocxRender;
 }) {
     const internalRef = useRef<HTMLDivElement>(null);
     const surfaceRef = externalRef ?? internalRef;
+    // Keep the render effect keyed to the blob/surface only: swapping the
+    // renderer or the highlight list must never re-parse the document.
+    const renderDocumentRef = useRef(renderDocument);
+    renderDocumentRef.current = renderDocument;
     const [localError, setLocalError] = useState<string | null>(null);
     // Latest values, read by async callbacks without re-triggering a render.
     const highlightRef = useRef(highlight);
@@ -99,10 +124,10 @@ export function DocxViewer({
         setLocalError(null);
         renderedRef.current = false;
         try {
-            const { renderAsync } = await import("docx-preview");
-            // The import itself may outlive a file switch or an unmount.
-            if (generation !== generationRef.current) return;
-            await renderAsync(blob, container);
+            await renderDocumentRef.current(blob, container, () => {
+                // The import itself may outlive a file switch or an unmount.
+                return generation === generationRef.current;
+            });
             // Ignore a stale render: a newer Blob was selected, or cleanup ran.
             if (generation !== generationRef.current) return;
             renderedRef.current = true;
