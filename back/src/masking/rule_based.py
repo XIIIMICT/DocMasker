@@ -72,17 +72,81 @@ _ADDRESS_SENTENCE_END_RE = re.compile(r"[.!?\n]+\s*")
 
 
 @lru_cache(maxsize=1)
+def _address_abbreviation_dots() -> frozenset[str]:
+    """Abbreviation dots («г.», «ул.» …) that are not sentence ends."""
+    return frozenset(f"{word}." for word in _cfg().address_abbreviations)
+
+
+@lru_cache(maxsize=1)
 def _address_candidate_re() -> re.Pattern[str]:
     """
-    Cheap structural markers worth sending to the expensive `AddrExtractor`.
+    Cheap, config-driven markers worth sending to the expensive `AddrExtractor`.
 
-    Anchored abbreviations (from `lexicons/addresses.yaml`), a postcode and
-    the `адрес:` marker. Short tokens are never loose substrings, so «ш»
-    inside «Строймонтаж» cannot make a whole sentence a candidate. Built
-    lazily so importing this module never requires the config snapshot.
+    Every alternative comes from the validated lexicon: whole-word markers and
+    hyphenated literals from `address_keywords`, bare/dotted abbreviations from
+    `address_abbreviations`, plus the `адрес:` label and a 6-digit postcode.
+    Unicode word boundaries keep «ш» inside «Строймонтаж» out, and a bare
+    abbreviation additionally needs a capitalised word or digit after it so
+    «ш consulted» cannot nominate. Case-insensitivity is scoped to the
+    lexicon tokens — the continuation lookahead stays case-sensitive.
+
+    A match ONLY nominates a range for `AddrExtractor`; it never auto-masks
+    the sentence. Built lazily so importing this module needs no config.
     """
-    abbreviations = "|".join(re.escape(word) for word in sorted(_cfg().address_abbreviations, key=len, reverse=True))
-    return re.compile(rf"(?i)(?:\b(?:{abbreviations})\s*\.|\bадрес\w*\s*:|\b\d{{6}}\b)")
+    cfg = _cfg()
+    full_words = sorted(
+        {word for word in cfg.address_keywords if len(word) >= 3 and word.isalpha()},
+        key=len,
+        reverse=True,
+    )
+    literals = sorted(
+        {
+            word
+            for word in cfg.address_keywords
+            if not word.isalpha() and word.strip(" .") and not word.endswith((" ", "."))
+        },
+        key=len,
+        reverse=True,
+    )
+    abbreviations = sorted(cfg.address_abbreviations, key=len, reverse=True)
+    markers = "|".join([*(re.escape(word) for word in full_words), *(re.escape(word) for word in literals)])
+    abbr = "|".join(re.escape(word) for word in abbreviations)
+    alternatives: list[str] = []
+    if markers:
+        alternatives.append(rf"(?i:\b(?:{markers})\b)")
+    if abbr:
+        # A preceding dot is excluded so the tail of «и т.д.» is not a marker.
+        alternatives.append(rf"(?<!\.)(?i:\b(?:{abbr}))\s*\.")
+        alternatives.append(rf"(?<!\.)(?i:\b(?:{abbr})\b)\s+(?=[А-ЯЁA-Z0-9])")
+    alternatives.append(r"(?i:\bадрес\w*)\s*:")
+    alternatives.append(r"\b\d{6}\b")
+    return re.compile("(?:" + "|".join(alternatives) + ")")
+
+
+#: Bounded lookback/lookahead for the soft-newline continuation check.
+_ADDRESS_LINE_CONTEXT_CHARS = 80
+
+
+def _address_continues_after_newline(text: str, position: int) -> bool:
+    """
+    Whether the line starting at `position` continues an address from the line above.
+
+    A trailing comma or a marker/digit at the start of the next line is
+    the signal; both sides are bounded so this stays O(1) per newline.
+    """
+    head = text[max(0, position - _ADDRESS_LINE_CONTEXT_CHARS) : position].rstrip()
+    if head.endswith(","):
+        return True
+    tail = text[position : position + _ADDRESS_LINE_CONTEXT_CHARS].lstrip()
+    return bool(tail) and (tail[0].isdigit() or bool(_address_candidate_re().match(tail)))
+
+
+def _append_address_range(ranges: list[tuple[int, int]], start: int, end: int) -> None:
+    """Append a nominated range, merging with the touching previous one."""
+    if ranges and start <= ranges[-1][1]:
+        ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+    else:
+        ranges.append((start, end))
 
 
 def _address_candidate_ranges(text: str) -> Iterator[tuple[int, int]]:
@@ -90,36 +154,37 @@ def _address_candidate_ranges(text: str) -> Iterator[tuple[int, int]]:
     Sentence-sized ranges that may contain an AddrExtractor match.
 
     `AddrExtractor` costs ~0.2 ms per character; on a 500 KB document that is
-    ~100 s and ~10 GB peak RSS. Only sentences carrying an address marker are
-    fed to it (the `адрес:` line path is handled separately and in full).
-    Touching ranges are merged, so an address split across two markers stays
-    one contiguous input. Text with NO marker causes no AddrExtractor call —
-    the intended fast path for PII-free paragraphs (§9.2).
+    ~100 s and ~10 GB peak RSS. Only sentences carrying a configured address
+    marker are fed to it (the `адрес:` line path is handled separately).
+    Abbreviation dots are not sentence ends, and a bare newline is a soft
+    boundary when the next line continues the address — otherwise a wrapped
+    address reaches the extractor as unrecognisable fragments. Touching ranges
+    are merged so an address split across two markers stays one input. Text
+    with NO marker causes no AddrExtractor call — the fast path (§9.2).
     """
     candidate_re = _address_candidate_re()
-    abbreviations = {f"{word}." for word in _cfg().address_abbreviations}
+    dots = _address_abbreviation_dots()
     ranges: list[tuple[int, int]] = []
     start = 0
     for match in _ADDRESS_SENTENCE_END_RE.finditer(text):
         # Include the dot itself so «кв.» is recognised as an abbreviation,
         # not as a sentence end that would truncate the address.
-        prefix = text[max(0, match.start() - 6) : match.start() + 1].lower().strip()
-        # «г.», «ул.», «д.», «кв.» … are NOT sentence ends; splitting there
-        # would feed AddrExtractor a collection of unrecognisable fragments.
-        if any(prefix.endswith(abbr) for abbr in abbreviations):
+        separator = text[match.start() : match.end()]
+        prefix = text[max(0, match.start() - 8) : match.start() + 1].lower().strip()
+        if any(prefix.endswith(dot) for dot in dots):
+            continue
+        if (
+            "\n" in separator
+            and not any(char in separator for char in ".!?")
+            and _address_continues_after_newline(text, match.end())
+        ):
             continue
         end = match.end()
-        if candidate_re.search(text[start:end]):
-            if ranges and start <= ranges[-1][1]:
-                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
-            else:
-                ranges.append((start, end))
+        if candidate_re.search(text, start, end):
+            _append_address_range(ranges, start, end)
         start = end
-    if start < len(text) and candidate_re.search(text[start:]):
-        if ranges and start <= ranges[-1][1]:
-            ranges[-1] = (ranges[-1][0], len(text))
-        else:
-            ranges.append((start, len(text)))
+    if start < len(text) and candidate_re.search(text, start):
+        _append_address_range(ranges, start, len(text))
     yield from ranges
 
 

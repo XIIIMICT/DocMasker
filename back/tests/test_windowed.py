@@ -113,6 +113,25 @@ def test_long_address_crossing_boundary_is_not_cut(small_windows: Settings) -> N
     assert text[addresses[0].start : addresses[0].end] == addresses[0].text  # absolute offsets
 
 
+@pytest.mark.parametrize(
+    "needle",
+    [
+        "Москва, улица Ленина, дом 10",
+        "г Москва, ул Ленина, д 10",
+        "г. Москва, ул. Ленина, д. 10, кв. 25",
+    ],
+)
+def test_address_markers_survive_window_boundaries(small_windows: Settings, needle: str) -> None:
+    """Full words and bare/dotted abbreviations must not be cut at a window."""
+    masker = get_masker()
+    filler = "Обычный текст без персональных данных. " * 20  # > chunk size
+    text = f"{filler}{needle}. {filler}"
+    entities = [entity for entity in masker.detect(text) if entity.label == "address"]
+    hit = next((entity for entity in entities if "Ленина" in entity.text), None)
+    assert hit is not None, f"address «{needle}» lost at a window boundary: {entities}"
+    assert text[hit.start : hit.end] == hit.text  # absolute offsets
+
+
 def test_windowed_offsets_are_absolute(small_windows: Settings) -> None:
     masker = get_masker()
     text = "Простой текст. " * 30 + "ivan@boundary.example.com" + " финал."

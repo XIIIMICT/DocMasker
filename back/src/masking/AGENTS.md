@@ -59,13 +59,13 @@ contracts and durable specs live in `docs/` — link, do not duplicate:
 
 - `get_masker()` is one masker **per thread** (`threading.local()`): natasha extractors hold mutable yargy state, not proven thread-safe. Each thread pays ~110 MB once — keep `JOBS_CONCURRENCY` conservative. Never build a `RuleBasedMasker` per request (tests do so deliberately).
 - `windowed.py::iter_windows` yields bounded overlapping windows aligned to structural boundaries, never cutting a token; `_detect_long` spans are re-based to absolute offsets and exact boundary duplicates removed before `_merge_spans`; `checkpoint` runs between windows. Below `min_chars`, a single window preserves the old behavior.
-- `_find_addresses` feeds `AddrExtractor` only sentences with an anchored address marker (abbreviation dots are not sentence ends). Whole-document address detection caused the recorded 92.8 s / 7.3 GB baseline — see `docs/PERFORMANCE.md`.
-- OOXML containers call `detect(text, prefilter=True)`: cheap per-detector preconditions skip impossible detectors but can never suppress `always_mask`. The address precondition reuses the anchored lexicon marker matcher (`_address_candidate_re`), so short fragments without digits still reach the extractor and one-letter abbreviations inside unrelated words do not match. `_suspicious_positions` is a bounded `lru_cache(256)`.
+- `_find_addresses` feeds `AddrExtractor` only nominated sentence-sized ranges. `_address_candidate_re()` builds every marker from `lexicons/addresses.yaml` (full words, bare/dotted abbreviations, `адрес:`, postcode) with Unicode word boundaries — no parallel Python list. A match only nominates a range; it never masks. Abbreviation dots are not sentence ends and a wrapping newline is a soft boundary. Whole-document address detection caused the recorded 92.8 s / 7.3 GB baseline — see `docs/PERFORMANCE.md`; the config contract and benchmark are in `docs/MASKING_CONFIGURATION.md` §Address candidate prefilter.
+- OOXML containers call `detect(text, prefilter=True)`: cheap per-detector preconditions skip impossible detectors but can never suppress `always_mask`. The address precondition reuses the same config-driven matcher, so short fragments without digits still reach the extractor and one-letter abbreviations inside unrelated words do not match. `_suspicious_positions` is a bounded `lru_cache(256)`.
 - Worker jobs thread `checkpoint` through `execute()` → `mask_docx_in_memory()` → `transform_package()` → `detect()`: before each processable OPC part and between long-text windows. A cancellation stops work at the next coarse boundary, never publishes/caches a result, and stale workers never clean up artifacts without DB confirmation. Sync routes pass no checkpoint.
 
 ## Required tests
 
-`test_rule_based.py`, `test_keys_v2.py`, `test_config.py`, `test_docx.py`, `test_ooxml.py`,
+`test_rule_based.py`, `test_address_prefilter.py`, `test_keys_v2.py`, `test_config.py`, `test_docx.py`, `test_ooxml.py`,
 `test_windowed.py`, `test_mask_file.py`, `test_unmask.py` (plus `test_mask.py`,
 `test_mapping.py`, `test_labels_api.py`, `test_docx_validation.py`). Offline/deterministic,
 `filterwarnings=error`, ≥80% branch coverage in CI. Synthetic OPC fixtures, mask→keys→unmask

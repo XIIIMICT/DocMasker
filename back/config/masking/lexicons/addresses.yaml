@@ -25,6 +25,8 @@ abbreviations:
   - ш
   - б
 # Keywords that make a span look like an address (checked as substrings in code).
+# Alphabetic entries of 3+ letters are also whole-word candidate markers for
+# the address prefilter; shorter stems are handled as bare/dotted abbreviations.
 keywords:
   - "г."
   - "г "
@@ -37,3 +39,13 @@ keywords:
   - обл
   - р-н
   - кв
+  # Full-word markers (DM-2): literal source of truth, never a Python list.
+  - улица
+  - дом
+  - переулок
+  - проспект
+  - набережная
+  - квартира
+  - корпус
+  - строение
+  - помещение
