@@ -28,7 +28,7 @@ contracts and durable specs live in `docs/` — link, do not duplicate:
 - Lexicons (`config/masking/lexicons/*.yaml`) plus `always_mask`/`never_mask` exceptions are literal typed YAML loaded into one validated frozen snapshot at startup; no hot reload. Invalid YAML, duplicate/conflicting/unknown entries → `MaskingConfigError` at startup.
 - Private `exceptions.yaml` is gitignored and mounted read-only; only synthetic values go in `exceptions.example.yaml`. Never commit real PII.
 - `never_mask` suppresses only an exact whole detected span (never a larger overlapping one); `always_mask` spans pass the normal overlap policy and key numbering, and no detector/prefilter may suppress them.
-- `config_digest()` feeds `MASKING_CONFIG_DIGEST` in the cache key: any config change invalidates cached results. Never log the digest inputs.
+- `config_digest()` covers the whole canonical effective snapshot (schema, ordered labels/titles, lexicons, all `common.yaml` char sets, and each exception's primary/mode/variants), not a partial hand-maintained list. It always feeds the cache key (`CACHE_KEY_SCHEMA_VERSION=2`), even when `MASKING_CONFIG_DIGEST` is pinned manually. Declared match modes are implemented, not ignored: `exact` = case-sensitive literal, `case_insensitive` = case-insensitive literal, `token_sequence` = case-insensitive ordered tokens with arbitrary whitespace. Empty/duplicate variants and literals across entries fail startup. Never log the digest inputs or raw exception values.
 - `MASK_LABELS` was removed with a loud startup error; setting it fails startup. `profile_id` / `GET /api/profiles` are gone.
 
 ## Detector contracts & order

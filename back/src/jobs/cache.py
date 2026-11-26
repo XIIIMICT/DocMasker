@@ -29,7 +29,9 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger("docmasker.cache")
 
 #: Cache key / entry schema. Bump CACHE_NAMESPACE_VERSION when either changes.
-CACHE_KEY_SCHEMA_VERSION = 1
+#: 2: the canonical config snapshot digest is always in the key, even when a
+#: manual MASKING_CONFIG_DIGEST override is configured.
+CACHE_KEY_SCHEMA_VERSION = 2
 CACHE_ENTRY_VERSION = 1
 #: Increment these release-checklist constants when the corresponding behavior
 #: changes output (brief §4.3). The values live in Settings so operators can
@@ -79,9 +81,9 @@ def build_cache_key(settings: Settings, fingerprint: CacheFingerprint) -> str:
     """
     from src.masking.config import config_digest
 
-    digest_input = settings.masking_config_digest
-    if digest_input == "auto":
-        digest_input = config_digest()
+    # The loaded snapshot always participates: a manual override can only add
+    # invalidation, never disable it (e.g. MASKING_CONFIG_DIGEST=none).
+    digest_input = config_digest()
     payload = {
         "operation": fingerprint.operation,
         "input": fingerprint.input_hash,
@@ -89,6 +91,7 @@ def build_cache_key(settings: Settings, fingerprint: CacheFingerprint) -> str:
         "output_name": fingerprint.output_name,
         "ruleset": settings.masking_ruleset_version,
         "config_digest": digest_input,
+        "config_digest_override": settings.masking_config_digest,
         "manifest": settings.result_manifest_version,
         "keys_format": settings.keys_format_version,
         "docx_transformer": settings.docx_transformer_version,
