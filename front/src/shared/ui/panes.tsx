@@ -6,6 +6,7 @@ import { type DragEvent, type RefObject, useMemo } from "react";
 import { type DocxResult, type MaskedFileResult } from "@/features/masking/types";
 import { placeholdersFromKeys, valuesFromKeys } from "@/shared/api/mask";
 import { type MaskStats, statsBreakdown, totalText } from "@/shared/mask-stats";
+import type { KeysParseResult } from "@/shared/masking/keys-parse";
 import { DocxViewer } from "@/shared/ui/docx-viewer";
 
 export function DocIcon() {
@@ -265,7 +266,7 @@ export function UnmaskResultPane({
     restored,
     restoredFile,
     restoredDocRef,
-    demaskKeys,
+    parsedDemaskKeys,
     inFileMode,
     canDownload,
     onDownload,
@@ -274,13 +275,14 @@ export function UnmaskResultPane({
     restored: string;
     restoredFile: DocxResult | null;
     restoredDocRef: RefObject<HTMLDivElement | null>;
-    demaskKeys: string;
+    parsedDemaskKeys: KeysParseResult;
     inFileMode: boolean;
     canDownload: boolean;
     onDownload: () => void;
 }) {
     // Stable identity so editing the keys does not re-highlight the preview.
-    const restoredValues = useMemo(() => valuesFromKeys(demaskKeys), [demaskKeys]);
+    // The workflow already parsed this string once; reuse that result.
+    const restoredValues = useMemo(() => valuesFromKeys(parsedDemaskKeys), [parsedDemaskKeys]);
 
     return (
         <>

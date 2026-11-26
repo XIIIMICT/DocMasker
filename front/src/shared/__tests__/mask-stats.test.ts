@@ -8,9 +8,11 @@ import {
     statsBreakdown,
     statsFromAggregate,
     statsFromManifest,
+    statsFromParsedKeys,
     totalText,
     uniqueTotal,
 } from "@/shared/mask-stats";
+import { parseKeys } from "@/shared/masking/keys-parse";
 
 function textOf(nodes: ReactNode[]): string {
     return nodes
@@ -66,6 +68,74 @@ describe("countKeysValues", () => {
         expect(stats.byLabel).toEqual({ person: 5, organization: 3 });
         expect(stats.uniqueByLabel).toEqual({ person: 2, organization: 1 });
         expect(stats.unused).toEqual([]);
+    });
+});
+
+describe("countKeysValues — single-pass counting", () => {
+    it("counts repeated placeholders and lists keys missing from the document", () => {
+        const keys = "Физлица:\n  - ЗНАЧЕНИЕ-1\n  - ЗНАЧЕНИЕ-2\n  - ЗНАЧЕНИЕ-3";
+        const stats = countKeysValues(
+            keys,
+            "[PERSON_1] [PERSON_1] [PERSON_1] [PERSON_2] [PERSON_2]",
+        );
+        expect(stats.byLabel).toEqual({ person: 5 });
+        expect(stats.uniqueByLabel).toEqual({ person: 3 });
+        expect(stats.unused).toEqual(["ЗНАЧЕНИЕ-3"]);
+        expect(stats.total).toBe(5);
+    });
+
+    it("ignores placeholder-shaped tokens that are not in the keys", () => {
+        const stats = countKeysValues("Физлица:\n  - ЗНАЧЕНИЕ-1", "[PERSON_1] [NEIZVESTNO_1]");
+        expect(stats.byLabel).toEqual({ person: 1 });
+        expect(stats.total).toBe(1);
+        expect(stats.unused).toEqual([]);
+    });
+
+    it("keeps distinct counts separate from occurrences across labels", () => {
+        const keys =
+            "Физлица:\n  - ЗНАЧЕНИЕ-1\n  - ЗНАЧЕНИЕ-2\nНомера телефонов:\n  - +70000000000\nОрганизации:\n  - ООО «Тест»";
+        const stats = countKeysValues(
+            keys,
+            "[PERSON_1] [PERSON_1] [PERSON_2] [PERSON_2] [PHONE_1] [PHONE_1]",
+        );
+        expect(stats.byLabel).toEqual({ person: 4, phone: 2 });
+        expect(stats.uniqueByLabel).toEqual({ person: 2, phone: 1, organization: 1 });
+        expect(stats.unused).toEqual(["ООО «Тест»"]);
+    });
+
+    it("keeps duplicate values as two entries with their own placeholders", () => {
+        const stats = countKeysValues("Физлица:\n  - ЗНАЧЕНИЕ-1\n  - ЗНАЧЕНИЕ-1", "[PERSON_1]");
+        expect(stats.byLabel).toEqual({ person: 1 });
+        expect(stats.uniqueByLabel).toEqual({ person: 1 });
+        expect(stats.unused).toEqual(["ЗНАЧЕНИЕ-1"]);
+    });
+
+    it("returns empty stats for empty keys", () => {
+        const stats = countKeysValues("", "[PERSON_1]");
+        expect(stats).toEqual({ total: 0, byLabel: {}, uniqueByLabel: {}, unused: [] });
+    });
+
+    it("accepts one parsed document for both validation and statistics", () => {
+        const keys = "Физлица:\n  - ЗНАЧЕНИЕ-1\n  - ЗНАЧЕНИЕ-2";
+        const text = "[PERSON_1] [PERSON_1] [PERSON_2]";
+        const parsed = parseKeys(keys);
+        expect(parsed.valid).toBe(true);
+        expect(statsFromParsedKeys(parsed, text)).toEqual(countKeysValues(keys, text));
+    });
+
+    it("counts a large synthetic document with one scan", () => {
+        const keyCount = 2000;
+        const keys =
+            "Физлица:\n" +
+            Array.from({ length: keyCount }, (_, index) => `  - ЗНАЧЕНИЕ-${index + 1}`).join("\n");
+        const document = Array.from({ length: keyCount }, (_, index) =>
+            `[PERSON_${index + 1}]`.repeat(10),
+        ).join(" ");
+        const stats = countKeysValues(keys, document);
+        expect(stats.byLabel.person).toBe(keyCount * 10);
+        expect(stats.uniqueByLabel.person).toBe(keyCount);
+        expect(stats.unused).toEqual([]);
+        expect(stats.total).toBe(keyCount * 10);
     });
 });
 
