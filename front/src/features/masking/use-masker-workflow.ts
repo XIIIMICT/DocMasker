@@ -313,6 +313,7 @@ export function useMaskerWorkflow() {
 
     /** Download the masked artifact, whichever mode produced it. */
     function downloadResult() {
+        if (!canDownloadResult) return;
         if (inFileMode) {
             saveMaskedFile(maskedFile);
         } else {
@@ -322,10 +323,12 @@ export function useMaskerWorkflow() {
 
     /** Download the restored (demasked) artifact, text or document. */
     function downloadRestored() {
+        if (!canDownloadRestored) return;
         saveRestored(restored, restoredFile, textBaseName);
     }
 
     function downloadKeys() {
+        if (!canDownloadKeys) return;
         saveKeys(keys, maskedFile, textBaseName);
     }
 
