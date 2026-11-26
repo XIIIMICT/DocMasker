@@ -81,13 +81,19 @@ async def submit_job(
         raise _unprocessable("keys_required", "Для демаскировки необходимы ключи демаскировки.")
     if kind.startswith("mask_") and keys is not None and keys.strip():
         raise _unprocessable("unexpected_keys", "Ключи демаскировки не применяются при маскировании.")
+    if keys is not None and len(keys) > get_settings().max_keys_chars:
+        raise ApiError(
+            "keys_too_large",
+            f"Ключи больше допустимых ({get_settings().max_keys_chars} символов).",
+            status.HTTP_413_CONTENT_TOO_LARGE,
+        )
     keys_bytes = await run_blocking(_validated_keys, keys)
 
     if kind.endswith("_text"):
         if text is None or not text.strip():
             raise _unprocessable("empty_text", "Текст пуст.")
         if len(text) > get_settings().max_text_chars:
-            raise ApiError("text_too_large", "Текст больше допустимого.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+            raise ApiError("text_too_large", "Текст больше допустимого.", status.HTTP_413_CONTENT_TOO_LARGE)
         return await run_blocking(
             _enqueue_safe,
             kind,
@@ -101,7 +107,7 @@ async def submit_job(
     try:
         staged = await stage_upload(file)
     except UploadTooLargeError as error:
-        raise ApiError("file_too_large", str(error), status.HTTP_413_REQUEST_ENTITY_TOO_LARGE) from error
+        raise ApiError("file_too_large", str(error), status.HTTP_413_CONTENT_TOO_LARGE) from error
     try:
         if staged.size == 0:
             raise _unprocessable("empty_file", "Файл пуст.")

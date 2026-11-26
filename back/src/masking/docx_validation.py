@@ -9,6 +9,7 @@ a clear Russian `detail` instead of crashing.
 """
 
 import io
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,15 +62,42 @@ class DocxLimits:
     max_entry_count: int = _ENTRY_COUNT_LIMIT
 
 
+_BAD_ENTRY_NAME = "Архив содержит небезопасные имена внутренних частей."
+_DUPLICATE_ENTRY_NAME = "Архив содержит повторяющиеся имена внутренних частей."
+
+
+def _validate_entry_names(names: list[str]) -> None:
+    """Reject hostile ZIP entry names before any processing (P1.1)."""
+    seen: set[str] = set()
+    for name in names:
+        if (
+            not name
+            or name.startswith(("/", "\\"))
+            or re.match(r"^[A-Za-z]:", name)
+            or "\\" in name
+            or ".." in name.split("/")
+            or "\x00" in name
+            or any(ord(char) < 32 for char in name)
+            or any(part.startswith(".") and part != ".rels" for part in name.split("/"))
+            or name in seen
+        ):
+            raise DocxValidationError(_DUPLICATE_ENTRY_NAME if name in seen else _BAD_ENTRY_NAME)
+        seen.add(name)
+    for required in _REQUIRED_PARTS:
+        if names.count(required) != 1:
+            raise DocxValidationError(_BAD_ENTRY_NAME)
+
+
 def _validate_zip(archive: zipfile.ZipFile, limits: DocxLimits) -> None:
     """Shared OPC/ZIP checks over an already-opened ZipFile (no full read)."""
     infos = archive.infolist()
     if len(infos) > limits.max_entry_count:
         raise _too_large(_TOO_MANY_ENTRIES)
 
-    names = {info.filename for info in infos}
+    names = [info.filename for info in infos]
     if any(part not in names for part in _REQUIRED_PARTS):
         raise DocxValidationError(_MISSING_PARTS)
+    _validate_entry_names(names)
 
     total_uncompressed = 0
     for info in infos:

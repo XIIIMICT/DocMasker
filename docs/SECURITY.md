@@ -106,11 +106,13 @@ enforces every limit.
 
 - **DOCX uploads are OPC/ZIP packages, never trusted by extension.**
   `back/src/masking/docx_validation.py` checks required parts, entry count
-  (10,000), total uncompressed bytes (10× `UPLOAD_MAX_MB`), compression ratio
-  (>1,000 on a large entry = zip bomb), and the ZIP encryption flag. Limits map
-  to 413; malformed/non-Word/encrypted packages map to 415 with fixed Russian
-  details. Tests: `test_docx_validation.py` (`test_zip_bomb_ratio_is_rejected_with_413`,
-  `test_encrypted_entries_are_rejected`, `test_too_many_entries_are_rejected_with_413`,
+   (10,000), total uncompressed bytes (10x `UPLOAD_MAX_MB`), compression ratio
+   (>1,000 on a large entry = zip bomb), the ZIP encryption flag, and hostile
+   entry names (absolute/drive/traversal/backslash/NUL/control/duplicate).
+   Output ZIP entry names are flat and derived from a shared sanitised stem
+   (`archives.py::safe_stem`), so a Windows-style upload filename cannot create
+   a path in a Windows extractor. Tests: `test_docx_validation.py`,
+   `test_archives.py`, `test_mask_file.py`, `test_jobs_api.py`.
   `test_oversized_uncompressed_content_is_rejected_with_413`) and
   `test_mask_file.py` (`test_mask_file_rejects_garbage_bytes_with_415`).
 - **XML is parsed defensively.** `back/src/masking/ooxml/package.py` uses

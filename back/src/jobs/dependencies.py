@@ -33,7 +33,13 @@ def result_cache() -> ResultCache:
     return ResultCache(get_settings(), cache_artifacts())
 
 
-def should_use_job(*, text: str | None = None, data: bytes | None = None, paragraph_count: int = 0) -> bool:
+def should_use_job(
+    *,
+    text: str | None = None,
+    data: bytes | None = None,
+    size: int | None = None,
+    paragraph_count: int = 0,
+) -> bool:
     """
     Whether an input must go to the durable job path instead of a sync request.
 
@@ -44,6 +50,8 @@ def should_use_job(*, text: str | None = None, data: bytes | None = None, paragr
     settings: Settings = get_settings()
     if text is not None and len(text) > settings.sync_max_text_chars:
         return True
-    if data is not None and len(data) > settings.sync_max_docx_bytes:
+    if data is not None:
+        size = len(data)
+    if size is not None and size > settings.sync_max_docx_bytes:
         return True
     return paragraph_count > settings.sync_max_docx_paragraphs

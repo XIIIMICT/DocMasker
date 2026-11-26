@@ -3,7 +3,6 @@
 import base64
 import json
 import re
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import quote
 
@@ -14,13 +13,14 @@ from src.config import get_settings
 from src.jobs.cache import build_cache_key, canonical_json, fingerprint_for
 from src.jobs.dependencies import result_cache
 from src.jobs.repository import JobQueueFullError
-from src.jobs.routing import count_docx_paragraphs, enqueue, needs_job
+from src.jobs.routing import count_docx_paragraphs, count_docx_paragraphs_path, enqueue, enqueue_from_path, needs_job
 from src.masking.config import SCHEMA_VERSION, get_config
 from src.metrics import observe_upload
+from src.uploads import UploadTooLargeError, cleanup, stage_upload
 
-from .archives import mask_archive, restore_archive
+from .archives import mask_archive, restore_archive, safe_stem
 from .docx_service import CoverageReport, OoxmlPackageError, mask_docx_in_memory, unmask_docx_in_memory
-from .docx_validation import DocxValidationError, upload_limits, validate_docx_package
+from .docx_validation import DocxValidationError, upload_limits, validate_docx_package, validate_docx_package_path
 from .executor import ExecutorBusyError, run_blocking, run_cpu
 from .mapping import KeysValidationError, MaskKeys, placeholders_from_document, validate_keys_yaml
 from .ooxml.manifest import build_mask_manifest, build_unmask_manifest
@@ -50,6 +50,62 @@ async def _read_upload(file: UploadFile) -> bytes:
         raise
     observe_upload(outcome="ok")
     return source
+
+
+async def _admit_file(
+    file: UploadFile,
+    *,
+    kind: JobKind,
+    keys_bytes: bytes | None,
+    filename: str | None,
+) -> bytes | JSONResponse:
+    """
+    Stream, validate and route one DOCX upload (P1.1).
+
+    Hard byte/package limits are enforced from the staged path before a cache
+    lookup or job publication; oversized inputs are enqueued directly from the
+    staged file, never materialised as one `bytes` object.
+    """
+    settings = get_settings()
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Файл должен иметь расширение .docx.",
+        )
+    try:
+        staged = await stage_upload(file, limits=upload_limits())
+    except UploadTooLargeError as error:
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(error)) from error
+    try:
+        observe_upload(outcome="ok")
+        if staged.size == 0:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
+        try:
+            await run_blocking(validate_docx_package_path, staged.path, upload_limits())
+        except DocxValidationError as error:
+            raise HTTPException(status_code=error.http_status, detail=str(error)) from error
+        paragraphs = (
+            0
+            if staged.size > settings.sync_max_docx_bytes
+            else await run_blocking(count_docx_paragraphs_path, staged.path)
+        )
+        if needs_job(size=staged.size, paragraph_count=paragraphs):
+            try:
+                accepted = await run_blocking(
+                    enqueue_from_path,
+                    kind,
+                    input_path=staged.path,
+                    input_digest=staged.sha256,
+                    keys_bytes=keys_bytes,
+                    filename=filename or file.filename,
+                )
+            except JobQueueFullError as error:
+                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(error)) from error
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=accepted.model_dump())
+        # Bounded by sync_max_docx_bytes; materialise only after validation.
+        return staged.path.read_bytes()
+    finally:
+        cleanup(staged)
 
 
 @router.get("/labels", response_model=LabelsResponse)
@@ -252,7 +308,7 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONRespons
     limit = get_settings().max_text_chars
     if len(request.text) > limit:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Текст больше допустимого ({limit} символов).",
         )
     input_bytes = request.text.encode("utf-8")
@@ -290,33 +346,12 @@ async def mask_file_endpoint(
             detail="Файл должен иметь расширение .docx.",
         )
 
-    source = await _read_upload(file)
-    if not source:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
-    # §10: validate package structure and the hard byte limit BEFORE any
-    # paragraph-count heuristic; if size already exceeds the sync threshold,
-    # never decompress word/document.xml just to decide it should be a job.
-    if len(source) > get_settings().sync_max_docx_bytes:
-        return await _job_overflow_async(
-            "mask_file",
-            input_bytes=source,
-            keys_bytes=None,
-            filename=file.filename,
-        )
-    if needs_job(data=source, paragraph_count=await _count_paragraphs_async(source)):
-        return await _job_overflow_async(
-            "mask_file",
-            input_bytes=source,
-            keys_bytes=None,
-            filename=file.filename,
-        )
+    admitted = await _admit_file(file, kind="mask_file", keys_bytes=None, filename=file.filename)
+    if isinstance(admitted, JSONResponse):
+        return admitted
+    source = admitted
 
-    # Validate the package BEFORE a cache lookup (§4.5: a hit must not bypass
-    # input/security validation).
-    try:
-        await _validate_docx_async(source)
-    except DocxValidationError as error:
-        raise HTTPException(status_code=error.http_status, detail=str(error)) from error
+    # Validate the package BEFORE a cache lookup (a hit must not bypass validation).
     key = _cache_key("mask_file", input_bytes=source, keys_bytes=None, filename=file.filename)
     cached = await _cache_get_async(key)
     if cached is not None:
@@ -337,7 +372,7 @@ async def mask_file_endpoint(
         # Strict blocking error for genuinely unprocessable content (§6.5).
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
-    base = Path(file.filename).stem
+    base = safe_stem(file.filename)
     archive, headers = await run_blocking(
         _build_mask_archive,
         source=source,
@@ -357,9 +392,14 @@ async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse | JSONR
     if not request.text.strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Текст пуст.")
     settings = get_settings()
+    if len(request.text) > settings.max_text_chars:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Текст больше допустимого ({settings.max_text_chars} символов).",
+        )
     if len(request.keys) > settings.max_keys_chars:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Ключи больше допустимых ({settings.max_keys_chars} символов).",
         )
     try:
@@ -408,39 +448,20 @@ async def unmask_file_endpoint(
     settings = get_settings()
     if len(keys) > settings.max_keys_chars:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Ключи больше допустимых ({settings.max_keys_chars} символов).",
-        )
-
-    source = await _read_upload(file)
-    if not source:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Файл пуст.")
-    # §10: hard byte limit before any ZIP/XML paragraph-count heuristic.
-    if len(source) > get_settings().sync_max_docx_bytes:
-        return await _job_overflow_async(
-            "unmask_file",
-            input_bytes=source,
-            keys_bytes=keys.encode("utf-8"),
-            filename=file.filename,
-        )
-    if needs_job(data=source, paragraph_count=await _count_paragraphs_async(source)):
-        return await _job_overflow_async(
-            "unmask_file",
-            input_bytes=source,
-            keys_bytes=keys.encode("utf-8"),
-            filename=file.filename,
         )
 
     try:
         placeholders = await run_blocking(placeholders_from_document, await run_blocking(validate_keys_yaml, keys))
     except KeysValidationError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
-    try:
-        await _validate_docx_async(source)
-    except DocxValidationError as error:
-        raise HTTPException(status_code=error.http_status, detail=str(error)) from error
 
     keys_bytes = keys.encode("utf-8")
+    admitted = await _admit_file(file, kind="unmask_file", keys_bytes=keys_bytes, filename=file.filename)
+    if isinstance(admitted, JSONResponse):
+        return admitted
+    source = admitted
     key = _cache_key("unmask_file", input_bytes=source, keys_bytes=keys_bytes, filename=file.filename)
     cached = await _cache_get_async(key)
     if cached is not None:
@@ -460,7 +481,7 @@ async def unmask_file_endpoint(
     except OoxmlPackageError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
-    base = Path(file.filename).stem.removesuffix(" (замаскированный)")
+    base = safe_stem(file.filename).removesuffix(" (замаскированный)")
     archive, headers = await run_blocking(
         _build_restore_archive,
         source=source,

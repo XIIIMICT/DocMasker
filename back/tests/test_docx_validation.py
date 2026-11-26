@@ -1,6 +1,7 @@
 """Tests for DOCX package validation (structure, encryption, zip-bomb and size limits)."""
 
 import io
+import warnings
 import zipfile
 
 import pytest
@@ -79,6 +80,43 @@ def test_oversized_uncompressed_content_is_rejected_with_413() -> None:
     with pytest.raises(DocxValidationError, match="слишком большой объём") as error:
         validate_docx_package(buffer.getvalue(), _limits(max_uncompressed_bytes=1024 * 1024))
     assert error.value.http_status == 413
+
+
+def _package_with_entry(name: str) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", "<document/>")
+        archive.writestr(name, "payload")
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "../private.txt",
+        "word/../../private.txt",
+        "..\\..\\private.txt",
+        "C:\\private.txt",
+        "/etc/passwd",
+        "word/ok\x01.xml",
+    ],
+)
+def test_hostile_entry_names_are_rejected(hostile: str) -> None:
+    with pytest.raises(DocxValidationError, match="небезопасные имена"):
+        validate_docx_package(_package_with_entry(hostile), _limits())
+
+
+def test_duplicate_entry_names_are_rejected() -> None:
+    buffer = io.BytesIO()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr("word/document.xml", "<document/>")
+            archive.writestr("word/document.xml", "duplicate")
+    with pytest.raises(DocxValidationError, match="повторяющиеся имена"):
+        validate_docx_package(buffer.getvalue(), _limits())
 
 
 def test_encrypted_entries_are_rejected() -> None:

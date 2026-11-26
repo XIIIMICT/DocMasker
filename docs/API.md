@@ -62,10 +62,14 @@ never messages. The Next proxies forward `X-Request-ID` verbatim.
 | `422` | empty text, invalid keys YAML, unknown profile, wrong file extension | text + file endpoints |
 | `429` | bounded sync executor or job queue full | sync endpoints, `POST /api/jobs` |
 
-DOCX uploads are validated as OPC/ZIP packages (`docx_validation.py`): entry
-count, uncompressed size, compression ratio (zip-bomb), encryption. Limits come
-from `.env` (`UPLOAD_MAX_MB`, `MAX_TEXT_CHARS`, `MAX_KEYS_CHARS`). The frontend
-is **not** a trust boundary — the backend enforces everything.
+DOCX uploads are validated as OPC/ZIP packages (`docx_validation.py`):
+actual streamed byte count (never Content-Length), entry count, uncompressed
+size, compression ratio (zip-bomb), encryption, and hostile entry names
+(absolute/drive/traversal/backslash/NUL/control/duplicate). Limits come from
+`.env` (`UPLOAD_MAX_MB`, `MAX_TEXT_CHARS`, `MAX_KEYS_CHARS`) and apply to sync
+routes and `POST /api/jobs` alike, before cache lookup or job staging. Output
+ZIP entry names are flat and built from a shared sanitised filename stem. The
+frontend is **not** a trust boundary — the backend enforces everything.
 
 ## `GET /health`
 
@@ -119,8 +123,9 @@ jobs (202) instead of holding one HTTP request open.
 - Backend job submit streams the upload in 64 KiB chunks into a private temp
   file with a **real byte counter** (Content-Length is never trusted), validates
   the OPC package **from the staged path**, then streams it into the artifact
-  spool with `ArtifactStore.copy_from`. Cleanup is exception/abort-safe.
-- `/api/jobs/{id}/result` returns `FileResponse` (streams from disk); no
+   the OPC package **from the staged path**, then either enqueues from that
+   path (no full file in RAM) or materialises it only after the hard limits
+   passed. Cleanup is exception/abort-safe on both file routes.
   `Path.read_bytes()` of a large ZIP. Sync file endpoints still build the small
   ZIP in memory because the OPC transformer needs the whole package — that
   part-level DOM memory is documented, not claimed as streaming.
