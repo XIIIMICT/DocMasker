@@ -11,6 +11,9 @@ import { DocPreviewShell } from "@/shared/ui/doc-preview-shell";
 import { DocxViewer } from "@/shared/ui/docx-viewer";
 import { disabledProps } from "@/shared/ui/pane-types";
 
+const MASK_ERROR_ID = "mask-result-error";
+const DEMASK_ERROR_ID = "demask-result-error";
+
 /** The masking result pane: result / keys tabs, stats and two downloads. */
 export function MaskResultPane({
     error,
@@ -99,6 +102,7 @@ export function MaskResultPane({
                         onPress={onDownloadResult}
                         fullWidth
                         {...disabledProps(!canDownloadResult)}
+                        aria-describedby={error !== null ? MASK_ERROR_ID : undefined}
                     >
                         Скачать результат маскировки
                     </Button>
@@ -107,6 +111,7 @@ export function MaskResultPane({
                         onPress={onDownloadKeys}
                         fullWidth
                         {...disabledProps(!canDownloadKeys)}
+                        aria-describedby={error !== null ? MASK_ERROR_ID : undefined}
                     >
                         Скачать ключи демаскировки
                     </Button>
@@ -146,6 +151,7 @@ export function ResultBody({
     if (error !== null) {
         return (
             <TextArea
+                id={MASK_ERROR_ID}
                 aria-label="Ошибка"
                 aria-invalid
                 className="result-area--error"
@@ -237,6 +243,7 @@ export function UnmaskResultPane({
             </div>
             {error !== null ? (
                 <TextArea
+                    id={DEMASK_ERROR_ID}
                     aria-label="Ошибка"
                     aria-invalid
                     className="result-area--error"
@@ -270,6 +277,7 @@ export function UnmaskResultPane({
                     onPress={onDownload}
                     fullWidth
                     {...disabledProps(!canDownload)}
+                    aria-describedby={error !== null ? DEMASK_ERROR_ID : undefined}
                 >
                     Скачать файл
                 </Button>

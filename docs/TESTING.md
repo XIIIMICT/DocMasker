@@ -43,31 +43,44 @@ a real PostgreSQL/Valkey stand (`just db-stand` + `just seed`, then
 
 ### Frontend unit (`bun test` + happy-dom, `__tests__/` next to the code)
 
-`shared/__tests__/config.test.ts`, `shared/__tests__/mask-stats.test.ts`,
-`shared/api/__tests__/mask.test.ts`, `shared/api/__tests__/mask-archive.test.ts`,
-`shared/api/__tests__/jobs.test.ts`, `shared/api/__tests__/timeouts.test.ts`,
-`shared/ui/__tests__/docx-viewer.test.ts`,
-`shared/ui/__tests__/docx-viewer-lifecycle.test.tsx` (injectable
-`DocxViewer.renderDocument` seam — lazy default renderer is unchanged),
-`shared/ui/__tests__/theme-switcher.test.ts`,
-`shared/ui/__tests__/support-button.test.ts`,
-`shared/hooks/__tests__/use-synced-scroll.test.ts`, plus the gate's own
-`src/__tests__/check-coverage.test.ts`. The coverage gate is a thin CLI wrapper
-around the pure `front/scripts/check-coverage-parse.mjs`; malformed thresholds
-and LCOV reports fail deterministically without affecting the 65% floor.
-Setup: `front/bunfig.toml` → `front/src/test-setup.ts` (`front/AGENTS.md`).
+29 test files, grouped by the code they exercise. Setup: `front/bunfig.toml` →
+`front/src/test-setup.ts`; DOM tests use Testing Library `fireEvent` (no user-event
+or axe dependency). See `front/AGENTS.md` for stack/command details.
+
+| Area | Files | What they pin |
+|---|---|---|
+| Config / stats | `shared/__tests__/config.test.ts`, `shared/__tests__/mask-stats.test.ts` | runtime config, stats breakdown and counts |
+| API adapters | `shared/api/__tests__/mask.test.ts`, `mask-archive.test.ts`, `jobs.test.ts`, `timeouts.test.ts`, `placeholder-count.test.ts`, `lazy-zip.test.ts` | requests/responses, ZIP + manifest parsing, canonical timeouts, job polling, single-flight JSZip loader |
+| Hooks | `shared/hooks/__tests__/use-synced-scroll.test.ts` | ratio-based pane scrolling |
+| Pane boundaries | `shared/ui/__tests__/action-boundaries.test.tsx`, `pane-boundaries.test.ts` | Enter/Space on visually disabled actions is blocked by the workflow guard (not by CSS); stable `disabledProps` and one lazy-import guard — no export-name, import-order or retired-module string checks |
+| Accessibility | `shared/ui/__tests__/pane-accessibility.test.tsx`, `brand-accessibility.test.tsx` | accessible names for text areas, file actions, tabs and downloads; `aria-describedby` for invalid keys and result errors; tab/menu keyboard operation; focus return after Escape |
+| Dropdown | `shared/ui/__tests__/hover-dropdown.test.ts` | geometry check, capture-phase scroll listener and disposer |
+| Document viewer | `shared/ui/__tests__/docx-viewer.test.ts`, `docx-viewer-lifecycle.test.tsx`, `docx-viewer-scheduling.test.ts` | marker highlighting, stale generation/render guards, debounce; injectable `DocxViewer.renderDocument` seam leaves the lazy default unchanged |
+| Header | `shared/ui/__tests__/theme-switcher.test.ts`, `support-button.test.ts` | theme options, mailto parsing |
+| Masking workflow | `features/masking/__tests__/use-mode-drafts.test.ts`, `use-masker-workflow-downloads.test.ts`, `use-job-lifecycle.test.ts`, `use-file-input.test.ts`, `result-download.test.ts`, `mask-requests.test.ts`, `keys-parse.test.ts`, `demask-guard.test.ts` | per-mode drafts, downloads, job lifecycle/cancellation, file input, request guards, YAML key parsing |
+| App / tooling | `app/__tests__/globals-conventions.test.ts`, `src/__tests__/check-coverage.test.ts` | global CSS conventions; coverage gate is a thin CLI wrapper over `scripts/check-coverage-parse.mjs` — malformed thresholds/LCOV fail deterministically, 65% floor unchanged |
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
+Four spec files, 36 tests at the last `--list` run:
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
-`front/e2e/rerender-smoke.spec.ts`. CI explicitly asserts that all three files
-are discovered via `playwright test --project=smoke --list` before running them
-(`.github/workflows/ci.yaml`, `production` job). Config: `front/playwright.config.ts`
-(`E2E_BASE_URL`, default `http://127.0.0.1:5001`, `workers: 1`, Chromium);
+`front/e2e/rerender-smoke.spec.ts`, `front/e2e/hover-smoke.spec.ts`.
+`front/playwright.config.ts` discovers them with
+`testMatch: /(?:health|smoke|mask)\.spec\.ts/` (`mask` is a future slot),
+`workers: 1`, Chromium, `E2E_BASE_URL` default `http://127.0.0.1:5001`;
+`*-probe*` and `probe/` files are excluded. CI's `production` job first runs
+`bunx --no-install playwright test --project=smoke --list` and fails if any of
+the four filenames is missing, so a rename or a broken `testMatch` cannot
+silently drop a suite (`.github/workflows/ci.yaml`). Locally, the same listing
+needs no running stack:
+
+```sh
+cd front && bunx --no-install playwright test --project=smoke --list
+```
+
 `front/local.playwright.config.ts` is the local-only Chrome-on-PATH helper.
-Probe files (`*-probe*`, `probe/`) are excluded. Recorded run counts differ
-between `docs/WORKFLOW.md` and `docs/PRODUCTION_READINESS.md` — treat those as
-historical records and rely on the `--list` assertion for the current set.
+Recorded run counts in `docs/WORKFLOW.md` and `docs/PRODUCTION_READINESS.md`
+are historical records; rely on `--list` for the current inventory.
 
 ## 2. Required failure scenarios (Brief §14, condensed)
 
@@ -136,6 +149,7 @@ bun run --cwd front typecheck
 bun run --cwd front lint:check
 bun run --cwd front format:check
 bun run --cwd front test
+bun run --cwd front build        # production build; also resolves the lazy chunks
 bun run --cwd front gen:labels   # then: git diff --exit-code -- front/src/shared/api/labels.generated.ts
 
 # Frontend coverage gate (CI-equivalent, run from front/)
