@@ -5,7 +5,7 @@ import { useRef, type ChangeEvent, type DragEvent, type RefObject } from "react"
 import type { ModeState } from "@/features/masking/types";
 import { fileKind } from "@/features/masking/types";
 import type { JobAccepted } from "@/shared/api/jobs";
-import type { DragHandlers } from "@/shared/ui/panes";
+import type { DragHandlers } from "@/shared/ui/pane-types";
 
 type Update = (patch: Partial<ModeState>) => void;
 
