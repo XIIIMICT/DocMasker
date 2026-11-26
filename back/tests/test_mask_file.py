@@ -5,6 +5,7 @@ import json
 import zipfile
 from urllib.parse import unquote
 
+import pytest
 from docx import Document as DocxDocument
 from httpx2 import ASGITransport, AsyncClient
 from test_docx import _build_docx
@@ -349,3 +350,43 @@ async def test_mask_file_plain_docx_is_complete() -> None:
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
     assert manifest["complete"] is True
     assert manifest["coverage"]["rejected_parts"] == []
+
+
+async def test_sync_cache_hit_marks_manifest_for_this_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P2.13: a cached ZIP is immutable; the served copy reports the hit."""
+    from src.masking import router
+    from src.masking.archives import mask_archive
+
+    cached_archive = mask_archive(
+        _build_docx(),
+        "keys",
+        "доклад",
+        {"schema_version": 1, "cache": {"hit": False, "namespace_version": 1}},
+    )
+
+    class _FakeCache:
+        def get(self, _key: str) -> bytes:
+            return router._pack_file_result(cached_archive, {})
+
+        def put(self, _key: str, _data: bytes) -> None:
+            msg = "a cache hit must not publish again"
+            raise AssertionError(msg)
+
+    monkeypatch.setattr(router, "result_cache", _FakeCache)
+    async with _client() as client:
+        response = await client.post(
+            "/api/mask-file",
+            files={
+                "file": (
+                    "доклад.docx",
+                    _build_docx(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["cache"]["hit"] is True
+    with zipfile.ZipFile(io.BytesIO(cached_archive)) as archive:
+        assert json.loads(archive.read("manifest.json"))["cache"]["hit"] is False
