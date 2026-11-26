@@ -23,6 +23,26 @@ test("страница маскирования загружается с обо
     await expect(page.getByRole("button", { name: "Замаскировать" })).toBeVisible();
 });
 
+test("reduced-motion убирает переходы приложения, сохраняя конечное состояние", async ({
+    page,
+}) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    await expect(page.locator(".support-link")).toBeVisible();
+    const styles = await page.evaluate(() => {
+        const node = document.querySelector(".support-link");
+        if (!node) throw new Error("support-link is missing");
+        const style = getComputedStyle(node);
+        return { transition: style.transitionDuration, animation: style.animationName };
+    });
+    // Two transition properties (gap, background-color) → "0s, 0s".
+    expect(styles.transition.split(",").every((value) => value.trim() === "0s")).toBe(true);
+    expect(styles.animation).toBe("none");
+    // The control stays usable and reaches its hover end state instantly.
+    await page.locator(".support-link").hover();
+    await expect(page.locator(".support-link__label")).toBeVisible();
+});
+
 test("заголовок вкладки следует за режимом", async ({ page }) => {
     await page.goto("/");
     await expect(page).toHaveTitle("ДокМаскер / Маскировка");
