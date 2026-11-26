@@ -48,8 +48,11 @@ a real PostgreSQL/Valkey stand (`just db-stand` + `just seed`, then
 `shared/api/__tests__/jobs.test.ts`, `shared/api/__tests__/timeouts.test.ts`,
 `shared/ui/__tests__/docx-viewer.test.ts`, `shared/ui/__tests__/theme-switcher.test.ts`,
 `shared/ui/__tests__/support-button.test.ts`,
-`shared/hooks/__tests__/use-synced-scroll.test.ts`. Setup: `front/bunfig.toml`
-→ `front/src/test-setup.ts` (`front/AGENTS.md`).
+`shared/hooks/__tests__/use-synced-scroll.test.ts`, plus the gate's own
+`src/__tests__/check-coverage.test.ts`. The coverage gate is a thin CLI wrapper
+around the pure `front/scripts/check-coverage-parse.mjs`; malformed thresholds
+and LCOV reports fail deterministically without affecting the 65% floor.
+Setup: `front/bunfig.toml` → `front/src/test-setup.ts` (`front/AGENTS.md`).
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
