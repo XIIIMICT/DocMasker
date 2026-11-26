@@ -44,10 +44,10 @@ export function Brand({
             <span className="brand__name">ДокМаскер</span>
             <HoverDropdown
                 className="brand-popover"
-                trigger={({ ref, onMouseEnter, onPress }) => (
+                trigger={({ ref, onHoverStart, onPress }) => (
                     <Button
                         ref={ref}
-                        onMouseEnter={onMouseEnter}
+                        onHoverStart={onHoverStart}
                         onPress={onPress}
                         className="brand__edition brand__edition--button"
                         variant="ghost"
