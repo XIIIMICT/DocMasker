@@ -1,7 +1,9 @@
 "use client";
 
 import { Dropdown } from "@heroui/react";
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+
+const CLOSE_GRACE_MS = 250;
 
 function pointInRect(point: { x: number; y: number }, element: HTMLElement | null): boolean {
     if (!element) return false;
@@ -17,7 +19,8 @@ function pointInRect(point: { x: number; y: number }, element: HTMLElement | nul
 type HoverDropdownTriggerProps = {
     /** Forward to the trigger element — used to keep the pointer-position check honest. */
     ref: (element: HTMLElement | null) => void;
-    onMouseEnter: () => void;
+    /** React Aria hover event: opens for mouse/pen, never for touch. */
+    onHoverStart: () => void;
     /** Open on press (click / Enter / Space) — keyboard and touch access. */
     onPress: () => void;
     /** The dropdown is open — the trigger may keep its "expanded" look (hover is lost while open). */
@@ -25,21 +28,20 @@ type HoverDropdownTriggerProps = {
 };
 
 /**
- * A Dropdown that opens on hover (pointer over the trigger) and closes when the
- * pointer leaves both the trigger and the popover for a sustained period.
+ * The brand's mode dropdown: opens on React Aria hover/press and closes once
+ * the pointer has been outside both the trigger and the popover for ~250 ms.
  *
- * Closing is driven by a window-level pointer-position check, not by
- * mouseleave: react-aria hides the rest of the page (`inert`) while the modal
- * popover is open, and the browser then fires a phantom `pointerout` on the
- * trigger (it is no longer hit-testable). A mouseleave-based close would loop
- * forever: open → inert → phantom leave → close → not inert → re-enter → open.
- * `getBoundingClientRect` still works on inert elements, so the trigger rect is
- * always readable.
+ * Closing is decided by geometry, NOT by mouseleave: react-aria sets `inert`
+ * on the rest of the page while the modal popover is open, so the trigger stops
+ * being hit-testable and the browser fires a phantom pointerout. A mouseleave
+ * close would loop (open → inert → phantom leave → close → un-inert → re-open).
+ * `getBoundingClientRect` still works on inert elements.
  *
- * The trigger also receives `onPress`: a press (click / Enter / Space) opens
- * the menu for keyboard and touch users. The pointer-out close only arms after
- * a real pointermove, so a keyboard-opened menu is never killed by a stale
- * pointer position. Dismissal: Escape, outside press, pointer out.
+ * The old 60 ms polling loop is gone. `pointermove` only records coordinates;
+ * one requestAnimationFrame coalesces geometry checks, and one cancellable
+ * timeout owns the outside grace period. Pointer-based dismissal is armed only
+ * by a real hover open, so keyboard/touch openings are never killed by a stale
+ * pointer position.
  */
 export function HoverDropdown({
     trigger,
@@ -57,61 +59,114 @@ export function HoverDropdown({
     const onOpenChangeRef = useRef(onOpenChange);
     onOpenChangeRef.current = onOpenChange;
 
-    const setOpen = (next: boolean) => {
-        setOpenState(next);
-        onOpenChangeRef.current?.(next);
-    };
+    const openRef = useRef(false);
+    /** Invalidates timers/frames created for a previous open interaction. */
+    const generationRef = useRef(0);
     const triggerRef = useRef<HTMLElement | null>(null);
     const popoverRef = useRef<HTMLDivElement | null>(null);
     const lastPointRef = useRef<{ x: number; y: number } | null>(null);
     const suppressHoverRef = useRef(false);
-    /** Whether a real pointermove happened since the menu opened: the
-        pointer-out close only applies to pointer-opened menus. */
+    /** Only a genuine hover open arms pointer-based dismissal. */
     const openedByPointerRef = useRef(false);
+    const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const rafRef = useRef<number | null>(null);
 
-    // Track the pointer at all times; once it leaves the trigger, hover is
-    // allowed again (used after an explicit Escape close).
+    const clearCloseTimeout = useCallback(() => {
+        if (closeTimeoutRef.current !== null) {
+            clearTimeout(closeTimeoutRef.current);
+            closeTimeoutRef.current = null;
+        }
+    }, []);
+
+    const cancelFrame = useCallback(() => {
+        if (rafRef.current !== null) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+        }
+    }, []);
+
+    const setOpen = useCallback(
+        (next: boolean) => {
+            // onOpenChange must not fire repeatedly for idle pointer movement.
+            if (openRef.current === next) return;
+            openRef.current = next;
+            generationRef.current += 1;
+            clearCloseTimeout();
+            cancelFrame();
+            if (!next) openedByPointerRef.current = false;
+            setOpenState(next);
+            onOpenChangeRef.current?.(next);
+        },
+        [cancelFrame, clearCloseTimeout],
+    );
+
+    const pointIsInside = useCallback((): boolean => {
+        const point = lastPointRef.current;
+        if (!point) return false;
+        return pointInRect(point, triggerRef.current) || pointInRect(point, popoverRef.current);
+    }, []);
+
+    const schedulePointerCheck = useCallback(() => {
+        if (rafRef.current !== null) return;
+        const generation = generationRef.current;
+        rafRef.current = requestAnimationFrame(() => {
+            rafRef.current = null;
+            if (
+                !openRef.current ||
+                generationRef.current !== generation ||
+                !openedByPointerRef.current
+            ) {
+                return;
+            }
+            if (pointIsInside()) {
+                clearCloseTimeout();
+                return;
+            }
+            // One timeout per interaction: extra outside moves must not extend
+            // the grace period.
+            if (closeTimeoutRef.current !== null) return;
+            closeTimeoutRef.current = setTimeout(() => {
+                closeTimeoutRef.current = null;
+                if (
+                    !openRef.current ||
+                    generationRef.current !== generation ||
+                    !openedByPointerRef.current
+                ) {
+                    return;
+                }
+                // Re-read geometry on expiry: the pointer may have returned
+                // without a new frame being scheduled here.
+                if (pointIsInside()) return;
+                setOpen(false);
+            }, CLOSE_GRACE_MS);
+        });
+    }, [clearCloseTimeout, pointIsInside, setOpen]);
+
+    // The long-lived pointer listener needs the latest scheduler instance.
+    const schedulePointerCheckRef = useRef(schedulePointerCheck);
+    schedulePointerCheckRef.current = schedulePointerCheck;
+
+    // Track the pointer for Escape suppression; touch movement is not hover.
     useEffect(() => {
         const onPointerMove = (event: PointerEvent) => {
+            if (event.pointerType === "touch") return;
             lastPointRef.current = { x: event.clientX, y: event.clientY };
-            openedByPointerRef.current = true;
             if (
                 suppressHoverRef.current &&
                 !pointInRect(lastPointRef.current, triggerRef.current)
             ) {
                 suppressHoverRef.current = false;
             }
+            if (openRef.current && openedByPointerRef.current) {
+                schedulePointerCheckRef.current();
+            }
         };
-        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointermove", onPointerMove, { passive: true });
         return () => window.removeEventListener("pointermove", onPointerMove);
     }, []);
 
-    // While open: close once the pointer has been outside both the trigger and
-    // the popover for a sustained period.
-    useEffect(() => {
-        if (!open) return;
-        let outsideSince = 0;
-        const timer = setInterval(() => {
-            if (!openedByPointerRef.current) return;
-            const point = lastPointRef.current;
-            if (!point) return;
-            if (pointInRect(point, triggerRef.current) || pointInRect(point, popoverRef.current)) {
-                outsideSince = 0;
-                return;
-            }
-            const now = performance.now();
-            if (outsideSince === 0) {
-                outsideSince = now;
-            } else if (now - outsideSince > 250) {
-                setOpen(false);
-            }
-        }, 60);
-        return () => clearInterval(timer);
-    }, [open]);
-
-    // Escape closes the menu. Capture phase: runs before anything that could
-    // stop the event. The hover reopen is suppressed until the pointer leaves
-    // the trigger.
+    // Escape closes the menu; hover stays suppressed until the pointer leaves
+    // the trigger. DocMasker deliberately does not stop/propagation here.
     useEffect(() => {
         if (!open) return;
         const onKeyDown = (event: KeyboardEvent) => {
@@ -122,23 +177,33 @@ export function HoverDropdown({
         };
         window.addEventListener("keydown", onKeyDown, true);
         return () => window.removeEventListener("keydown", onKeyDown, true);
-    }, [open]);
+    }, [open, setOpen]);
+
+    // No timer/frame may outlive the component.
+    useEffect(
+        () => () => {
+            clearCloseTimeout();
+            cancelFrame();
+        },
+        [cancelFrame, clearCloseTimeout],
+    );
 
     const triggerElement = trigger({
         ref: (element) => {
             triggerRef.current = element;
         },
         isOpen: open,
-        onMouseEnter: () => {
+        onHoverStart: () => {
             if (suppressHoverRef.current) return;
             openedByPointerRef.current = true;
+            clearCloseTimeout();
             setOpen(true);
         },
         onPress: () => {
-            // Open only, never toggle: on touch the synthetic mouseenter has
-            // already opened the menu before the press lands, and a toggle
-            // would close it instantly.
+            // Open only, never toggle: touch may have opened it via a synthetic
+            // hover before the press lands.
             openedByPointerRef.current = false;
+            clearCloseTimeout();
             setOpen(true);
         },
     });
