@@ -16,6 +16,7 @@ no network). The generators live in `benchmarks/synthetic.py`.
 | `api_health_gap` | `/health` latency while a heavy `/api/mask` runs on the same server (3.2) | see below |
 | `unmask_header` | `X-Unused-Keys` percent-encoded header size for N unused values (3.10) | see below |
 | `malformed_upload` | HTTP status for garbage-bytes / non-DOCX ZIP uploads (3.7) | see below |
+| `bounded_memory` | path-based OPC transform: wall time, tracked peak, temp disk for small/medium/large DOCX, large media, many XML parts and high concurrency (P2.11) | see below |
 
 From `back/` (host toolchain: `uv run --directory back …`):
 
@@ -25,6 +26,9 @@ uv run --directory back python -m benchmarks.text_mask
 
 # DOCX benchmarks + the 3.5/3.15 reproducers (no server needed)
 uv run --directory back python -m benchmarks.docx_mask
+
+# P2.11 bounded-memory transform matrix (prints JSON)
+uv run --directory back python -m benchmarks.bounded_memory
 
 # server probes: start the backend first, then run the client
 uv run --directory back granian --interface asgi src.main:app --host 127.0.0.1 --port 18009 &
@@ -37,6 +41,26 @@ Alternatively run the container probes against the production image:
 docker build --target prod -t dm-back:baseline ./back
 docker run --rm -v "$(pwd)/benchmarks:/benchmarks:ro" -e PYTHONPATH=/app dm-back:baseline python /benchmarks/text_mask.py
 ```
+
+## Recorded P2.11 bounded-memory run (2026-11-26, host Windows)
+
+`python -m benchmarks.bounded_memory` generates synthetic DOCX packages and
+runs `transform_package_to_file`. Raw output: `benchmarks/bounded-memory-results.json`.
+`peak_rss_bytes` is POSIX-only and therefore `null` on this host; use
+`peak_tracked_bytes` (tracemalloc) here and record RSS when running on Linux.
+
+| Case | Input / uncompressed | Wall | Peak tracked | Temp output |
+|---|---|---|---|---|
+| small | 35 KB / 827 KB | 0.09 s | 3.4 MB | 1 file |
+| medium | 37 KB / 871 KB | 1.42 s | 5.1 MB | 1 file |
+| large-near-max (22 MB media) | 23.1 MB / 23.9 MB | 0.58 s | 4.5 MB | 1 file |
+| large-media (8 MB) | 8.4 MB / 9.2 MB | 0.11 s | 3.6 MB | 1 file |
+| large-xml (6,000 paragraphs) | 53 KB / 1.37 MB | 17.9 s | 12.8 MB | 1 file |
+| many-xml-parts (200) | 71 KB / 843 KB | 0.36 s | 3.8 MB | 1 file |
+| high-concurrency (4 workers) | 4 × 36 KB | 2.70 s | 10.4 MB | 4 files |
+
+Peak tracked memory does **not** scale with the 23.9 MB decompressed package
+(4.5 MB), showing unchanged media is copied by chunks rather than retained.
 
 ## Recorded baseline (host: Windows, Docker Desktop; container: python:3.15-alpine)
 

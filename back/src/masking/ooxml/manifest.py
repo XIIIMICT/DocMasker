@@ -11,6 +11,13 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _input_metadata(source_bytes: bytes, digest: tuple[str, int] | None) -> dict[str, Any]:
+    """Use the already streamed digest/size when the worker provides one."""
+    if digest is not None:
+        return {"sha256": digest[0], "size_bytes": digest[1]}
+    return {"sha256": _sha256(source_bytes), "size_bytes": len(source_bytes)}
+
+
 def build_mask_manifest(
     *,
     source_bytes: bytes,
@@ -22,6 +29,7 @@ def build_mask_manifest(
     namespace_version: int,
     masking_ruleset_version: int,
     exception_config_digest: str,
+    input_digest: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
     """Canonical `manifest.json` for `mask_file` (same from sync and worker)."""
     occurrences: dict[str, int] = {}
@@ -37,7 +45,7 @@ def build_mask_manifest(
         "complete": not coverage.get("unprocessed_text_parts") and not coverage.get("rejected_parts"),
         "masking_ruleset_version": masking_ruleset_version,
         "exception_config_digest": exception_config_digest,
-        "input": {"sha256": _sha256(source_bytes), "size_bytes": len(source_bytes)},
+        "input": _input_metadata(source_bytes, input_digest),
         "output": {"document_name": document_name, "keys_name": keys_name},
         "statistics": {
             "total_occurrences": len(entities),
@@ -59,6 +67,7 @@ def build_unmask_manifest(
     namespace_version: int,
     masking_ruleset_version: int,
     exception_config_digest: str,
+    input_digest: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
     """Canonical `manifest.json` for `unmask_file` (same from sync and worker)."""
     return {
@@ -68,7 +77,7 @@ def build_unmask_manifest(
         "complete": not coverage.get("unprocessed_text_parts") and not coverage.get("rejected_parts"),
         "masking_ruleset_version": masking_ruleset_version,
         "exception_config_digest": exception_config_digest,
-        "input": {"sha256": _sha256(source_bytes), "size_bytes": len(source_bytes)},
+        "input": _input_metadata(source_bytes, input_digest),
         "output": {"document_name": document_name},
         "statistics": {"unused_keys": unused_keys},
         "coverage": coverage,

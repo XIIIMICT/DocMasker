@@ -1,0 +1,79 @@
+[
+  {
+    "case": "small",
+    "input_bytes": 35371,
+    "uncompressed_bytes": 827030,
+    "output_bytes": 35356,
+    "temp_files": 1,
+    "wall_seconds": 0.088,
+    "peak_tracked_bytes": 3408469,
+    "peak_rss_bytes": null,
+    "workers": 1
+  },
+  {
+    "case": "medium",
+    "input_bytes": 36857,
+    "uncompressed_bytes": 870550,
+    "output_bytes": 36786,
+    "temp_files": 1,
+    "wall_seconds": 1.418,
+    "peak_tracked_bytes": 5053416,
+    "peak_rss_bytes": null,
+    "workers": 1
+  },
+  {
+    "case": "large-near-max",
+    "input_bytes": 23104765,
+    "uncompressed_bytes": 23912530,
+    "output_bytes": 23104730,
+    "temp_files": 1,
+    "wall_seconds": 0.58,
+    "peak_tracked_bytes": 4457715,
+    "peak_rss_bytes": null,
+    "workers": 1
+  },
+  {
+    "case": "large-media",
+    "input_bytes": 8424139,
+    "uncompressed_bytes": 9216526,
+    "output_bytes": 8424123,
+    "temp_files": 1,
+    "wall_seconds": 0.109,
+    "peak_tracked_bytes": 3639508,
+    "peak_rss_bytes": null,
+    "workers": 1
+  },
+  {
+    "case": "large-xml",
+    "input_bytes": 52782,
+    "uncompressed_bytes": 1365050,
+    "output_bytes": 52015,
+    "temp_files": 1,
+    "wall_seconds": 17.887,
+    "peak_tracked_bytes": 12790782,
+    "peak_rss_bytes": null,
+    "workers": 1
+  },
+  {
+    "case": "many-xml-parts",
+    "input_bytes": 71298,
+    "uncompressed_bytes": 842750,
+    "output_bytes": 71282,
+    "temp_files": 1,
+    "wall_seconds": 0.363,
+    "peak_tracked_bytes": 3767617,
+    "peak_rss_bytes": null,
+    "workers": 1
+  },
+  {
+    "case": "high-concurrency",
+    "input_bytes": 35967,
+    "uncompressed_bytes": 843850,
+    "output_bytes": 143728,
+    "temp_files": 4,
+    "wall_seconds": 2.701,
+    "peak_tracked_bytes": 10413604,
+    "peak_rss_bytes": null,
+    "workers": 4
+  }
+]

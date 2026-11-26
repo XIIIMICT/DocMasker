@@ -14,6 +14,7 @@ import hmac
 import json
 import logging
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -180,6 +181,61 @@ class CacheArtifactStore:
             content_type="application/zip",
             manifest_version=CACHE_ENTRY_VERSION,
         )
+
+    def publish_from_path(self, source: Path) -> CacheEntry:
+        """Publish a large result by streaming; its id is the content hash."""
+        digest = hashlib.sha256()
+        size = 0
+        with source.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+                size += len(chunk)
+        artifact_id = digest.hexdigest()
+        target = self._path(artifact_id)
+        with _ARTIFACT_LOCK:
+            if not target.is_file():
+                fd, tmp = tempfile.mkstemp(prefix=".cache-", dir=str(self._root))
+                try:
+                    with source.open("rb") as reader, os.fdopen(fd, "wb") as writer:
+                        shutil.copyfileobj(reader, writer, length=1024 * 1024)
+                        writer.flush()
+                        os.fsync(writer.fileno())
+                    Path(tmp).replace(target)
+                finally:
+                    leftover = Path(tmp)
+                    with contextlib.suppress(OSError):
+                        if leftover.exists():
+                            leftover.unlink()
+            else:
+                os.utime(target, ns=(time.time_ns(), time.time_ns()))
+        return CacheEntry(artifact_id, artifact_id, size, "application/zip", CACHE_ENTRY_VERSION)
+
+    def copy_to(self, entry: CacheEntry, target: Path) -> bool:
+        """Hash-verify a cached artifact while copying it to a local path."""
+        try:
+            source_path = self._path(entry.artifact_id)
+        except ValueError:
+            return False
+        digest = hashlib.sha256()
+        size = 0
+        fd, tmp = tempfile.mkstemp(prefix=".cache-copy-", dir=str(target.parent))
+        try:
+            with source_path.open("rb") as reader, os.fdopen(fd, "wb") as writer:
+                for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    size += len(chunk)
+                    writer.write(chunk)
+                writer.flush()
+                os.fsync(writer.fileno())
+            verified = size == entry.size and digest.hexdigest() == entry.content_hash
+        except OSError:
+            verified = False
+        if verified:
+            Path(tmp).replace(target)
+        else:
+            with contextlib.suppress(OSError):
+                Path(tmp).unlink()
+        return verified
 
     def touch(self, artifact_id: str) -> bool:
         """Refresh retention when an existing artifact is reused (a cache hit)."""
@@ -387,6 +443,33 @@ class ResultCache:
         observe_cache_operation(operation="hit", outcome="ok")
         return data
 
+    def get_to_path(self, key: str, target: Path) -> bool:
+        """Stream a verified cache hit into `target`; never returns payload bytes."""
+        if self._client is None:
+            self._misses += 1
+            observe_cache_operation(operation="miss", outcome="ok")
+            return False
+        try:
+            raw = self._client.get(key)
+        except Exception:  # noqa: BLE001
+            self._failures += 1
+            self._misses += 1
+            observe_cache_operation(operation="failure", outcome="error")
+            observe_cache_operation(operation="miss", outcome="ok")
+            return False
+        if raw is None:
+            self._misses += 1
+            observe_cache_operation(operation="miss", outcome="ok")
+            return False
+        entry = self._parse_entry(str(raw))
+        if entry is None or not self._store.copy_to(entry, target):
+            self._evict(key)
+            return False
+        self._store.touch(entry.artifact_id)
+        self._hits += 1
+        observe_cache_operation(operation="hit", outcome="ok")
+        return True
+
     @staticmethod
     def _parse_entry(raw: str) -> CacheEntry | None:
         try:
@@ -428,6 +511,40 @@ class ResultCache:
             self._failures += 1
             observe_cache_operation(operation="failure", outcome="error")
             LOGGER.warning("cache artifact vanished during publication")
+            return None
+        self._writes += 1
+        observe_cache_operation(operation="write", outcome="ok")
+        return entry
+
+    def put_from_path(self, key: str, source: Path) -> CacheEntry | None:
+        """Stream-publish a result artifact; Valkey keeps only its reference."""
+        if self._client is None:
+            return None
+        vanished = False
+        try:
+            entry = self._store.publish_from_path(source)
+            payload = canonical_json(
+                {
+                    "artifact_id": entry.artifact_id,
+                    "content_hash": entry.content_hash,
+                    "size": entry.size,
+                    "content_type": entry.content_type,
+                    "manifest_version": entry.manifest_version,
+                    "entry_version": entry.entry_version,
+                }
+            )
+            self._client.set(key, payload, ex=int(self._settings.cache_ttl_seconds))
+            if not self._store.is_present(entry.artifact_id):
+                self._client.delete(key)
+                vanished = True
+        except Exception:  # noqa: BLE001
+            self._failures += 1
+            observe_cache_operation(operation="failure", outcome="error")
+            LOGGER.warning("cache write failed; result is still valid uncached")
+            return None
+        if vanished:
+            self._failures += 1
+            observe_cache_operation(operation="failure", outcome="error")
             return None
         self._writes += 1
         observe_cache_operation(operation="write", outcome="ok")

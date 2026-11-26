@@ -355,10 +355,11 @@ def test_job_cache_hit_reports_current_request_without_mutating_artifact(
     )
 
     class _FakeCache:
-        def get(self, _key: str) -> bytes:
-            return cached
+        def get_to_path(self, _key: str, target: Path) -> bool:
+            target.write_bytes(cached)
+            return True
 
-        def put(self, _key: str, _data: bytes) -> None:
+        def put_from_path(self, _key: str, _source: Path) -> None:
             msg = "a cache hit must not publish again"
             raise AssertionError(msg)
 

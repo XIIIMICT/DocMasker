@@ -165,6 +165,22 @@ def test_hit_miss_write_and_eviction(tmp_path: Path, settings: Settings) -> None
     assert cache.metrics["evictions"] == 1
 
 
+def test_path_based_put_and_get_stream_large_results(tmp_path: Path, settings: Settings) -> None:
+    cache = ResultCache(settings, CacheArtifactStore(tmp_path))
+    cache._client = _FakeValkey()
+    source = tmp_path / "result.zip"
+    payload = b"large-result" * 4096
+    source.write_bytes(payload)
+    target = tmp_path / "downloaded.zip"
+
+    assert cache.put_from_path("key", source) is not None
+    assert cache.get_to_path("key", target) is True
+    assert target.read_bytes() == payload
+    source.unlink()
+    assert cache.get_to_path("key", target) is True  # cached artifact is independent
+    assert target.read_bytes() == payload
+
+
 def test_disabled_cache_never_writes(tmp_path: Path) -> None:
     settings = Settings.model_validate(
         {
