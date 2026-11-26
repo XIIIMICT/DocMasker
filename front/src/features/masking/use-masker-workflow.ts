@@ -1,23 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { canDemask } from "@/features/masking/demask-guard";
 import {
-    emptyModeState,
-    fileKind,
-    MODE_STORAGE_KEY,
-    type ModeState,
-} from "@/features/masking/types";
-import { ACTIVE_JOB_KEY, cancelJob, type JobAccepted, waitForJob } from "@/shared/api/jobs";
-import { type MaskResponse, type UnmaskResponse, validateKeysYaml } from "@/shared/api/mask";
-import { unpackMaskArchive, unpackRestoreArchive } from "@/shared/api/mask-archive";
+    operationError,
+    postMaskFile,
+    postMaskText,
+    postUnmaskFile,
+    postUnmaskText,
+    readErrorDetail,
+    resolveMaskBundle,
+    resolveMaskResponse,
+    resolveRestoreBundle,
+    resolveUnmaskResponse,
+} from "@/features/masking/mask-requests";
 import {
-    jobBundle,
-    jobRestoreBundle,
-    jobToMaskResponse,
-    jobToUnmaskResponse,
-} from "@/shared/api/mask-helpers";
+    downloadKeys as saveKeys,
+    downloadMaskedFile as saveMaskedFile,
+    downloadMaskedText as saveMaskedText,
+    downloadRestored as saveRestored,
+} from "@/features/masking/result-download";
+import { fileKind } from "@/features/masking/types";
+import { useFileInput } from "@/features/masking/use-file-input";
+import { useJobLifecycle } from "@/features/masking/use-job-lifecycle";
+import { useModeDrafts } from "@/features/masking/use-mode-drafts";
+import { validateKeysYaml } from "@/shared/api/mask";
 import { countPlaceholdersInDocx } from "@/shared/api/placeholder-count";
 import { useSyncedScroll } from "@/shared/hooks/use-synced-scroll";
 import {
@@ -27,95 +35,18 @@ import {
     statsFromParsedKeys,
 } from "@/shared/mask-stats";
 import { parseKeys } from "@/shared/masking/keys-parse";
-import type { AppMode } from "@/shared/ui/brand";
-import type { DragHandlers } from "@/shared/ui/panes";
 
+/**
+ * Composition root for the masking page. Draft ownership lives in
+ * `useModeDrafts`, the active job in `useJobLifecycle`, file/DOM input in
+ * `useFileInput`, requests in `mask-requests.ts` and downloads in
+ * `result-download.ts`. This hook keeps only the derived view-model, scroll
+ * wiring and the two operation boundaries; the shape returned here is the
+ * contract consumed by `app/masker-page.tsx`.
+ */
 export function useMaskerWorkflow() {
-    const [mode, setMode] = useState<AppMode>("mask");
-    const inMaskMode = mode === "mask";
-
-    // Restore the last mode after hydration (localStorage is client-only; an
-    // SSR read would disagree with the server and break hydration). The title
-    // is derived from the *effective* mode in the same pass, so a restored
-    // demasking session can never be paired with the mask-mode title.
-    useEffect(() => {
-        let effective: AppMode = mode;
-        try {
-            const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
-            if (stored === "unmask") effective = "unmask";
-        } catch {
-            /* private mode / storage blocked: keep the default */
-        }
-        if (effective !== mode) setMode(effective);
-        document.title = `ДокМаскер / ${effective === "mask" ? "Маскировка" : "Демаскировка"}`;
-    }, [mode]);
-
-    // --- Per-mode state -------------------------------------------------------
-    // Every editable/renderable field lives under the mode that owns it, so
-    // switching flows shows the other draft without discarding this one. The
-    // active slice is projected onto flat names for the render below; the
-    // per-mode slices keep masking and demasking data genuinely separate.
-    const [stateByMode, setStateByMode] = useState<Record<AppMode, ModeState>>(() => ({
-        mask: emptyModeState(),
-        unmask: emptyModeState(),
-    }));
-    const state = stateByMode[mode];
-    const update = (patch: Partial<ModeState>) =>
-        setStateByMode((current) => ({ ...current, [mode]: { ...current[mode], ...patch } }));
-
-    /** Remember the active job so Cancel and reload-resume can find it. */
-    async function trackAccepted(response: Response): Promise<JobAccepted> {
-        const accepted = (await response.json()) as JobAccepted;
-        update({ activeJob: accepted });
-        try {
-            window.sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ mode, accepted }));
-        } catch {
-            /* private mode: in-memory state still supports Cancel this session */
-        }
-        return accepted;
-    }
-
-    /** Drop the active job after a terminal state or explicit dismissal. */
-    function endJob() {
-        update({ activeJob: null });
-        try {
-            window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
-        } catch {
-            /* ignore */
-        }
-    }
-
-    /** Release polling state after any run (success, failure or cancellation). */
-    function finish() {
-        pollingController.current = null;
-        endJob();
-        update({ busy: false });
-    }
-
-    /** Cancel the server-side job (AbortController only stops local polling). */
-    async function onCancelJob() {
-        if (!activeJob) return;
-        const outcome = await cancelJob(activeJob);
-        if (outcome.kind === "accepted") {
-            pollingController.current?.abort();
-            endJob();
-            update({ busy: false, error: "Задание отменено." });
-            return;
-        }
-        if (outcome.kind === "already_terminal") {
-            // The job won the race and finished before the DELETE arrived.
-            pollingController.current?.abort();
-            endJob();
-            update({ busy: false, error: "Задание уже завершено. Проверьте результат." });
-            return;
-        }
-        // Server/network failure: keep the active job and polling so the user
-        // can retry; never claim the worker was stopped.
-        update({ error: "Не удалось подтвердить отмену задания. Повторите попытку." });
-    }
-
-    const pollingController = useRef<AbortController | null>(null);
-
+    const { mode, inMaskMode, state, setStateByMode, update, resetResult, onModeChange } =
+        useModeDrafts();
     const {
         input,
         selectedFile,
@@ -136,6 +67,34 @@ export function useMaskerWorkflow() {
         activeJob,
     } = state;
     const dragging = state.dragging;
+
+    const jobs = useJobLifecycle({ mode, activeJob, update, setStateByMode });
+    const { finish, onCancelJob } = jobs;
+
+    const hasText = input.trim().length > 0;
+    const hasFile = selectedFile !== null;
+    // Exactly one input mode is active; a selected DOCX takes precedence.
+    const inFileMode = hasFile;
+
+    const {
+        fileInputRef,
+        keysInputRef,
+        drag,
+        onFileSelected,
+        onKeysSelected,
+        onKeysDrop,
+        onMaskFileActionPress,
+        onDataFileActionPress,
+        onKeysFileActionPress,
+    } = useFileInput({
+        busy,
+        dragging,
+        inFileMode,
+        activeJob,
+        onCancelJob: () => void onCancelJob(),
+        update,
+        resetResult,
+    });
 
     // Demasking a DOCX: the masked placeholders live inside the file, so
     // count them asynchronously for the tooltip's "с повторами" part. Text
@@ -165,113 +124,15 @@ export function useMaskerWorkflow() {
         };
     }, [inMaskMode, selectedFile]);
 
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const keysInputRef = useRef<HTMLInputElement>(null);
-    // Drag events fire for every child element; count enter/leave to know when
-    // the pointer really left the drop zone.
-    const dragDepth = useRef(0);
     // Paired scroll panes: original on the left, result on the right. Both text
-    // areas and both DOCX previews scroll in lock-step.
+    // areas and both DOCX previews scroll in lock-step. DOM refs stay here at
+    // the UI/workflow boundary.
     const inputTextRef = useRef<HTMLTextAreaElement>(null);
     const resultTextRef = useRef<HTMLTextAreaElement>(null);
     const sourceDocRef = useRef<HTMLDivElement>(null);
     const maskedDocRef = useRef<HTMLDivElement>(null);
     const restoredDocRef = useRef<HTMLDivElement>(null);
 
-    // Resume an active job after a reload in the same tab (§3.11). Only the
-    // opaque job id lives in sessionStorage — never input documents, keys or
-    // PII. A 404/expired/failed/cancelled job is handled by waitForJob.
-    useEffect(() => {
-        let stored: { mode: AppMode; accepted: JobAccepted } | null = null;
-        try {
-            const raw = window.sessionStorage.getItem(ACTIVE_JOB_KEY);
-            if (raw) stored = JSON.parse(raw) as { mode: AppMode; accepted: JobAccepted };
-        } catch {
-            /* ignore malformed/private-mode storage */
-        }
-        if (!stored) return;
-        const { mode: jobMode, accepted } = stored;
-        setStateByMode((current) => ({
-            ...current,
-            [jobMode]: { ...current[jobMode], activeJob: accepted, busy: true },
-        }));
-        const controller = new AbortController();
-        void waitForJob(accepted, controller.signal)
-            .then(async (result) => {
-                // File jobs return a ZIP without result.json; resume can only
-                // repopulate text results — clear the active job and let the
-                // user download from the result URL if they need the file.
-                const jsonEntry = result.entry(".json");
-                if (!jsonEntry) {
-                    setStateByMode((current) => ({
-                        ...current,
-                        [jobMode]: {
-                            ...current[jobMode],
-                            activeJob: null,
-                            busy: false,
-                            error: "Задание завершено. Повторите операцию, чтобы скачать файл.",
-                        },
-                    }));
-                    try {
-                        window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
-                    } catch {
-                        /* ignore */
-                    }
-                    return;
-                }
-                const payload = JSON.parse(await jsonEntry.text()) as {
-                    text?: string;
-                    keys?: string;
-                    stats?: MaskResponse["stats"];
-                    kind?: string;
-                };
-                setStateByMode((current) => {
-                    const slice = { ...current[jobMode], activeJob: null, busy: false };
-                    if (jobMode === "mask" && payload.stats !== undefined) {
-                        return {
-                            ...current,
-                            [jobMode]: {
-                                ...slice,
-                                result: payload.text ?? "",
-                                keys: payload.keys ?? "",
-                                stats: statsFromAggregate(payload.stats),
-                            },
-                        };
-                    }
-                    return { ...current, [jobMode]: { ...slice, restored: payload.text ?? "" } };
-                });
-                try {
-                    window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
-                } catch {
-                    /* ignore */
-                }
-            })
-            .catch((error: unknown) => {
-                setStateByMode((current) => ({
-                    ...current,
-                    [jobMode]: {
-                        ...current[jobMode],
-                        activeJob: null,
-                        busy: false,
-                        error:
-                            error instanceof Error
-                                ? error.message
-                                : "Не удалось обработать задание.",
-                    },
-                }));
-                try {
-                    window.sessionStorage.removeItem(ACTIVE_JOB_KEY);
-                } catch {
-                    /* ignore */
-                }
-            });
-        return () => controller.abort();
-    }, []);
-
-    const hasText = input.trim().length > 0;
-    const hasFile = selectedFile !== null;
-    // Exactly one input mode is active; a selected DOCX takes precedence.
-    const inFileMode = hasFile;
     const maskEnabled = !busy && (hasText || hasFile);
     // Demasking needs both an input (text or DOCX) and valid keys. The keys are
     // parsed once per edit and the same result feeds validation, the tooltip
@@ -321,97 +182,9 @@ export function useMaskerWorkflow() {
     useSyncedScroll(sourceDocRef, maskedDocRef, showResultPreview && resultTab === "result");
     useSyncedScroll(sourceDocRef, restoredDocRef, showRestoredPreview && inputTab === "data");
 
-    /** Clear the *current* mode's result, leaving its input untouched. */
-    function resetResult() {
-        update({
-            result: "",
-            keys: "",
-            stats: null,
-            maskedFile: null,
-            restored: "",
-            restoredFile: null,
-            demaskUnused: null,
-            error: null,
-            resultTab: "result",
-            inputTab: "data",
-        });
-    }
-
-    // Switching flows keeps both drafts; nothing is cleared here. Remember the
-    // choice so a reload reopens the mode the user was working in.
-    function onModeChange(next: AppMode) {
-        setMode(next);
-        try {
-            window.localStorage.setItem(MODE_STORAGE_KEY, next);
-        } catch {
-            /* private mode / storage blocked: the mode still switches this session */
-        }
-    }
-
     function onTextChange(value: string) {
         update({ input: value, selectedFile: null, textBaseName: value ? textBaseName : null });
         resetResult();
-    }
-
-    function onFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        void applyFile(file);
-    }
-
-    async function applyFile(file: File) {
-        const kind = fileKind(file);
-        if (kind === null) {
-            update({ error: "Поддерживаются файлы .docx и .txt." });
-            return;
-        }
-        resetResult();
-        if (kind === "docx") {
-            update({ input: "", textBaseName: null, selectedFile: file });
-            return;
-        }
-        // `.txt`: read its contents into the editable input TextArea (it is not
-        // shown as a file — it is just the input text).
-        try {
-            const text = await file.text();
-            update({
-                selectedFile: null,
-                textBaseName: file.name.replace(/\.txt$/i, ""),
-                input: text,
-            });
-        } catch {
-            update({ error: "Не удалось прочитать текстовый файл." });
-        }
-    }
-
-    function onDragEnter(event: DragEvent<HTMLDivElement>) {
-        if (busy || !event.dataTransfer.types.includes("Files")) return;
-        event.preventDefault();
-        dragDepth.current += 1;
-        update({ dragging: true });
-    }
-
-    function onDragOver(event: DragEvent<HTMLDivElement>) {
-        if (busy || !event.dataTransfer.types.includes("Files")) return;
-        // Required so the browser fires `drop` instead of opening the file.
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-    }
-
-    function onDragLeave(event: DragEvent<HTMLDivElement>) {
-        event.preventDefault();
-        dragDepth.current = Math.max(0, dragDepth.current - 1);
-        if (dragDepth.current === 0) update({ dragging: false });
-    }
-
-    function onDrop(event: DragEvent<HTMLDivElement>) {
-        event.preventDefault();
-        dragDepth.current = 0;
-        update({ dragging: false });
-        if (busy) return;
-        const file = event.dataTransfer.files?.[0];
-        if (!file) return;
-        void applyFile(file);
     }
 
     async function handleMask() {
@@ -429,24 +202,11 @@ export function useMaskerWorkflow() {
     async function handleTextMask() {
         update({ busy: true });
         try {
-            const response = await fetch("/api/mask", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text: input }),
-            });
+            const response = await postMaskText(input);
             if (!response.ok) {
                 throw new Error(await readErrorDetail(response));
             }
-            const controller = new AbortController();
-            pollingController.current = controller;
-            let data: MaskResponse;
-            if (response.status === 202) {
-                const accepted = await trackAccepted(response);
-                data = await jobToMaskResponse(accepted, controller.signal);
-                endJob();
-            } else {
-                data = (await response.json()) as MaskResponse;
-            }
+            const data = await resolveMaskResponse(response, jobs);
             update({
                 result: data.text,
                 keys: data.keys,
@@ -457,10 +217,7 @@ export function useMaskerWorkflow() {
                 result: "",
                 keys: "",
                 stats: null,
-                error:
-                    requestError instanceof Error
-                        ? requestError.message
-                        : "Не удалось выполнить маскирование.",
+                error: operationError(requestError, "Не удалось выполнить маскирование."),
             });
         } finally {
             finish();
@@ -474,27 +231,12 @@ export function useMaskerWorkflow() {
         if (!file) return;
         update({ busy: true });
         try {
-            const formData = new FormData();
-            formData.append("file", file, file.name);
-            const response = await fetch("/api/mask-file", {
-                method: "POST",
-                body: formData,
-            });
+            const response = await postMaskFile(file);
             if (!response.ok) {
                 throw new Error(await readErrorDetail(response));
             }
-            let bundle: Awaited<ReturnType<typeof unpackMaskArchive>>;
-            if (response.status === 202) {
-                const accepted = await trackAccepted(response);
-                const controller = new AbortController();
-                pollingController.current = controller;
-                const jobResult = await waitForJob(accepted, controller.signal);
-                endJob();
-                bundle = await jobBundle(jobResult);
-            } else {
-                // The flat ZIP holds the masked .docx, keys and manifest.json.
-                bundle = await unpackMaskArchive(await response.blob());
-            }
+            // The flat ZIP holds the masked .docx, keys and manifest.json.
+            const bundle = await resolveMaskBundle(response, jobs);
             const keysYaml = await bundle.keys.text();
             update({
                 maskedFile: {
@@ -511,10 +253,7 @@ export function useMaskerWorkflow() {
                 maskedFile: null,
                 keys: "",
                 stats: null,
-                error:
-                    requestError instanceof Error
-                        ? requestError.message
-                        : "Не удалось обработать файл.",
+                error: operationError(requestError, "Не удалось обработать файл."),
             });
         } finally {
             finish();
@@ -543,211 +282,51 @@ export function useMaskerWorkflow() {
         update({ busy: true });
         try {
             if (inFileMode) {
-                const response = await requestFileUnmask();
+                const response = await postUnmaskFile(selectedFile!, demaskKeys);
                 if (!response.ok) {
                     throw new Error(await readErrorDetail(response));
                 }
                 // The backend returns a ZIP: restored .docx + a report manifest.
-                let bundle: Awaited<ReturnType<typeof unpackRestoreArchive>>;
-                if (response.status === 202) {
-                    const accepted = await trackAccepted(response);
-                    const controller = new AbortController();
-                    pollingController.current = controller;
-                    bundle = await jobRestoreBundle(accepted, controller.signal);
-                    endJob();
-                } else {
-                    bundle = await unpackRestoreArchive(await response.blob());
-                }
+                const bundle = await resolveRestoreBundle(response, jobs);
                 update({
                     restoredFile: { blob: bundle.docx, name: bundle.docxName },
                     demaskUnused: bundle.manifest.statistics.unused_keys ?? [],
                 });
             } else {
-                const response = await requestTextUnmask();
+                const response = await postUnmaskText(input, demaskKeys);
                 if (!response.ok) {
                     throw new Error(await readErrorDetail(response));
                 }
-                let data: UnmaskResponse;
-                if (response.status === 202) {
-                    const accepted = await trackAccepted(response);
-                    const controller = new AbortController();
-                    pollingController.current = controller;
-                    data = await jobToUnmaskResponse(accepted, controller.signal);
-                    endJob();
-                } else {
-                    data = (await response.json()) as UnmaskResponse;
-                }
+                const data = await resolveUnmaskResponse(response, jobs);
                 update({ restored: data.text });
             }
         } catch (requestError) {
             update({
                 restored: "",
                 restoredFile: null,
-                error:
-                    requestError instanceof Error
-                        ? requestError.message
-                        : "Не удалось выполнить демаскирование.",
+                error: operationError(requestError, "Не удалось выполнить демаскирование."),
             });
         } finally {
             finish();
         }
     }
 
-    /** Extract a Russian error `detail` from a failed proxied response. */
-    async function readErrorDetail(response: Response): Promise<string> {
-        const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
-        return payload?.detail ?? `Ошибка сервера (${response.status}).`;
-    }
-
-    async function requestTextUnmask(): Promise<Response> {
-        return fetch("/api/unmask", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: input, keys: demaskKeys }),
-        });
-    }
-
-    async function requestFileUnmask(): Promise<Response> {
-        const file = selectedFile;
-        if (!file) throw new Error("Файл не выбран.");
-        const formData = new FormData();
-        formData.append("file", file, file.name);
-        formData.append("keys", demaskKeys);
-        return fetch("/api/unmask-file", { method: "POST", body: formData });
-    }
-
-    /** Load a keys file (`.yaml`) into the demasking editor and show its tab. */
-    async function applyKeysFile(file: File) {
-        if (
-            !file.name.toLowerCase().endsWith(".yaml") &&
-            !file.name.toLowerCase().endsWith(".yml")
-        ) {
-            update({ error: "Ключи демаскировки должны быть файлом .yaml." });
-            return;
-        }
-        try {
-            update({ demaskKeys: await file.text(), error: null, inputTab: "keys" });
-        } catch {
-            update({ error: "Не удалось прочитать файл ключей." });
-        }
-    }
-
-    function onKeysSelected(event: React.ChangeEvent<HTMLInputElement>) {
-        const file = event.target.files?.[0];
-        if (file) void applyKeysFile(file);
-    }
-
-    function onKeysDrop(event: DragEvent<HTMLDivElement>) {
-        event.preventDefault();
-        const file = event.dataTransfer.files?.[0];
-        if (file) void applyKeysFile(file);
-    }
-
-    function downloadBlob(blob: Blob, name: string) {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = name;
-        anchor.click();
-        URL.revokeObjectURL(url);
-    }
-
-    function downloadMaskedFile() {
-        if (!maskedFile) return;
-        downloadBlob(maskedFile.result, maskedFile.resultName);
-    }
-
-    function downloadMaskedText() {
-        if (result.length === 0) return;
-        const base = textBaseName ?? "текст";
-        downloadBlob(
-            new Blob([result], { type: "text/plain;charset=utf-8" }),
-            `${base} (замаскированный).txt`,
-        );
-    }
-
     /** Download the masked artifact, whichever mode produced it. */
     function downloadResult() {
         if (inFileMode) {
-            downloadMaskedFile();
+            saveMaskedFile(maskedFile);
         } else {
-            downloadMaskedText();
+            saveMaskedText(result, textBaseName);
         }
     }
 
     /** Download the restored (demasked) artifact, text or document. */
     function downloadRestored() {
-        if (restoredFile) {
-            downloadBlob(restoredFile.blob, restoredFile.name);
-            return;
-        }
-        if (restored.length === 0) return;
-        const base = textBaseName ?? "текст";
-        downloadBlob(
-            new Blob([restored], { type: "text/plain;charset=utf-8" }),
-            `${base} (демаскированный).txt`,
-        );
+        saveRestored(restored, restoredFile, textBaseName);
     }
 
-    /** Keys download: in file mode the name comes from the archive, else derived. */
     function downloadKeys() {
-        if (keys.length === 0) return;
-        if (maskedFile) {
-            downloadBlob(maskedFile.keys, maskedFile.keysName);
-            return;
-        }
-        const base = textBaseName ?? "текст";
-        downloadBlob(
-            new Blob([keys], { type: "application/yaml;charset=utf-8" }),
-            `${base} (ключи демаскировки).yaml`,
-        );
-    }
-
-    /** Drag-and-drop props shared by the input panes (both modes). */
-    const drag: DragHandlers = { dragging, onDragEnter, onDragOver, onDragLeave, onDrop };
-
-    /** Masking file button: Cancel an active job, else remove/pick a file. */
-    function onMaskFileActionPress() {
-        if (activeJob) {
-            void onCancelJob();
-            return;
-        }
-        if (busy) return;
-        if (inFileMode) {
-            // Removing the input must also drop the previous result (including
-            // the "nothing was masked" notice).
-            resetResult();
-            update({ selectedFile: null, textBaseName: null });
-            if (fileInputRef.current) {
-                fileInputRef.current.value = "";
-            }
-        } else {
-            fileInputRef.current?.click();
-        }
-    }
-
-    /** Demasking data-file button: Cancel an active job, else remove/pick. */
-    function onDataFileActionPress() {
-        if (activeJob) {
-            void onCancelJob();
-            return;
-        }
-        if (busy) return;
-        if (inFileMode) {
-            resetResult();
-            update({ selectedFile: null, textBaseName: null });
-            if (fileInputRef.current) {
-                fileInputRef.current.value = "";
-            }
-        } else {
-            fileInputRef.current?.click();
-        }
-    }
-
-    /** Demasking keys-file button: load `.yaml`, or open the picker. */
-    function onKeysFileActionPress() {
-        if (busy) return;
-        keysInputRef.current?.click();
+        saveKeys(keys, maskedFile, textBaseName);
     }
 
     return {
