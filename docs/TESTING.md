@@ -169,8 +169,12 @@ E2E_BASE_URL=http://127.0.0.1:5001 \
 
 CI's `production` job instead uses the bundled Chromium on the isolated CI
 stack (front **15001**, back **18001**) and first verifies discovery of
-`health.spec.ts`, `smoke.spec.ts`, `rerender-smoke.spec.ts`. Never run smoke
-against an unprepared stack; never paste real PII into a live browser session.
+`health.spec.ts`, `smoke.spec.ts`, `rerender-smoke.spec.ts` and
+`hover-smoke.spec.ts`. The CI front service sets a synthetic `SUPPORT_MAIL`
+fixture: the header support link is rendered only when that runtime env var is
+present, and the reduced-motion smoke test asserts that real control and its
+hover state. Never run smoke against an unprepared stack; never paste real PII
+into a live browser session.
 
 ## 5. Clean-install / Compose / prod-image verification
 
