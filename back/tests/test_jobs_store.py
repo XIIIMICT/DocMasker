@@ -486,9 +486,11 @@ def test_concurrent_mixed_submissions_never_exceed_capacity(settings: Settings) 
     keys = ["shared", "shared", "shared", "a", "b", "c", "d", "e"]
     results = _concurrent_admission(settings, keys, max_active=3)
     accepted = [(key, job_id) for key, (outcome, job_id) in zip(keys, results, strict=True) if outcome == "ok"]
-    # Identical submissions attach to one row; distinct ones occupy the rest.
+    # Any repeated key maps to one row; which submissions win capacity is
+    # nondeterministic, but no duplicate active row can be created.
     assert len({job_id for _, job_id in accepted}) == 3
-    assert len({job_id for key, job_id in accepted if key == "shared"}) == 1
+    for key in set(keys):
+        assert len({job_id for k, job_id in accepted if k == key}) <= 1
     observer = JobRepository(settings)
     try:
         assert observer.count_active() == 3

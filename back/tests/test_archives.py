@@ -1,9 +1,11 @@
 """Flat, safe ZIP entry names for sync and job result archives (P1.1)."""
 
 import io
+import json
 import zipfile
+from typing import Any
 
-from src.masking.archives import mask_archive, restore_archive, safe_stem
+from src.masking.archives import mark_cache_hit, mask_archive, restore_archive, safe_stem
 
 
 def test_safe_stem_discards_paths_and_controls() -> None:
@@ -30,3 +32,21 @@ def test_mask_and_restore_archives_are_flat_for_both_paths() -> None:
             assert any(name.endswith(".docx") for name in names)
             assert "manifest.json" in names
             assert all("private" in name or name == "manifest.json" for name in names)
+
+
+def _manifest(payload: bytes) -> dict[str, Any]:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        return json.loads(archive.read("manifest.json"))
+
+
+def test_mark_cache_hit_rewrites_only_the_new_archive() -> None:
+    original = mask_archive(
+        b"docx",
+        "keys",
+        "doc",
+        {"schema_version": 1, "cache": {"hit": False, "namespace_version": 1}},
+    )
+    marked = mark_cache_hit(original)
+    assert marked != original
+    assert _manifest(original)["cache"]["hit"] is False
+    assert _manifest(marked)["cache"]["hit"] is True

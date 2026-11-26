@@ -27,6 +27,7 @@ from typing import Any
 
 from src.app_logging import configure_application_logging, log_event, log_warning
 from src.config import Settings, get_settings
+from src.masking.archives import mark_cache_hit
 from src.metrics import (
     inc_lease_expired,
     inc_lease_renew_failure,
@@ -254,7 +255,7 @@ class Worker:
                 # A verified cache hit still goes through the fenced publish:
                 # no cancelled/stale worker can expose it.
                 self._checkpoint(job_id, claim, heartbeat)
-                result_key = self._store.write_result(job_id, claim.lease_token, cached)
+                result_key = self._store.write_result(job_id, claim.lease_token, mark_cache_hit(cached))
                 self._repo.succeed(
                     job_id,
                     result_key,

@@ -261,7 +261,11 @@ detections; `complete` is true only when the supported scope was fully
 inspected and no text-bearing part was unprocessed/rejected — such documents
 are rejected with 422 rather than delivered as a misleading success. The
 frontend rejects a missing/malformed/wrong-version manifest with a clear
-error. See `docs/DOCX_SUPPORT.md`.
+error. `cache.hit` describes **the request currently served**: a cache hit
+returns a freshly built ZIP whose manifest says `true`, while the immutable
+content-addressed cached artifact keeps its original `false` and is never
+mutated in place. This is identical on sync file routes and job results.
+See `docs/DOCX_SUPPORT.md`.
 
 ## Durable jobs (`/api/jobs`, ADR-0002)
 

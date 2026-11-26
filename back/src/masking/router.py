@@ -18,7 +18,7 @@ from src.masking.config import SCHEMA_VERSION, get_config
 from src.metrics import observe_upload
 from src.uploads import UploadTooLargeError, cleanup, stage_upload
 
-from .archives import mask_archive, restore_archive, safe_stem
+from .archives import mark_cache_hit, mask_archive, restore_archive, safe_stem
 from .docx_service import CoverageReport, OoxmlPackageError, mask_docx_in_memory, unmask_docx_in_memory
 from .docx_validation import DocxValidationError, upload_limits, validate_docx_package, validate_docx_package_path
 from .executor import ExecutorBusyError, run_blocking, run_cpu
@@ -358,7 +358,7 @@ async def mask_file_endpoint(
         unpacked = _unpack_file_result(cached)
         if unpacked is not None:
             archive, headers = unpacked
-            return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
+            return Response(content=mark_cache_hit(archive), media_type=_ZIP_CONTENT_TYPE, headers=headers)
         await _invalidate_async(key)
 
     def _mask_file() -> tuple[bytes, list[MaskedEntity], MaskKeys, CoverageReport]:
@@ -468,7 +468,7 @@ async def unmask_file_endpoint(
         unpacked = _unpack_file_result(cached)
         if unpacked is not None:
             archive, headers = unpacked
-            return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
+            return Response(content=mark_cache_hit(archive), media_type=_ZIP_CONTENT_TYPE, headers=headers)
         await _invalidate_async(key)
 
     def _unmask_file() -> tuple[bytes, list[str], CoverageReport]:

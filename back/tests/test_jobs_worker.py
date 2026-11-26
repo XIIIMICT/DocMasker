@@ -338,6 +338,50 @@ def test_docx_detection_checkpoint_cancels_job_without_publishing(
     repo.dispose()
 
 
+def test_job_cache_hit_reports_current_request_without_mutating_artifact(
+    env: Settings, worker: Worker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2.13: manifest.cache.hit describes the serving request, not generation."""
+    import json
+
+    from src.jobs import dependencies
+    from src.masking.archives import mask_archive
+
+    cached = mask_archive(
+        _build_docx(),
+        "keys",
+        "doc",
+        {"schema_version": 1, "cache": {"hit": False, "namespace_version": 1}},
+    )
+
+    class _FakeCache:
+        def get(self, _key: str) -> bytes:
+            return cached
+
+        def put(self, _key: str, _data: bytes) -> None:
+            msg = "a cache hit must not publish again"
+            raise AssertionError(msg)
+
+    monkeypatch.setattr(dependencies, "result_cache", _FakeCache)
+    repo = JobRepository(env)
+    ids = []
+    for _ in range(2):
+        accepted = enqueue("mask_file", input_bytes=_build_docx(), filename="отчёт.docx")
+        _run(worker, env, accepted.job_id)
+        ids.append(accepted.job_id)
+    assert ids[0] != ids[1]  # the terminal first job allowed a fresh job
+    store = ArtifactStore(env.jobs_dir)
+    for job_id in ids:
+        job = repo.get(job_id)
+        assert job.status == "succeeded"
+        with _result_zip(store, job) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["cache"]["hit"] is True
+    with zipfile.ZipFile(io.BytesIO(cached)) as archive:
+        assert json.loads(archive.read("manifest.json"))["cache"]["hit"] is False
+    repo.dispose()
+
+
 def test_identical_concurrent_submissions_attach_to_one_job(env: Settings) -> None:
     """§4.5/§4.6-12: identical inputs dedupe to one active job, no duplicate work."""
     first = enqueue("mask_text", input_bytes=b"same-input", filename="")

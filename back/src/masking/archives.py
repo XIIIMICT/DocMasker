@@ -60,6 +60,30 @@ def mask_archive(
     )
 
 
+def mark_cache_hit(archive: bytes) -> bytes:
+    """
+    Return a new archive whose manifest describes the *current* cache hit.
+
+    The cached artifact is immutable and shared; this never edits it in place.
+    A malformed manifest degrades to the original bytes rather than failing a
+    verified cache hit.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as source:
+            entries = {name: source.read(name) for name in source.namelist()}
+        manifest = json.loads(entries[MANIFEST_NAME])
+        manifest["cache"]["hit"] = True
+        entries[MANIFEST_NAME] = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", _ZIP_DEFLATED) as target:
+            for name, payload in entries.items():
+                target.writestr(name, payload)
+        return buffer.getvalue()
+    except Exception:
+        # A verified hit stays a hit even when cached metadata is unexpected.
+        return archive
+
+
 def restore_archive(
     restored_docx: bytes,
     base: str,
