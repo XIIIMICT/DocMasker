@@ -79,7 +79,9 @@ def test_exception_digest_changes_key(settings: Settings) -> None:
 
 
 def test_ruleset_version_bump_invalidates(settings: Settings) -> None:
-    bumped = Settings.model_validate({**settings.model_dump(), "masking_ruleset_version": 2})
+    bumped = Settings.model_validate(
+        {**settings.model_dump(), "masking_ruleset_version": settings.masking_ruleset_version + 1}
+    )
     assert _key(settings, op="mask_text", data=b"x") != _key(bumped, op="mask_text", data=b"x")
 
 
