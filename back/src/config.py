@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     cache_max_entries: int = Field(default=100_000, validation_alias="CACHE_MAX_ENTRIES")
     cache_max_memory_mb: int = Field(default=256, validation_alias="CACHE_MAX_MEMORY_MB")
     #: Bump when detection/masking semantics change the output (§4.3).
-    masking_ruleset_version: int = Field(default=1, validation_alias="MASKING_RULESET_VERSION")
+    #: v2: bounded long-token window scanning and single-pass demasking.
+    masking_ruleset_version: int = Field(default=2, validation_alias="MASKING_RULESET_VERSION")
     #: Bump when the result manifest / archive contract changes (§4.3).
     result_manifest_version: int = Field(default=1, validation_alias="RESULT_MANIFEST_VERSION")
     #: Validated contents of active exception/lexicon files (Phase 4). The

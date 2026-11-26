@@ -216,8 +216,9 @@ median wall; `detect()` over all sentences):
 The extra ~50% wall on the mixed corpus buys 188 previously missed addresses;
 prose without address signals is unchanged at 0% nominations. The YAML edit
 changes `config_digest()` automatically, so cached results cannot be served from
-a stale entry; bumping `MASKING_RULESET_VERSION` is a separate maintainer
-decision (`back/src/config.py`, outside this change's scope).
+a stale entry. `MASKING_RULESET_VERSION` is now **2**: the single-pass
+demasking and bounded long-token windowing changes alter detection/restore
+semantics, so pre-v2 cache entries are no longer served.
 
 ## Long-text windowing bounds (DM-5)
 
