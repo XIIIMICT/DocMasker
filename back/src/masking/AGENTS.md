@@ -41,7 +41,7 @@ contracts and durable specs live in `docs/` — link, do not duplicate:
 ## Keys YAML (reversibility)
 
 - Placeholders are `[LABEL_N]`, numbered per label in document order. `MaskKeys` dedupes by **exact** text: identical repeats reuse one placeholder/key; distinct wordings (case forms of one org) stay separate so restoration is lossless.
-- Allocate numbers left-to-right before the back-to-front rewrite in `mask_text`, else the last entity gets `_1`. Unmask is a plain placeholder→value `str.replace`, so order does not matter; `placeholders_from_document` reverses a parsed keys file.
+- Allocate numbers left-to-right before the back-to-front rewrite in `mask_text`, else the last entity gets `_1`. Unmask is ONE compiled longest-first alternation scan (`compile_placeholders` in `mapping.py`): inserted values are opaque and never rescanned, so no cascade, and missing markers stay in place; `placeholders_from_document` reverses a parsed keys file. Masking first fails with 422 `marker_collision` on a source literal equal to a marker it allocates; the collision-safe versioned format is deferred (`TODO.md`).
 - Keys YAML uses `yaml12` (py-yaml12), not PyYAML 1.1 (which mangles quotes, e.g. `АО "Росхим"`). Writers emit the legacy `Профиль: russian-default` marker; readers accept it, foreign marker values and envelope-less legacy files, ignoring the marker as metadata. No `версия`/`версия_профиля` keys (retired v2 envelope). Section titles come from `labels.yaml`; empty sections are omitted.
 
 ## OOXML / DOCX (OPC package level, not python-docx runs)

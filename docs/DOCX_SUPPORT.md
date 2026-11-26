@@ -29,7 +29,14 @@ lastModifiedBy, Company, Manager…) and external relationship targets are each
 processed as their own container — they are never concatenated, so two fields
 with the same FIO cannot merge into a false cross-field entity. Key numbering is
 document-wide across every processed part (`MaskKeys`). Masking and
-restoration use the same inverse text-node rewrite.
+restoration use the same inverse text-node rewrite. Restoration is a single
+non-cascading scan per logical container: a compiled longest-first alternation
+finds the known placeholders, then the mapped values are written into the
+text nodes afterwards, so a restored value containing another marker is never
+rescanned. A marker split across runs still collapses to one value because the
+container is joined for matching before the back-to-front rewrite. At mask
+time the package is rejected with a clear 422 if a source literal equals a
+marker that run allocates (see `docs/MASKING_CONFIGURATION.md`).
 
 Each text-bearing container is passed to the detector with `prefilter=True`
 (Phase 7): detectors whose cheap precondition cannot match are skipped, while

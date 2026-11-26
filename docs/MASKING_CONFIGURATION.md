@@ -113,6 +113,28 @@ The frontend mirrors it in `shared/api/mask.ts::validateKeysYaml` on every
 keystroke; the section-title list is generated from `labels.yaml`, so the two
 validators cannot drift. Cross-language agreement is covered by tests.
 
+### Restoration is single-pass (DM-1)
+
+Unmasking compiles the known placeholders into one longest-first alternation and
+scans the input once. Each match is replaced by its mapped value as opaque
+output — `re.sub` does not rescan replacements — so a value that itself contains
+a valid marker cannot cascade into a second restoration. Text with no known
+placeholder is returned unchanged, unknown markers stay in place, and repeated
+values restore independently. The same rule applies to every DOCX logical text
+container (see `docs/DOCX_SUPPORT.md`). The keys YAML format and `KEYS_FORMAT_VERSION`
+are unchanged.
+
+### Mask-time marker collision guard (DM-1)
+
+Before a mask operation produces output, source text is scanned for literals
+matching the project's marker pattern (`[LABEL_N]`). If a literal equals a marker
+that operation allocates, masking fails with a clear Russian 422 error
+(`marker_collision`) instead of giving one marker two meanings on restoration. A
+marker-shaped literal that is not allocated is ordinary text and masks normally;
+this also applies to each DOCX part. Collisions are not expected in this
+deployment — the collision-safe versioned format is deferred by maintainer
+decision (`TODO.md`).
+
 ## Exceptions (`exceptions.yaml`)
 
 Typed, literal data — never executable code or regex:

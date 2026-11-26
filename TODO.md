@@ -46,6 +46,15 @@ and before/after benchmarks: `docs/PRODUCTION_READINESS.md`,
 - **Accuracy corpus** (versioned precision/recall/F1 per label; `score=1.0` is
   a tiebreaker constant, not confidence) and broad NER benchmark platform —
   deferred in brief §0.
+- **DM-1 — collision-safe keys format (deferred by maintainer decision
+  2026-11-26).** The implemented guard fails fast with a 422 when a source
+  literal equals a marker allocated by the same mask operation; collisions are
+  not expected in this single-tenant deployment. Explicitly deferred: a
+  `KEYS_FORMAT_VERSION` bump, `CACHE_NAMESPACE_VERSION` /
+  `MASKING_RULESET_VERSION` bumps for a new marker scheme, a versioned keys
+  envelope, reserved marker numbering / explicit marker ids, and a reserved
+  namespace that makes source collisions impossible. Reopen only with an ADR
+  when colliding input is actually observed.
 
 ## Frontend refactor audit (2026-11-26)
 

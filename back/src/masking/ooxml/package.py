@@ -19,6 +19,8 @@ from typing import Any
 
 from defusedxml.lxml import fromstring as safe_fromstring
 
+from src.masking.mapping import MarkerCollisionError, compile_placeholders, marker_tokens
+
 # lxml ships no PEP 561 type information; a dynamic import keeps static type
 # checkers quiet while still using lxml's serializer/QName helpers at runtime.
 etree = __import__("lxml.etree", fromlist=["etree"])
@@ -473,6 +475,30 @@ def _generic_containers(root: etree._Element, part_name: str, category: str) -> 
     return [_Container(refs=refs, part_name=part_name, category=category)] if refs else []
 
 
+def _source_marker_tokens(parts: list[_Part]) -> frozenset[str]:
+    """
+    Collect marker-shaped literals from every processable part before masking.
+
+    This only inspects already-loaded XML parts and keeps marker strings, not a
+    second copy of the document. It lets the mask path reject a source literal
+    that collides with any marker allocated anywhere in the package, without
+    running detection twice or buffering whole documents in memory.
+    """
+    found: set[str] = set()
+    for part in parts:
+        if part.data is None or part.category not in _PROCESSABLE_CATEGORIES:
+            continue
+        root = _secure_parse(part.data)
+        containers = (
+            _generic_containers(root, part.name, part.category)
+            if part.category == "generic_xml"
+            else _containers(root, part.name, part.category)
+        )
+        for container in containers:
+            found.update(marker_tokens(container.text()))
+    return frozenset(found)
+
+
 def _closest_paragraph(element: etree._Element) -> etree._Element | None:
     current = element.getparent()
     while current is not None:
@@ -517,6 +543,7 @@ def _transform_part(
     masker: Any,  # noqa: ANN401
     keys: Any,  # noqa: ANN401
     placeholders: Any,  # noqa: ANN401
+    source_markers: frozenset[str],
     checkpoint: Callable[[], None] | None,
     coverage: CoverageReport,
     all_entities: list[Any],
@@ -540,6 +567,7 @@ def _transform_part(
     coverage.processed_parts.append(part.category)
     coverage.processed.append(ProcessedPart(part.name, part.category, text_nodes))
     modified = False
+    pattern = compile_placeholders(placeholders) if mode == "unmask" else None
     for container in containers:
         text = container.text()
         if not text.strip():
@@ -548,6 +576,8 @@ def _transform_part(
         if mode == "mask":
             for item in masker.detect(text, prefilter=True, checkpoint=checkpoint):
                 marker = keys.placeholder(item.label, item.text)
+                if marker in source_markers:
+                    raise MarkerCollisionError([marker])
                 local.append((item.start, item.end, marker))
                 all_entities.append(
                     {
@@ -558,16 +588,13 @@ def _transform_part(
                         "score": item.score,
                     }
                 )
-        else:
-            for placeholder, value in placeholders.items():
-                cursor = 0
-                while True:
-                    found = text.find(placeholder, cursor)
-                    if found < 0:
-                        break
-                    local.append((found, found + len(placeholder), value))
-                    used_placeholders.add(placeholder)
-                    cursor = found + len(placeholder)
+        elif pattern is not None:
+            # One non-cascading scan per logical container: inserted values are
+            # written afterwards by `_rewrite_container` and are never rescanned.
+            for match in pattern.finditer(text):
+                placeholder = match.group(0)
+                local.append((match.start(), match.end(), placeholders[placeholder]))
+                used_placeholders.add(placeholder)
         if local:
             _rewrite_container(container, local)
             modified = True
@@ -607,6 +634,7 @@ def transform_package(
     if coverage.rejected_parts or coverage.unprocessed_text_parts:
         msg = "Документ содержит неподдерживаемое содержимое, которое нельзя безопасно обработать."
         raise OoxmlPackageError(msg)
+    source_markers = _source_marker_tokens(parts) if mode == "mask" else frozenset()
 
     with zipfile.ZipFile(io.BytesIO(data)) as source:
         infos = {info.filename: info for info in source.infolist() if not info.is_dir()}
@@ -623,6 +651,7 @@ def transform_package(
                 masker=masker,
                 keys=keys,
                 placeholders=placeholders,
+                source_markers=source_markers,
                 checkpoint=checkpoint,
                 coverage=coverage,
                 all_entities=all_entities,
@@ -674,6 +703,7 @@ def transform_package_to_file(
     if coverage.rejected_parts or coverage.unprocessed_text_parts:
         msg = "Документ содержит неподдерживаемое содержимое, которое нельзя безопасно обработать."
         raise OoxmlPackageError(msg)
+    source_markers = _source_marker_tokens(parts) if mode == "mask" else frozenset()
 
     processable = {part.name: part for part in parts if part.category in _PROCESSABLE_CATEGORIES}
     all_entities: list[Any] = []
@@ -690,6 +720,7 @@ def transform_package_to_file(
                     masker=masker,
                     keys=keys,
                     placeholders=placeholders,
+                    source_markers=source_markers,
                     checkpoint=checkpoint,
                     coverage=coverage,
                     all_entities=all_entities,
