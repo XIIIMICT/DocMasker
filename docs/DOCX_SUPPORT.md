@@ -138,6 +138,34 @@ requires and validates it — a missing/malformed/wrong
 version is a clear result error, never "0 entities". Semantic metadata no
 longer lives in `X-Masked-Count` / `X-Masked-Breakdown`; both were removed.
 
+## Frontend preview isolation
+
+`front/src/shared/ui/docx-viewer.tsx` renders every Blob generation into its
+own **detached** `document.createElement("div")` staging host. Only a still
+current generation moves those nodes (via `replaceChildren(...nodes)`) into
+the visible `.docx-viewer__surface`; an already-started `renderAsync` that
+finishes after a blob switch can only write into its own obsolete host and is
+never committed. Hosts are cleared on blob switch, unmount, success and
+failure; stale completions never apply highlights, set error state or leave
+timers behind. The lazy dynamic import, 120 ms highlight debounce,
+`surfaceRef` scroll contract, preview-only idempotent marks, existing Russian
+error message and "no re-render on highlight-only changes" are unchanged.
+
+Detached staging was chosen after reading the installed `docx-preview@0.4.1`
+(`front/node_modules/docx-preview/dist/docx-preview.js`): `renderAsync`
+(lines 3998–4009) only calls `parseAsync` + `renderDocument`, clears the
+supplied body/style containers and appends the generated nodes; it never
+measures or reads computed styles from them. The only size-measuring paths —
+`computePixelToPoint` (lines 2795–2802, `offsetWidth` on a probe in
+`document.body`) and `updateTabStop` (lines 2803–2807,
+`getBoundingClientRect`) — are reached solely from `refreshTabStops`, which is
+gated by `options.experimental` (lines 3934–3943) and is off by default. No new
+dependency or CSS is needed. Regression coverage:
+`front/src/shared/ui/__tests__/docx-viewer-lifecycle.test.tsx` (late A with
+`isCurrent` ignored, switch before import resolves, late resolve/reject after
+unmount, current vs stale failures, highlight-timer cancellation, detached
+host identity and committed-node preservation).
+
 ## Tests
 
 `back/tests/test_ooxml.py` builds synthetic OPC fixtures by hand: default

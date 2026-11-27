@@ -51,6 +51,23 @@ weakened. Evidence is from local runs on 2026-11-27, not from GitHub CI.
   changed specs 2/2 runs at 34 passed each; full smoke 2/2 runs at 35 passed
   each against the local stack on `:5001`.
 
+## Frontend DOCX preview generation isolation (2026-11-27) — CLOSED
+
+- Finding 1 (P1): an already-started `docx-preview` `renderAsync` could keep
+  writing into the shared live surface after a newer Blob committed. Each
+  generation now renders into its own **detached** staging host and only the
+  current generation moves those nodes into `.docx-viewer__surface`; stale
+  completions, rejections and highlight timers are discarded without touching
+  React state or the newer DOM. Evidence from the installed library (it only
+  clears/appends into the supplied container; its measuring paths are
+  experimental-only) and the regression list are in `docs/DOCX_SUPPORT.md`;
+  the contract is in `front/AGENTS.md` §2 and `docs/ARCHITECTURE.md`. No new
+  dependencies, no CSS change.
+- **Verified:** `bun run --cwd front format:check`, `lint:check`, `typecheck`,
+  `test` (237 pass / 0 fail) and `build` green; the lifecycle suite passed 3/3
+  consecutive targeted runs (15 tests each). Pre-existing HeroUI act warnings
+  in unrelated component tests only.
+
 ## Deferred by maintainer decision
 
 - **§8.2 — TypeScript types generated from live OpenAPI.** `openapi-typescript`
