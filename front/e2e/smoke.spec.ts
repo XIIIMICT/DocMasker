@@ -720,7 +720,7 @@ test("текстовая маскировка через job (202) показы�
     });
 });
 
-test("активное задание показывает «Отменить задание» вместо «Выбрать файл» и шлёт DELETE", async ({
+test("активное задание показывает «Отменить операцию» вместо «Выбрать файл» и шлёт DELETE", async ({
     page,
 }) => {
     const jobId = "abcdefab-1234-4234-8234-abcdefabcdef";
@@ -762,7 +762,7 @@ test("активное задание показывает «Отменить з
     await page.goto("/");
     await page.getByRole("textbox", { name: MASK_DATA }).fill("Иван Петров");
     await page.getByRole("button", { name: "Замаскировать" }).click();
-    const cancel = page.getByRole("button", { name: "Отменить задание" });
+    const cancel = page.getByRole("button", { name: "Отменить операцию" });
     await expect(cancel).toBeVisible({ timeout: 15000 });
     await expect(page.getByRole("button", { name: "Выбрать файл" })).toHaveCount(0);
     await cancel.click();
