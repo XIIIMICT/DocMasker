@@ -20,6 +20,8 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .app_logging import bind_request_id, log_error, log_event, log_warning
+from .cache_headers import NO_STORE_HEADERS, is_api_path
+from .jobs.readiness import ArtifactStorageError
 from .metrics import (
     http_request_finished,
     http_request_started,
@@ -125,6 +127,14 @@ def _error_body(code: str, detail: str, request_id: str) -> dict[str, str]:
     return {"code": code, "detail": detail, "request_id": request_id}
 
 
+def _error_headers(request: Request, request_id: str) -> dict[str, str]:
+    """Correlate every error; API errors also carry the wire cache policy."""
+    headers = {REQUEST_ID_HEADER: request_id}
+    if is_api_path(request.url.path):
+        headers.update(NO_STORE_HEADERS)
+    return headers
+
+
 def install_error_handlers(app: FastAPI) -> None:
     """Register the request-id middleware and all exception handlers."""
 
@@ -182,7 +192,17 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(exc.code, str(exc.detail), rid),
-            headers={REQUEST_ID_HEADER: rid},
+            headers=_error_headers(request, rid),
+        )
+
+    @app.exception_handler(ArtifactStorageError)
+    async def artifact_storage_error_handler(request: Request, exc: ArtifactStorageError) -> JSONResponse:
+        """Typed storage rejection: same envelope, no job row and no 500."""
+        rid = _request_id(request)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=_error_body(exc.code, exc.detail, rid),
+            headers=_error_headers(request, rid),
         )
 
     @app.exception_handler(HTTPException)
@@ -195,7 +215,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(code, detail, rid),
-            headers={REQUEST_ID_HEADER: rid},
+            headers=_error_headers(request, rid),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -205,7 +225,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content=_error_body("validation_error", "Некорректные данные запроса.", rid),
-            headers={REQUEST_ID_HEADER: rid},
+            headers=_error_headers(request, rid),
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -214,7 +234,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(_DEFAULT_CODES.get(exc.status_code, "error"), "Ошибка запроса.", rid),
-            headers={REQUEST_ID_HEADER: rid},
+            headers=_error_headers(request, rid),
         )
 
     @app.exception_handler(Exception)
@@ -225,5 +245,5 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=_error_body("internal_error", "Внутренняя ошибка сервера.", rid),
-            headers={REQUEST_ID_HEADER: rid},
+            headers=_error_headers(request, rid),
         )

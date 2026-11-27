@@ -82,7 +82,9 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
 - Job thresholds/limits in `.env.example`: `SYNC_MAX_TEXT_CHARS`,
   `SYNC_MAX_DOCX_BYTES`, `SYNC_MAX_DOCX_PARAGRAPHS`, `JOBS_MAX_ACTIVE`,
   `JOBS_CONCURRENCY`, `JOBS_MAX_ATTEMPTS`, `JOBS_LEASE_SECONDS`,
-  `JOBS_POLL_SECONDS`, `JOBS_TTL_SECONDS`, `UPLOAD_MAX_MB`,
+  `JOBS_POLL_SECONDS`, `JOBS_TTL_SECONDS`, `JOBS_MIN_FREE_BYTES` (artifact
+  free-space floor, default 1 GiB — keep the Prometheus alert and the
+  artifact-disk dashboard threshold in sync when overriding it), `UPLOAD_MAX_MB`,
   `MAX_TEXT_CHARS`, `MAX_KEYS_CHARS`.
 
 ## Health & lifecycle

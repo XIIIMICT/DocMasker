@@ -5,6 +5,10 @@ import { getBackendInternalUrl } from "@/shared/config";
 export function passThrough(response: Response, forwardedHeaders: string[] = []): Response {
     const headers = new Headers({
         "Content-Type": response.headers.get("Content-Type") ?? "application/octet-stream",
+        // Backend `/api/*` responses are uncacheable; keep that policy for
+        // status, job and ZIP downloads too (per-route headers still forwarded).
+        "Cache-Control": response.headers.get("Cache-Control") ?? "no-store",
+        Pragma: response.headers.get("Pragma") ?? "no-cache",
     });
     for (const name of forwardedHeaders) {
         const value = response.headers.get(name);

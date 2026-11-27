@@ -15,10 +15,15 @@ import {
 export const PROXY_JSON_TIMEOUT_MS = JSON_TIMEOUT_MS;
 export const PROXY_FILE_TIMEOUT_MS = UPLOAD_TIMEOUT_MS;
 
-/** Preserve the backend's correlation id on a proxied JSON response. */
+/**
+ * Preserve the backend's correlation id and no-store policy on a proxied JSON
+ * response; masked/restored text and keys must not be cached by the browser.
+ */
 function passJsonHeaders(response: Response): Headers {
     const headers = new Headers({
         "Content-Type": response.headers.get("Content-Type") ?? "application/json",
+        "Cache-Control": response.headers.get("Cache-Control") ?? "no-store",
+        Pragma: response.headers.get("Pragma") ?? "no-cache",
     });
     const requestId = response.headers.get("X-Request-ID");
     if (requestId) headers.set("X-Request-ID", requestId);

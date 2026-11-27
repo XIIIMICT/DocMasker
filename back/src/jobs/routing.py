@@ -15,6 +15,7 @@ from src.config import Settings, get_settings
 
 from .dependencies import artifact_store, job_repository, should_use_job
 from .models import JobKind
+from .readiness import check_artifact_storage
 from .repository import IllegalTransitionError
 from .schemas import JobAccepted
 
@@ -69,6 +70,7 @@ def _enqueue(
     """
     Staged, atomic enqueue (brief §3.3), shared by the bytes and path paths.
 
+    0. check artifact storage readiness before any DB row or file exists;
     1. insert a `staging` row (reserves a queue slot; worker cannot claim it);
     2. stream inputs/keys/metadata to unique private files (atomic writes);
     3. publish `staging -> queued` with all artifact references in one short DB
@@ -78,6 +80,7 @@ def _enqueue(
     from .cache import build_cache_key
 
     settings: Settings = get_settings()
+    check_artifact_storage(settings.jobs_dir, settings.jobs_min_free_bytes)
     store = artifact_store()
     repo = job_repository()
     cache_key = build_cache_key(settings, fingerprint)

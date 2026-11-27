@@ -392,10 +392,19 @@ curl -s http://localhost:3000/api/health
 ```
 
 Grafana dashboards (folder `DocMasker`): «Рабочая очередь», «Ошибки API»,
-«Кэш», «Диск артефактов». Alert annotations name the relevant dashboard and
-say where the `request_id`/`job_id` is: in Loki structured metadata, never in
-a metric label. Thresholds marked PROVISIONAL need calibration before they are
-treated as SLOs.
+«Кэш», «Диск артефактов». The disk dashboard includes a `JOBS_MIN_FREE_BYTES`
+threshold line next to `dm_artifact_disk_free_bytes`; the
+`DocMaskerArtifactStorageBelowReadinessFloor` alert uses the same 1 GiB default
+and the backend's `dm_runtime_disk_free_bytes{storage="jobs"}` as a second
+signal. Admission and worker startup reject a full/read-only spool with HTTP
+503 `artifact_storage_unavailable` (Russian `detail`); no new metric or log
+field is introduced — the failure is visible as a 503 in
+`dm_http_requests_total` and as a structured `error_code` event. If
+`JOBS_MIN_FREE_BYTES` is overridden, update both the alert expression and the
+dashboard threshold in the same change. Alert annotations name the relevant
+dashboard and say where the `request_id`/`job_id` is: in Loki structured
+metadata, never in a metric label. Thresholds marked PROVISIONAL need
+calibration before they are treated as SLOs.
 
 ### Alert mail and the SMTP deviation
 

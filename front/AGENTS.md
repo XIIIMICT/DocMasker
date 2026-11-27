@@ -102,7 +102,10 @@ repo. Verified gotchas:
    file is `.yaml` (read also `.yml`), with the `Профиль` marker. Never edit
    `labels.generated.ts` by hand; regenerate with
    `bun run --cwd front gen:labels` when the backend catalogue changes.
-6. Route timeouts are canonical in `shared/api/timeouts.ts` (15 s JSON/job,
+6. Every proxied `/api/*` response keeps the backend's `Cache-Control: no-store`
+   and `Pragma: no-cache` (`proxy.ts::passThrough`,
+   `mask.ts::passJsonHeaders`) — PII JSON and ZIPs must never be cached.
+7. Route timeouts are canonical in `shared/api/timeouts.ts` (15 s JSON/job,
    120 s upload, 300 s result, 20 min client job-wait).
    `proxy.ts::postToBackend` combines `AbortSignal.timeout` with the incoming
    abort signal, forwards `X-Request-ID`, and streams multipart unchanged
@@ -110,7 +113,7 @@ repo. Verified gotchas:
    (`app/api/jobs/[...path]/route.ts`): `waitForJob` polls `status_url` with
    backoff under `JOB_WAIT_TIMEOUT_MS`, unpacks the flat result ZIP, and
    `endJob()` clears the id on a terminal state or dismissal.
-7. Job cancel/resume: only the opaque job id is kept in
+8. Job cancel/resume: only the opaque job id is kept in
    `sessionStorage["docmasker.activeJob"]`; `DELETE /api/jobs/{id}` cancels the
    server job, an `AbortController` only stops polling. `cancelJob()` returns
    `accepted` / `already_terminal` / `failed` and never treats a non-2xx or

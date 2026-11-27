@@ -13,7 +13,7 @@ contracts live in `docs/` — link, do not duplicate:
 
 ## Enqueue & claim
 
-- Atomic enqueue: `create_staging` inserts a `staging` row in a short transaction (counts `staging|queued|running|cancelling` as active; `JobQueueFullError` → 429; attaches to an identical active job by `cache_key`), then `publish_staging` moves `staging → queued` **only after** input/keys artifacts are durable; `abort_staging` moves to `failed` with idempotent cleanup. Staging rows are never claimable. A transaction-scoped PostgreSQL advisory lock (`ADMISSION_LOCK_KEY`) serialises dedupe read + global capacity check + insert: concurrent identical submissions attach to one job and the active limit cannot be exceeded; no file/stream work is held inside that transaction.
+- Atomic enqueue: `create_staging` inserts a `staging` row in a short transaction (counts `staging|queued|running|cancelling` as active; `JobQueueFullError` → 429; attaches to an identical active job by `cache_key`), then `publish_staging` moves `staging → queued` **only after** input/keys artifacts are durable; `abort_staging` moves to `failed` with idempotent cleanup. Staging rows are never claimable. A transaction-scoped PostgreSQL advisory lock (`ADMISSION_LOCK_KEY`) serialises dedupe read + global capacity check + insert: concurrent identical submissions attach to one job and the active limit cannot be exceeded; no file/stream work is held inside that transaction. Before any of this, `readiness.py::check_artifact_storage` verifies the spool (free bytes ≥ `JOBS_MIN_FREE_BYTES`, default 1 GiB + one write/remove probe) and raises typed `ArtifactStorageError` → HTTP 503 `artifact_storage_unavailable` with no row/artifact; `Worker.run()` runs the same gate before the poll loop. Worker-side transient job I/O failures still use the existing bounded retry policy.
 - Claim (`claim_with_owner`): one transaction reclaims expired leases (fresh token, `attempt += 1`, `worker_lost`/`attempts_exhausted`), then `SELECT … FOR UPDATE SKIP LOCKED` the oldest eligible `queued` row, sets `running`, and assigns a fresh `uuid4()` fencing token plus `worker_id`.
 - One pooled engine, short sessions; never hold a transaction while masking/DOCX/ZIP/filesystem work runs. Ownership checks use PostgreSQL `clock_timestamp()` to avoid app-clock skew.
 
@@ -41,7 +41,8 @@ contracts live in `docs/` — link, do not duplicate:
 
 `test_jobs_*.py` (`test_jobs_store.py`, `test_jobs_worker.py`, `test_jobs_api.py`,
 `test_jobs_routing.py`), `test_cache.py`, `test_executor.py`, `test_uploads.py`,
-`test_settings_validation.py`. Cross-field settings validation: positive limits/TTLs/timeouts,
+`test_settings_validation.py`, `test_storage_readiness.py` (typed 503, full/read-only
+disk simulation, no staging/claim). Cross-field settings validation: positive limits/TTLs/timeouts,
 PostgreSQL-only URL, lease > heartbeat/DB-connect timeout, concurrency ≤ pool capacity,
 sync thresholds ≤ hard limits, cache secret when enabled — never relax these to silent
 zero/negative values. Failure-injection tests cover stale fencing, cancellation without

@@ -70,6 +70,16 @@ area trees above. Tests: `back/tests/` (see `docs/TESTING.md`).
 10. **Never commit credentials or private `exceptions.yaml`** (gitignored;
     mounted read-only). CI uses `exceptions.example.yaml`. No PII in rows,
     logs, metrics, cache keys or error details — see `docs/SECURITY.md`.
+11. **All `/api/*` responses are uncacheable.** `cache_headers.py` sets
+    `Cache-Control: no-store` + `Pragma: no-cache` (PII JSON, ZIPs, errors);
+    per-route `Content-Disposition`/`Cache-Control` must survive. Probes stay
+    out of scope. Do not add cache headers only to ZIP routes again.
+12. **Artifact storage is a typed precondition, not a 500.** `jobs/readiness.py`
+    checks `JOBS_MIN_FREE_BYTES` (default 1 GiB) + a write probe at worker
+    startup and job admission, before any staging row/artifact; failure is
+    `{code:"artifact_storage_unavailable", detail:<Russian>, request_id}` with
+    HTTP 503 and `X-Request-ID`. No new metric/log field; the alert/dashboard
+    threshold must be updated together with the setting.
 
 When behavior changes, update the matching area guide and `docs/` file in the
 same change; keep each fact in exactly one home.
