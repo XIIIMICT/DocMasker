@@ -152,10 +152,17 @@ never a blind `rm` (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). Today
 
 ## 5. Job lifecycle operations
 
-- **Queue limits:** `JOBS_MAX_ACTIVE` counts `staging|queued|running|cancelling`;
-  over capacity returns 429 and leaves no staging row (`back/src/jobs/AGENTS.md`,
-  `test_jobs_store.py::test_queue_full_leaves_no_staging_row`,
-  `test_jobs_api.py::test_queue_full_returns_429`).
+- **Queue limits and backpressure:** `JOBS_MAX_ACTIVE` (default **32**) counts
+  `staging|queued|running|cancelling`; over capacity returns the typed 429
+  `queue_full` envelope and leaves no staging row. The 429 also carries
+  `Retry-After: <seconds>` (integer, from `JOBS_RETRY_AFTER_SECONDS`, default
+  **45**); no other error gets this header. There is no server-side auto-retry —
+  the client resubmits after the hint, and the front proxies forward the header.
+  Cross-field validation requires `JOBS_MAX_ACTIVE > JOBS_CONCURRENCY`.
+  Tests: `test_jobs_store.py::test_queue_full_leaves_no_staging_row`,
+  `test_jobs_api.py::test_queue_full_returns_typed_429_with_retry_after`,
+  `::test_admission_boundary_rejects_then_admits_after_release`,
+  `test_jobs_worker.py::test_saturation_bounds_claims_and_retry_is_bounded`.
 - **Leases/fencing:** every claim gets a fresh `uuid4()` token and `worker_id`;
   all mutations are ownership-guarded. A heartbeat thread renews the lease at
   `JOBS_LEASE_SECONDS / 3` independently of the blocking masking work. A stale
@@ -201,6 +208,37 @@ never a blind `rm` (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). Today
    result bytes written before the fenced commit → stale key rejected and
    removed, only the current attempt key published. Details:
    `back/benchmarks/operational-drill-results.json`.
+
+### Backpressure and capacity budget (2026-11-27)
+
+Defaults are measurements, not guesses (raw numbers and method in
+`docs/PERFORMANCE.md` §Concurrency and queue budget):
+
+- **Worker concurrency.** Peak process RSS on a benign 16-document synthetic
+  DOCX load was flat at `431 / 431 / 433 / 433 MB` at `JOBS_CONCURRENCY`
+  `2 / 4 / 6 / 8`; the conservative per-worker share (peak minus the 109 MB
+  baseline, divided by workers) was `159 / 80 / 53 / 40 MB`. We take the largest
+  share (**159 MB**), a documented **1 GiB** worker-container budget (no
+  `mem_limit` in Compose — UNMEASURED) and a **1.5** safety factor:
+  `floor(1024 / (159 × 1.5)) = 4`. Higher concurrency is not enabled without
+  target-host RSS evidence even though the proxy run stayed flat through 8.
+- **Queue capacity.** A measured burst of **16** distinct submissions was
+  accepted over ~5.9 s (~2.7 jobs/s) before the first claim; p95 per-document
+  latency at concurrency 4 was **6.2 s**. Capacity is `2 × 16 = 32` (100%
+  headroom over the observed burst, and `> concurrency`), bounded — never an
+  unbounded queue.
+- **Retry hint.** A full queue drains its `32 − 4 = 28` backlog slots in
+  `28 × 6.2 / 4 ≈ 43.4 s`, rounded up to **45 s** (`JOBS_RETRY_AFTER_SECONDS`).
+  Operators changing capacity, concurrency or latency must update this setting,
+  the two alert thresholds and the dashboard lines together.
+
+- **Sustained load (2026-11-27):** a 1800.5 s soak at concurrency 4 on the
+  disposable stand completed 7,824 synthetic DOCX jobs with 0 failures; the
+  Windows working-set proxy showed no unbounded growth, but its ~15 GB plateau
+  is a *harness-process* figure on this host, not worker-container RSS. The
+  1 GiB budget assumption behind the default remains **unvalidated on target
+  hardware**; raw samples and the honest caveats are in
+  `docs/PERFORMANCE.md` §Concurrency and queue budget.
 
 ## 6. Runbooks
 
@@ -392,7 +430,13 @@ curl -s http://localhost:3000/api/health
 ```
 
 Grafana dashboards (folder `DocMasker`): «Рабочая очередь», «Ошибки API»,
-«Кэш», «Диск артефактов». The disk dashboard includes a `JOBS_MIN_FREE_BYTES`
+«Кэш», «Диск артефактов». The worker dashboard has two additional panels —
+queue depth against the `JOBS_MAX_ACTIVE` line (24 = 75% warning threshold, 32 =
+capacity) and worker saturation against `JOBS_CONCURRENCY` (4) with the backlog
+series; both reuse `dm_jobs_active` / `dm_jobs_running` and constant lines, with
+no new metric. The alerts `DocMaskerWorkerQueueNearCapacity` (24 active, 2m) and
+`DocMaskerWorkerSaturated` (all 4 slots busy with backlog, 5m) are PROVISIONAL
+and must be re-derived when those settings change. The disk dashboard includes a `JOBS_MIN_FREE_BYTES`
 threshold line next to `dm_artifact_disk_free_bytes`; the
 `DocMaskerArtifactStorageBelowReadinessFloor` alert uses the same 1 GiB default
 and the backend's `dm_runtime_disk_free_bytes{storage="jobs"}` as a second
@@ -405,6 +449,21 @@ dashboard threshold in the same change. Alert annotations name the relevant
 dashboard and say where the `request_id`/`job_id` is: in Loki structured
 metadata, never in a metric label. Thresholds marked PROVISIONAL need
 calibration before they are treated as SLOs.
+
+### Verification drill (2026-11-27, local disposable only)
+
+A Granian backend was started on a disposable database and spool
+(`JOBS_MAX_ACTIVE=5`, `JOBS_CONCURRENCY=4`) on loopback port 18101. Five distinct
+text submissions returned `202`; the sixth returned the unchanged typed
+envelope with HTTP `429`, Russian detail, matching `X-Request-ID` and the new
+`Retry-After: 45` header; `Cache-Control: no-store` / `Pragma: no-cache` were
+preserved. No server-side retry or silent drop occurred. Rule syntax was checked
+with `promtool check rules` (20 rules, SUCCESS). **Not executed:** the staging
+Alertmanager delivery drill for `DocMaskerWorkerQueueNearCapacity` and
+`DocMaskerWorkerSaturated` (firing both alerts on the staging Prometheus stand
+and confirming the Russian e-mail via the SMTP relay) — no staging stand or
+credentials were available in this environment. The alerts remain PROVISIONAL
+thresholds validated only by `promtool` and the live expression review.
 
 ### Alert mail and the SMTP deviation
 

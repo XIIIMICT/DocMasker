@@ -152,6 +152,15 @@ describe("passThrough", () => {
         expect(await result.text()).toBe("zip-bytes");
     });
 
+    it("forwards Retry-After only when the route opts in", async () => {
+        const upstream = new Response("{}", {
+            status: 429,
+            headers: { "Content-Type": "application/json", "Retry-After": "45" },
+        });
+        expect(passThrough(upstream, ["Retry-After"]).headers.get("Retry-After")).toBe("45");
+        expect(passThrough(upstream).headers.get("Retry-After")).toBeNull();
+    });
+
     it("defaults to no-store when the upstream omits cache headers", async () => {
         const result = passThrough(new Response("{}", { status: 200 }));
         expect(result.headers.get("Cache-Control")).toBe("no-store");

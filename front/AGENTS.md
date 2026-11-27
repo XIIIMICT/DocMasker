@@ -104,7 +104,9 @@ repo. Verified gotchas:
    `bun run --cwd front gen:labels` when the backend catalogue changes.
 6. Every proxied `/api/*` response keeps the backend's `Cache-Control: no-store`
    and `Pragma: no-cache` (`proxy.ts::passThrough`,
-   `mask.ts::passJsonHeaders`) — PII JSON and ZIPs must never be cached.
+   `mask.ts::passJsonHeaders`) — PII JSON and ZIPs must never be cached. The
+   typed `queue_full` 429 also forwards `Retry-After` verbatim (jobs, file and
+   JSON proxies); no client auto-retry is added.
 7. Route timeouts are canonical in `shared/api/timeouts.ts` (15 s JSON/job,
    120 s upload, 300 s result, 20 min client job-wait).
    `proxy.ts::postToBackend` combines `AbortSignal.timeout` with the incoming

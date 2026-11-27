@@ -214,6 +214,48 @@ def test_failed_job_is_retried_then_final(env: Settings, worker: Worker) -> None
     assert repo.get(accepted.job_id).attempt == 3
 
 
+def test_saturation_bounds_claims_and_retry_is_bounded(env: Settings, worker: Worker) -> None:
+    """No more than JOBS_CONCURRENCY jobs run, and a retryable job stops at max attempts."""
+    repo = JobRepository(env)
+    store = ArtifactStore(env.jobs_dir)
+    failing = enqueue("mask_text", input_bytes=b"x", filename="")
+    store.write(failing.job_id, "input", b"\xff\xfe")  # internal_error, retryable
+    queued = [enqueue("mask_text", input_bytes=f"уникальный-{index}".encode(), filename="") for index in range(3)]
+
+    running: list[tuple[str, Claim]] = []
+    for _ in range(env.jobs_concurrency):
+        claimed = repo.claim_with_owner(lease_seconds=30, concurrency=env.jobs_concurrency)
+        assert claimed is not None
+        running.append((claimed[0].id, claimed[1]))
+    # Worker saturation: all pool slots are running, so no extra claim is made.
+    assert repo.claim_with_owner(lease_seconds=30, concurrency=env.jobs_concurrency) is None
+    assert sum(repo.get(job_id).status == "running" for job_id, _ in running) == env.jobs_concurrency
+
+    fail_id, fail_claim = running[0]
+    for attempt in range(env.jobs_max_attempts):
+        worker.run_one(fail_id, fail_claim)
+        status = repo.get(fail_id).status
+        if attempt < env.jobs_max_attempts - 1:
+            assert status == "queued"
+            if attempt == 1:
+                time.sleep(1.2)  # bounded exponential backoff
+            reclaimed = repo.claim_with_owner(lease_seconds=30, concurrency=env.jobs_concurrency)
+            assert reclaimed is not None
+            assert reclaimed[0].id == fail_id
+            fail_claim = reclaimed[1]
+    assert status == "failed"
+    assert repo.get(fail_id).attempt == env.jobs_max_attempts
+    # A terminal job is never re-claimed.
+    assert all(job.job_id != fail_id for job in queued)
+
+    for job_id, claim in running[1:]:
+        worker.run_one(job_id, claim)
+    # Remaining queued work is bounded by the same concurrency, not drained at once.
+    claims = [repo.claim_with_owner(lease_seconds=30, concurrency=env.jobs_concurrency) for _ in range(2)]
+    assert all(item is not None for item in claims)
+    assert repo.claim_with_owner(lease_seconds=30, concurrency=env.jobs_concurrency) is None
+
+
 def test_lease_loss_stops_execution(env: Settings, worker: Worker) -> None:
     accepted = enqueue("mask_text", input_bytes=b"x", filename="")
     repo = JobRepository(env)

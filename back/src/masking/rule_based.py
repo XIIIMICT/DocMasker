@@ -720,7 +720,8 @@ def get_masker() -> RuleBasedMasker:
     worker run detection concurrently. A process-wide `@cache` instance was a
     latent race. `threading.local()` gives each worker thread its own
     `MorphVocab` — the memory tradeoff is explicit: ~110 MB per instance, so
-    keep `JOBS_CONCURRENCY` conservative (default 2 → 3 instances).
+    keep `JOBS_CONCURRENCY` conservative (default 4, measurement-derived —
+    see `docs/PERFORMANCE.md`).
     """
     masker = getattr(_THREAD_LOCAL, "masker", None)
     return masker if masker is not None else _new_masker()

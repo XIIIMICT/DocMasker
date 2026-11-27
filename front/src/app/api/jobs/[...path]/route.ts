@@ -23,6 +23,7 @@ async function forward(request: Request, path: string, route: ProxyRoute): Promi
         "Content-Disposition",
         "Cache-Control",
         "X-Request-ID",
+        "Retry-After",
     ]);
 }
 

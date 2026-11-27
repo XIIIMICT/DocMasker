@@ -79,6 +79,34 @@ describe("proxyMaskRequest", () => {
         expect(response.headers.get("X-Request-ID")).toBe("rid-42");
     });
 
+    it("forwards Retry-After on a typed queue_full rejection", async () => {
+        process.env.BACKEND_INTERNAL_URL = "http://back:8001";
+        globalThis.fetch = mock(
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        code: "queue_full",
+                        detail: "Очередь заданий переполнена. Повторите позже.",
+                        request_id: "rid-43",
+                    }),
+                    {
+                        status: 429,
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-Request-ID": "rid-43",
+                            "Retry-After": "45",
+                        },
+                    },
+                ),
+        ) as unknown as typeof fetch;
+
+        const response = await proxyMaskRequest("Иван");
+        expect(response.status).toBe(429);
+        expect(response.headers.get("Retry-After")).toBe("45");
+        expect(response.headers.get("X-Request-ID")).toBe("rid-43");
+        expect(response.headers.get("Cache-Control")).toBe("no-store");
+    });
+
     it("keeps the backend no-store policy on PII JSON", async () => {
         process.env.BACKEND_INTERNAL_URL = "http://back:8001";
         globalThis.fetch = mock(

@@ -27,6 +27,9 @@ function passJsonHeaders(response: Response): Headers {
     });
     const requestId = response.headers.get("X-Request-ID");
     if (requestId) headers.set("X-Request-ID", requestId);
+    // Explicit backpressure: a typed queue_full 429 arrives with Retry-After.
+    const retryAfter = response.headers.get("Retry-After");
+    if (retryAfter) headers.set("Retry-After", retryAfter);
     return headers;
 }
 
