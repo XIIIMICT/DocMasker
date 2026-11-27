@@ -80,8 +80,9 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   prod and dev. CI uses the synthetic `exceptions.example.yaml` fallback.
   No hot reload: restart to pick up config changes.
 - Job thresholds/limits in `.env.example`: `SYNC_MAX_TEXT_CHARS`,
-  `SYNC_MAX_DOCX_BYTES`, `SYNC_MAX_DOCX_PARAGRAPHS`, `JOBS_MAX_ACTIVE`,
-  `JOBS_CONCURRENCY`, `JOBS_MAX_ATTEMPTS`, `JOBS_LEASE_SECONDS`,
+  `SYNC_MAX_DOCX_BYTES`, `SYNC_MAX_DOCX_PARAGRAPHS`, `JOBS_MAX_ACTIVE` (32),
+  `JOBS_CONCURRENCY` (4), `JOBS_RETRY_AFTER_SECONDS` (45, typed 429 hint),
+  `JOBS_MAX_ATTEMPTS`, `JOBS_LEASE_SECONDS`,
   `JOBS_POLL_SECONDS`, `JOBS_TTL_SECONDS`, `JOBS_MIN_FREE_BYTES` (artifact
   free-space floor, default 1 GiB — keep the Prometheus alert and the
   artifact-disk dashboard threshold in sync when overriding it), `UPLOAD_MAX_MB`,

@@ -153,9 +153,47 @@ async def test_unknown_kind_rejected(client: AsyncClient, jobs_env: Settings) ->
     ).status_code == 202
 
 
-async def test_queue_full_returns_429(client: AsyncClient, jobs_env: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_queue_full_returns_typed_429_with_retry_after(
+    client: AsyncClient, jobs_env: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.errors import REQUEST_ID_HEADER, RETRY_AFTER_HEADER
     from src.jobs import routing
 
     monkeypatch.setattr(routing, "get_settings", lambda: jobs_env.model_copy(update={"jobs_max_active": 0}))
     response = await client.post("/api/jobs", data={"kind": "mask_text", "text": "x"})
     assert response.status_code == 429
+    body = response.json()
+    assert set(body) == {"code", "detail", "request_id"}
+    assert body["code"] == "queue_full"
+    assert body["detail"] == "Очередь заданий переполнена. Повторите позже."
+    assert response.headers[REQUEST_ID_HEADER] == body["request_id"]
+    assert response.headers[RETRY_AFTER_HEADER].isdigit()
+    assert int(response.headers[RETRY_AFTER_HEADER]) >= 1
+
+
+async def test_admission_boundary_rejects_then_admits_after_release(
+    client: AsyncClient, jobs_env: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Capacity is a hard boundary, but a released slot is immediately reusable."""
+    from src.errors import RETRY_AFTER_HEADER
+    from src.jobs import routing
+
+    monkeypatch.setattr(routing, "get_settings", lambda: jobs_env.model_copy(update={"jobs_max_active": 2}))
+    first = await _submit_text(client, "Первое уникальное сообщение")
+    second = await _submit_text(client, "Второе уникальное сообщение")
+    assert first["job_id"] != second["job_id"]
+
+    rejected = await client.post("/api/jobs", data={"kind": "mask_text", "text": "Третье уникальное сообщение"})
+    assert rejected.status_code == 429
+    assert rejected.json()["code"] == "queue_full"
+    assert RETRY_AFTER_HEADER in rejected.headers
+
+    assert (await client.delete(f"/api/jobs/{first['job_id']}")).status_code == 204
+    admitted = await client.post("/api/jobs", data={"kind": "mask_text", "text": "Четвёртое уникальное сообщение"})
+    assert admitted.status_code == 202
+    assert admitted.json()["job_id"] not in {first["job_id"], second["job_id"]}
+
+    # Still hard-bounded: the newly filled slot rejects the next submission.
+    assert (
+        await client.post("/api/jobs", data={"kind": "mask_text", "text": "Пятое уникальное сообщение"})
+    ).status_code == 429

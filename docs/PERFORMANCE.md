@@ -87,16 +87,18 @@ tracks re-measurement.
 | `SYNC_MAX_DOCX_BYTES` | 1048576 | DOCX bytes above this → job |
 | `SYNC_MAX_DOCX_PARAGRAPHS` | 200 | paragraph estimate above this → job |
 | `DETECTION_MAX_WINDOW_CHARS` | 16384 | hard per-window ceiling for an unbroken token (DM-5; ≥ chunk) |
-| `JOBS_MAX_ACTIVE` | 16 | bounded queue → 429 |
-| `JOBS_CONCURRENCY` | 2 | worker warm threads / sync executor slots (`×2`) |
+| `JOBS_MAX_ACTIVE` | 32 | bounded queue → typed 429 + `Retry-After` (§Concurrency and queue budget) |
+| `JOBS_CONCURRENCY` | 4 | worker warm threads / sync executor slots (`×2`), measurement-derived |
+| `JOBS_RETRY_AFTER_SECONDS` | 45 | integer `Retry-After` hint on `queue_full` (derived backlog drain) |
 | `JOBS_MAX_ATTEMPTS` | 3 | retries with backoff |
 | `JOBS_LEASE_SECONDS` | 30 | claim lease / heartbeat |
 | `JOBS_POLL_SECONDS` | 1 | worker poll interval |
 | `JOBS_TTL_SECONDS` | 3600 | result expiry / sweep |
 
-The thresholds come from the stage-1 measurements and are deliberately
-conservative: they keep small inputs on the synchronous path and move large
-ones to the worker. They are **estimates**, to be re-anchored by benchmarks
+The sync thresholds come from the stage-1 measurements; the job defaults (32 /
+4 / 45) were re-anchored by the 2026-11-27 RSS/latency measurements below and
+are deliberately conservative. They keep small inputs on the synchronous path
+and move large ones to the worker; capacity remains hard-bounded
 (ADR-0002). `front/src/instrumentation.ts` sets `headersTimeout: 60_000` /
 `bodyTimeout: 600_000`; `shared/api/proxy.ts` uses `AbortSignal.timeout` — 15 s
 for JSON/job polling, 10 min for the synchronous file endpoints. Long work
@@ -310,6 +312,106 @@ browser's full-result Blob and JSZip unpacking remain the client-side bound.
 - DOCX masking is two-pass over all paragraphs (document-wide numbering), so a
   5,000-paragraph document is ~2 min of CPU — exactly the case the job path
   exists for.
+
+## Concurrency and queue budget (2026-11-27, P1-4)
+
+**Method (MEASURED).** Fresh process per concurrency value, synthetic disposable
+DOCX (`drill_support.build_docx(40, …)`) with fabricated PII-shaped marker text,
+16 distinct jobs per burst, real PostgreSQL staging/claim/fenced publish path,
+`JOBS_POLL_SECONDS=1`, cache double (no Valkey), no repo files or production
+data changed. Peak/current RSS is Windows `GetProcessMemoryInfo`
+(`PeakWorkingSetSize`/`WorkingSetSize`, the closest RSS proxy on this host),
+sampled every 50 ms; CPU is `time.process_time()`; queue wait is claim time minus
+row `created_at`. Harness lived outside the repo
+(`…/Temp/opencode/dm_bp_measure.py`); database `dm_perf_bp_measure` on the
+disposable local stand. Another project's pytest ran concurrently on the host,
+so wall/latency are conservative under contention.
+
+| Threads | Baseline MB | Max current MB | Process peak MB | Δ RSS/worker MB | CPU s | Wall s | Latency mean / p95 / max s | Queue wait mean / max s | Arrivals/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 109.2 | 427.3 | 430.8 | 318.1 | 4.55 | 16.65 | 0.65 / 0.39 / 5.59 | 8.32 / 10.43 | 2.67 |
+| 2 | 109.4 | 427.6 | 431.2 | 159.1 | 3.61 | 14.42 | 1.03 / 5.57 / 5.57 | 6.76 / 8.27 | 2.71 |
+| 4 | 109.1 | 428.2 | 431.1 | 79.8 | 4.25 | 29.28 | 3.74 / 6.20 / 6.26 | 9.42 / 17.27 | 2.71 |
+| 6 | 109.1 | 429.1 | 433.0 | 53.3 | 4.61 | 23.20 | 4.06 / 5.95 / 5.97 | 6.03 / 11.89 | 2.67 |
+| 8 | 109.0 | 429.8 | 432.6 | 40.1 | 5.50 | 18.23 | 3.48 / 6.07 / 6.08 | 4.01 / 6.73 | 2.66 |
+
+The process peak is essentially **flat (~431–433 MB) from 1 to 8 threads**: the
+natasha thread-local maskers share the same resident dictionary pages on this
+host, so "Δ RSS/worker" is a conservative *allocation* of one process's RSS,
+not the incremental cost of adding a worker. The audit's `~110 MB/thread` remains
+an **UNVERIFIED ESTIMATE**; the earlier proxy deltas
+(`84.4 / 120.1 / 166.0 / 199.2 MB` at 2/4/6/8 in
+`docs/REMEDIATION-PHASE0-RESEARCH.md`) are warm-masker probes, not full worker RSS.
+
+**Arithmetic.** Container `mem_limit` is absent from every Compose file —
+**UNMEASURED**. Budget assumption (documented, not measured): **1 GiB** per
+worker container; the host has 32 GiB physical but only ~1.8 GiB free under
+concurrent project load. Safety factor **1.5**, measured per-worker upper bound
+**159 MB** (largest Δ RSS/worker above):
+`floor(1024 / (159 × 1.5)) = floor(4.29) = **4**`. Higher concurrency is not
+enabled without target-host RSS evidence.
+
+**Capacity and retry.** The 16 accepted submissions before the first claim
+(~5.9 s, ~2.7 jobs/s) are the measured burst; p95 service latency at 4 threads
+is 6.2 s. `JOBS_MAX_ACTIVE = 2 × 16 = 32` (100% headroom, hard bound). A full
+backlog of `32 − 4 = 28` drains in `28 × 6.2 / 4 ≈ 43.4 s`, rounded up to
+**45 s** for `JOBS_RETRY_AFTER_SECONDS`. Alert/dashboard thresholds (24 and 4)
+come from these same numbers. This is a **hard bound** (`JOBS_MAX_ACTIVE` >
+`JOBS_CONCURRENCY` is enforced at startup) with no server-side retry; a
+released slot is immediately reusable (`test_jobs_api.py::test_admission_boundary_rejects_then_admits_after_release`).
+
+### Sustained soak at `JOBS_CONCURRENCY=4` (2026-11-27)
+
+**MEASURED.** Same disposable PostgreSQL stand and cache double as the table
+above; a single long-lived harness process (outside the repo,
+`…/Temp/opencode/dm_bp_soak.py`) enqueued batches of 8 synthetic 10-paragraph
+DOCX jobs with unique fabricated markers, claimed them with the worker's real
+fenced path and ran `Worker.run_one` in a 4-slot pool. Requested wall time
+1800 s; **actual duration 1800.5 s** (the 30-minute target was met). RSS proxy is
+Windows `GetProcessMemoryInfo` `WorkingSetSize` sampled every 5 s (346 samples);
+`PeakWorkingSetSize` is not used here. Raw samples are preserved at
+`C:\Users\Scorpi-ON\AppData\Local\Temp\opencode\dm_bp_soak_c4_final.jsonl`,
+machine-readable summary at `…dm_bp_soak_c4_final.summary.json`. No repo file,
+production data or network was involved.
+
+| Metric | Value |
+|---|---|
+| Jobs completed / batches / failures | 7,824 / 978 / 0 |
+| RSS at t=0 | 108.0 MB |
+| RSS max | 17,032.5 MB |
+| RSS mean 5–15 min (post warm-up) | 14,722.0 MB |
+| RSS mean last 10 min | 15,335.0 MB |
+| Change, last 10 min vs 5–15 min | +612.9 MB (+4.2%) |
+| RSS at t≈1798 s | 15,244.5 MB |
+
+An earlier 1800 s attempt lost only its *summary* to a harness bug after the
+load loop (its raw trace at `…dm_bp_soak_c4.jsonl` covers ~1776 s and shows the
+same plateau); the numbers above come from the completed rerun.
+
+**Interpretation.** Working set jumps from ~108 MB to ~15 GB within the first
+3 minutes, then oscillates between ~10.4 and ~17.0 GB with no monotonic climb;
+the late-10-minute mean is 4.2% above the 5–15-minute mean. These are **whole
+harness process** working-set values on Windows (which trims file-backed pages
+under pressure), **not** the worker container's Linux RSS — the harness also
+holds SQLAlchemy clients, DOCX generators and the whole artifact I/O path.
+Therefore this soak shows **no unbounded growth over 30 minutes at 4 threads**,
+but it does **not** validate the 1 GiB container budget assumption used for the
+`floor(1024 / (159 × 1.5)) = 4` arithmetic above; a small residual trend cannot
+be excluded from a working-set proxy. Target-host Linux RSS soak remains an
+**OPEN** operator gate (`docs/PRODUCTION_READINESS.md`, `TODO.md`). A later
+default increase would need measured *container* RSS, not this proxy.
+
+### Admission/backpressure drill (2026-11-27)
+
+**MEASURED.** A Granian backend on a disposable database/spool
+(`JOBS_MAX_ACTIVE=5`, `JOBS_CONCURRENCY=4`) accepted five distinct `202`
+submissions; the sixth returned the unchanged typed `queue_full` envelope
+(Russian `detail`, `request_id`, matching `X-Request-ID`) with HTTP `429`,
+`Retry-After: 45`, `Cache-Control: no-store` and `Pragma: no-cache` preserved.
+No server-side retry or silent drop occurred. `promtool check rules` reported
+`SUCCESS: 20 rules found`. The alertmanager e-mail delivery drill was **not**
+run (no staging stand); both new alerts remain PROVISIONAL. Full method and
+limits: `docs/OPERATIONS.md` §8.
 
 ## Isolated concurrency drill (2026-11-27, DM-3)
 

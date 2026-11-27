@@ -54,8 +54,11 @@ area trees above. Tests: `back/tests/` (see `docs/TESTING.md`).
    claimed as streaming. See `docs/API.md` §Streaming.
 6. **Settings are cross-validated** (`config.py`): positive limits/TTLs,
    PostgreSQL-only URL, lease/heartbeat/DB-connect relation, worker
-   concurrency ≤ pool capacity, sync thresholds ≤ hard limits, cache secret
-   when enabled. `test_settings_validation.py` covers it; never relax them.
+   concurrency ≤ pool capacity, `JOBS_MAX_ACTIVE > JOBS_CONCURRENCY`, sync
+   thresholds ≤ hard limits, cache secret when enabled. Defaults
+   `JOBS_CONCURRENCY=4`, `JOBS_MAX_ACTIVE=32`, `JOBS_RETRY_AFTER_SECONDS=45`
+   are measurement-derived (`docs/PERFORMANCE.md`); `test_settings_validation.py`
+   pins them. Never relax them.
 7. **`MASK_LABELS` fails startup**; profile APIs/fields were removed in Phase
    4. `GET /api/labels` is the single canonical catalogue. `/ready` checks
    PostgreSQL; `/metrics` exposes coarse safe counters only.

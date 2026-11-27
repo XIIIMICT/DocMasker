@@ -136,6 +136,30 @@ schema; runtime behavior is unchanged.
   front typecheck/test, prek, compose config and actionlint; target-hardware
   full-filesystem rehearsal remains in the "Still to verify" list below.
 
+## Worker concurrency and explicit backpressure (2026-11-27) — CLOSED
+
+- Defaults are measurement-derived and pinned in tests: `JOBS_CONCURRENCY=4`
+  (`floor(1024 / (159 MB × 1.5)) = 4` from the 16-job RSS/latency burst),
+  `JOBS_MAX_ACTIVE=32` (2 × the measured 16-submission burst),
+  `JOBS_RETRY_AFTER_SECONDS=45` (drain of the 28-slot backlog at p95 6.2 s).
+  Config rejects `JOBS_MAX_ACTIVE <= JOBS_CONCURRENCY`.
+- Typed `queue_full` 429 keeps the `{code, detail, request_id}` + `X-Request-ID`
+  envelope and adds integer `Retry-After`; the Next proxies forward it, with
+  no client auto-retry. Alerts (24 active, 4 running) and two worker panels
+  were added; thresholds are PROVISIONAL and must move with the settings.
+- **Verified:** backend 533 passed / 4 skipped, 87.01% coverage; front
+  typecheck/lint/format/test (248 pass), build and 86.44% line gate;
+  `promtool check rules` 20 rules SUCCESS; prek and both compose configs green.
+  A live drill accepted 5 × 202 then returned the typed 429 with Russian
+  detail and `Retry-After: 45` (no server-side retry).
+- **Soak evidence:** a full **1800.5 s** (30-minute target met) run at
+  concurrency 4 completed 7,824 synthetic DOCX jobs with 0 failures; 346 raw
+  RSS samples are preserved outside the repo (`…/Temp/opencode/dm_bp_soak_c4_final.jsonl`).
+  No unbounded growth appeared in the Windows working-set proxy, but its
+  ~15 GB plateau is a harness-process figure, not container RSS; the 1 GiB
+  budget assumption and target-host Linux RSS soak remain **OPEN** gates.
+  Numbers, method and caveats: `docs/PERFORMANCE.md` §Concurrency and queue budget.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:

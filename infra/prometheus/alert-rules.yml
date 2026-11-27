@@ -191,6 +191,40 @@ groups:
             PostgreSQL. Дашборд «DocMasker — Рабочая очередь»; job_id — в логах
             воркера (поле job_id).
 
+      - alert: DocMaskerWorkerQueueNearCapacity
+        # PROVISIONAL: 24 = 75% of the JOBS_MAX_ACTIVE default (32). Keep both
+        # this threshold and the dashboard line in sync with .env overrides.
+        expr: |
+          sum(dm_jobs_active{job="docmasker-worker"}) >= 24
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Очередь заданий DocMasker близка к лимиту (24 из 32)"
+          description: >-
+            Активных заданий (staging/queued/running/cancelling) 75% от ёмкости
+            очереди; новые admissions получают typed 429 queue_full с заголовком
+            Retry-After. Дашборд «DocMasker — Рабочая очередь»; job_id — в
+            структурных логах воркера (поле job_id), request_id отклонённых
+            запросов — в логах API.
+
+      - alert: DocMaskerWorkerSaturated
+        # PROVISIONAL: 4 = JOBS_CONCURRENCY default from the measured RSS budget.
+        # All worker slots busy while a backlog remains means arrivals exceed drain.
+        expr: |
+          sum(dm_jobs_running{job="docmasker-worker"}) >= 4
+          and sum(dm_jobs_active{job="docmasker-worker"}) > sum(dm_jobs_running{job="docmasker-worker"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Все слоты воркера DocMasker заняты при непустой очереди"
+          description: >-
+            Running-заданий не меньше JOBS_CONCURRENCY (4), и есть отложенные:
+            приток превышает скорость обработки. Проверьте p95 длительности, RSS
+            воркера и JOBS_CONCURRENCY/JOBS_MAX_ACTIVE. Дашборд «DocMasker —
+            Рабочая очередь»; job_id — в структурных логах воркера.
+
       - alert: DocMaskerWorkerLeaseStuck
         # PROVISIONAL: 5m without a heartbeat, or any rejected lease renewal.
         expr: |

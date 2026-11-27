@@ -92,9 +92,13 @@ class Settings(BaseSettings):
     #: detection scans forward to the next one but never past this limit. An
     #: even longer unbroken run fails closed instead of being cut in half.
     detection_max_window_chars: int = Field(default=16_384, validation_alias="DETECTION_MAX_WINDOW_CHARS")
-    #: Bounded queue / worker (one warm masker per thread).
-    jobs_max_active: int = Field(default=16, validation_alias="JOBS_MAX_ACTIVE")
-    jobs_concurrency: int = Field(default=2, validation_alias="JOBS_CONCURRENCY")
+    #: Bounded queue / worker (one warm masker per thread). Defaults are derived
+    #: from measured RSS/latency — see docs/PERFORMANCE.md §Concurrency and queue budget.
+    jobs_max_active: int = Field(default=32, validation_alias="JOBS_MAX_ACTIVE")
+    jobs_concurrency: int = Field(default=4, validation_alias="JOBS_CONCURRENCY")
+    #: Retry hint (seconds) on a typed 429 queue_full rejection: the measured
+    #: drain time of the full backlog at the chosen concurrency (§OPERATIONS).
+    jobs_retry_after_seconds: float = Field(default=45.0, validation_alias="JOBS_RETRY_AFTER_SECONDS")
     jobs_max_attempts: int = Field(default=3, validation_alias="JOBS_MAX_ATTEMPTS")
     jobs_lease_seconds: float = Field(default=30.0, validation_alias="JOBS_LEASE_SECONDS")
     jobs_poll_seconds: float = Field(default=1.0, validation_alias="JOBS_POLL_SECONDS")
@@ -164,6 +168,7 @@ class Settings(BaseSettings):
             "jobs_lease_seconds",
             "jobs_poll_seconds",
             "jobs_ttl_seconds",
+            "jobs_retry_after_seconds",
             "cache_ttl_seconds",
             "cache_gc_interval_seconds",
             "cache_connect_timeout_seconds",
@@ -217,6 +222,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.jobs_concurrency > self.db_pool_size + self.db_max_overflow:
             msg = "JOBS_CONCURRENCY не должен превышать ёмкость пула PostgreSQL."
+            raise ValueError(msg)
+        if self.jobs_max_active <= self.jobs_concurrency:
+            msg = "JOBS_MAX_ACTIVE должен быть больше JOBS_CONCURRENCY."
             raise ValueError(msg)
         if self.cache_enabled and self.cache_ttl_seconds <= 0:
             msg = "CACHE_TTL_SECONDS должен быть положительным при включённом кэше."

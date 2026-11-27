@@ -35,5 +35,10 @@ export async function POST(request: Request) {
         "unmask-file",
         request.signal,
     );
-    return passThrough(response, ["Content-Disposition", "Cache-Control", "X-Request-ID"]);
+    return passThrough(response, [
+        "Content-Disposition",
+        "Cache-Control",
+        "X-Request-ID",
+        "Retry-After",
+    ]);
 }

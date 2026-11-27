@@ -44,6 +44,12 @@ header with the same value:
 }
 ```
 
+A typed `queue_full` 429 additionally carries `Retry-After: <seconds>` (integer,
+rounded up from `JOBS_RETRY_AFTER_SECONDS`). The envelope, the localized Russian
+`detail`, `request_id` and `X-Request-ID` are unchanged; no other error status
+receives this header. The Next proxies forward it verbatim. There is no
+server-side automatic retry: the client resubmits after the hint.
+
 `code` is stable and machine-readable (`empty_text`, `text_too_large`,
 `invalid_keys`, `invalid_extension`, `invalid_package`, `encrypted_package`,
 `zip_bomb`, `unsafe_xml`, `executor_busy`, `queue_full`, `result_not_ready`,

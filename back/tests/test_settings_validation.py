@@ -28,6 +28,7 @@ _ALIASES: dict[str, str] = {
     "db_connect_timeout_seconds": "DB_CONNECT_TIMEOUT_SECONDS",
     "jobs_concurrency": "JOBS_CONCURRENCY",
     "jobs_max_active": "JOBS_MAX_ACTIVE",
+    "jobs_retry_after_seconds": "JOBS_RETRY_AFTER_SECONDS",
     "jobs_min_free_bytes": "JOBS_MIN_FREE_BYTES",
     "jobs_max_attempts": "JOBS_MAX_ATTEMPTS",
     "cache_max_entries": "CACHE_MAX_ENTRIES",
@@ -81,6 +82,7 @@ def _settings(**overrides: object) -> Settings:
         "jobs_lease_seconds",
         "jobs_poll_seconds",
         "jobs_ttl_seconds",
+        "jobs_retry_after_seconds",
         "staging_lease_seconds",
         "worker_metrics_port",
     ],
@@ -160,6 +162,20 @@ def test_lease_exceeds_db_connect_timeout() -> None:
 def test_worker_concurrency_cannot_exceed_pool_capacity() -> None:
     with pytest.raises(ValidationError, match="ёмкость пула"):
         _settings(jobs_concurrency=50, db_pool_size=2, db_max_overflow=1)
+
+
+def test_measured_defaults_and_retry_policy() -> None:
+    """Defaults are pinned by the measured RSS/latency budget (PERFORMANCE.md)."""
+    settings = _settings()
+    assert settings.jobs_concurrency == 4
+    assert settings.jobs_max_active == 32
+    assert settings.jobs_retry_after_seconds == 45.0
+    assert settings.jobs_max_active > settings.jobs_concurrency
+
+
+def test_queue_capacity_must_exceed_concurrency() -> None:
+    with pytest.raises(ValidationError, match="JOBS_MAX_ACTIVE"):
+        _settings(jobs_concurrency=4, jobs_max_active=4)
 
 
 def test_cache_secret_required_when_enabled() -> None:

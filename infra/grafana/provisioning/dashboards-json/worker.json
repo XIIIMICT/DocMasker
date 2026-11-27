@@ -109,6 +109,47 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Глубина очереди и лимит",
+      "description": "JOBS_MAX_ACTIVE=32; линия 24 — порог алерта DocMaskerWorkerQueueNearCapacity (75%).",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(dm_jobs_active)", "legendFormat": "active" },
+        { "refId": "B", "expr": "sum(dm_jobs_running)", "legendFormat": "running" },
+        { "refId": "C", "expr": "vector(24)", "legendFormat": "75% лимита (24)" },
+        { "refId": "D", "expr": "vector(32)", "legendFormat": "JOBS_MAX_ACTIVE (32)" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Насыщение воркера",
+      "description": "JOBS_CONCURRENCY=4 по измеренному RSS-бюджету; backlog = active - running.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(dm_jobs_running)", "legendFormat": "running" },
+        { "refId": "B", "expr": "vector(4)", "legendFormat": "JOBS_CONCURRENCY (4)" },
+        {
+          "refId": "C",
+          "expr": "sum(dm_jobs_active) - sum(dm_jobs_running)",
+          "legendFormat": "backlog"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     }
   ]
 }

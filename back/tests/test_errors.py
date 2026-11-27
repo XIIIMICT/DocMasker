@@ -1,9 +1,11 @@
 """Phase 6 §8.1: stable error contract, request ids, no PII/traceback leakage."""
 
-from fastapi import FastAPI, status
+import asyncio
+
+from fastapi import FastAPI, HTTPException, status
 from httpx2 import ASGITransport, AsyncClient
 
-from src.errors import REQUEST_ID_HEADER, ApiError, install_error_handlers
+from src.errors import REQUEST_ID_HEADER, RETRY_AFTER_HEADER, ApiError, install_error_handlers
 from src.main import app
 
 
@@ -57,6 +59,44 @@ async def test_every_error_has_code_detail_request_id_and_header() -> None:
     assert codes == ["not_found", "invalid_keys", "result_not_ready", "internal_error", "error"]
     assert responses[1].json()["code"] == "invalid_keys"
     assert responses[1].json()["detail"] == "Файл ключей не является корректным YAML."
+
+
+async def test_queue_full_carries_retry_after_without_changing_the_envelope() -> None:
+    """Explicit backpressure: typed 429 + Retry-After; other errors stay unchanged."""
+    probe = FastAPI()
+    install_error_handlers(probe)
+
+    @probe.get("/typed")
+    async def typed() -> None:
+        code = "queue_full"
+        raise ApiError(code, "Очередь заданий переполнена. Повторите позже.", 429)
+
+    @probe.get("/plain")
+    async def plain() -> None:
+        detail = "Очередь заданий переполнена. Повторите позже."
+        raise HTTPException(status_code=429, detail=detail)
+
+    @probe.get("/conflict")
+    async def conflict() -> None:
+        code = "result_not_ready"
+        raise ApiError(code, "Результат ещё не готов.", 409)
+
+    async with _client(probe) as client:
+        typed_response, plain_response, other = await asyncio.gather(
+            client.get("/typed"), client.get("/plain"), client.get("/conflict")
+        )
+
+    for response in (typed_response, plain_response):
+        assert response.status_code == 429
+        body = response.json()
+        assert set(body) == {"code", "detail", "request_id"}
+        assert body["code"] == "queue_full"
+        assert body["detail"] == "Очередь заданий переполнена. Повторите позже."
+        assert response.headers[REQUEST_ID_HEADER] == body["request_id"]
+        assert response.headers[RETRY_AFTER_HEADER].isdigit()
+        assert int(response.headers[RETRY_AFTER_HEADER]) >= 1
+    assert other.status_code == 409
+    assert RETRY_AFTER_HEADER not in other.headers
 
 
 async def test_request_validation_error_does_not_echo_submitted_pii() -> None:

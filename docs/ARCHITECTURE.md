@@ -183,6 +183,14 @@ preserved, and the Next proxies forward both headers. Probes (`/health`,
 
 ## Execution model / event-loop safety (Phase 6, §10)
 
+- `JOBS_CONCURRENCY` defaults to **4** (was 2), chosen from measured RSS: a
+  conservative 159 MB per-worker share, a documented 1 GiB worker budget and a
+  1.5 safety factor give `floor(1024 / (159 × 1.5)) = 4`. `JOBS_MAX_ACTIVE`
+  defaults to **32** — twice the measured 16-submission burst. Full admission
+  uses the typed 429 `queue_full` envelope plus `Retry-After` (default 45 s,
+  the derived backlog drain time); there is no unbounded queue and no
+  server-side auto-retry. Derivations: `docs/PERFORMANCE.md`,
+  `docs/OPERATIONS.md` §5.
 - `masking/executor.py` keeps **two separate bounded pools**: `run_cpu`
   (`JOBS_CONCURRENCY * 2` slots, overflow → 429) for natasha/OOXML work and
   `run_blocking` (`DB_POOL_SIZE + DB_MAX_OVERFLOW` slots) for short
@@ -302,7 +310,8 @@ Dashboards are code under `infra/grafana/provisioning/` (datasources
 `DocMasker Loki` / `DocMasker Prometheus`, folder `DocMasker`): worker queue
 health (`dm_jobs_active`, `dm_jobs_running`, `dm_jobs_failed_total`,
 `dm_job_duration_seconds`, `dm_job_queue_age_seconds`, lease counters,
-heartbeat), API errors (`dm_http_requests_total`,
+heartbeat, plus capacity/saturation panels derived from those same gauges and
+constant threshold lines — no new metric), API errors (`dm_http_requests_total`,
 `dm_http_last_failure_timestamp_seconds`), cache hit ratio
 (`dm_cache_operations_total`) and artifact disk (`dm_artifact_disk_free_bytes`,
 `dm_runtime_disk_free_bytes`, plus a `JOBS_MIN_FREE_BYTES` threshold line). Every
@@ -312,7 +321,8 @@ placeholders. No new metric was added for readiness: rejections are visible as
 
 Alerts (`infra/prometheus/alert-rules.yml`) cover scrape targets, sustained
 and immediate 5xx, dependency failures (PostgreSQL/Valkey), failed jobs,
-stuck leases/queue backlog, disk pressure, the artifact-storage readiness floor
+stuck leases/queue backlog, near-capacity queue depth and worker saturation,
+disk pressure, the artifact-storage readiness floor
 (1 GiB by default, aligned with `JOBS_MIN_FREE_BYTES`), event-loop lag, cache failures and
 **full stack self-monitoring** (`prometheus`, `loki`, `alertmanager`,
 `grafana` scrape jobs; no Pushgateway rule). Annotations are Russian, name the

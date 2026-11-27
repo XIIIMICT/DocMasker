@@ -9,6 +9,7 @@ contents, keys or PII ever leave the API.
 """
 
 import logging
+import math
 import uuid
 from time import perf_counter
 from typing import Any
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import config
 from .app_logging import bind_request_id, log_error, log_event, log_warning
 from .cache_headers import NO_STORE_HEADERS, is_api_path
 from .jobs.readiness import ArtifactStorageError
@@ -33,6 +35,7 @@ from .observability import route_template
 LOGGER = logging.getLogger("docmasker.errors")
 
 REQUEST_ID_HEADER = "X-Request-ID"
+RETRY_AFTER_HEADER = "Retry-After"
 
 
 class ApiErrorResponse(BaseModel):
@@ -51,7 +54,7 @@ _REQUEST_ID_HEADER_SCHEMA: dict[str, Any] = {
 
 def error_responses(*statuses: int) -> dict[int, dict[str, Any]]:
     """Reusable OpenAPI declarations for the single sanitized error envelope."""
-    return {
+    responses: dict[int, dict[str, Any]] = {
         code: {
             "model": ApiErrorResponse,
             "description": "Sanitized error: stable code, Russian detail, opaque request id.",
@@ -59,6 +62,13 @@ def error_responses(*statuses: int) -> dict[int, dict[str, Any]]:
         }
         for code in statuses
     }
+    if status.HTTP_429_TOO_MANY_REQUESTS in responses:
+        headers: dict[str, Any] = responses[status.HTTP_429_TOO_MANY_REQUESTS]["headers"]
+        headers[RETRY_AFTER_HEADER] = {
+            "description": "Present on queue_full rejections: whole seconds before resubmitting.",
+            "schema": {"type": "integer", "minimum": 1},
+        }
+    return responses
 
 
 #: Stable codes per HTTP status, used when a plain HTTPException is raised.
@@ -127,9 +137,12 @@ def _error_body(code: str, detail: str, request_id: str) -> dict[str, str]:
     return {"code": code, "detail": detail, "request_id": request_id}
 
 
-def _error_headers(request: Request, request_id: str) -> dict[str, str]:
-    """Correlate every error; API errors also carry the wire cache policy."""
+def _error_headers(request: Request, request_id: str, *, code: str | None = None) -> dict[str, str]:
+    """Correlate errors, keep no-store on API paths, hint retry on queue_full."""
     headers = {REQUEST_ID_HEADER: request_id}
+    if code == "queue_full":
+        retry_after = math.ceil(config.get_settings().jobs_retry_after_seconds)
+        headers[RETRY_AFTER_HEADER] = str(max(1, retry_after))
     if is_api_path(request.url.path):
         headers.update(NO_STORE_HEADERS)
     return headers
@@ -192,7 +205,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(exc.code, str(exc.detail), rid),
-            headers=_error_headers(request, rid),
+            headers=_error_headers(request, rid, code=exc.code),
         )
 
     @app.exception_handler(ArtifactStorageError)
@@ -202,7 +215,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content=_error_body(exc.code, exc.detail, rid),
-            headers=_error_headers(request, rid),
+            headers=_error_headers(request, rid, code=exc.code),
         )
 
     @app.exception_handler(HTTPException)
@@ -215,7 +228,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(code, detail, rid),
-            headers=_error_headers(request, rid),
+            headers=_error_headers(request, rid, code=code),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -225,7 +238,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content=_error_body("validation_error", "Некорректные данные запроса.", rid),
-            headers=_error_headers(request, rid),
+            headers=_error_headers(request, rid, code="validation_error"),
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -234,7 +247,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(_DEFAULT_CODES.get(exc.status_code, "error"), "Ошибка запроса.", rid),
-            headers=_error_headers(request, rid),
+            headers=_error_headers(request, rid, code=_DEFAULT_CODES.get(exc.status_code, "error")),
         )
 
     @app.exception_handler(Exception)
@@ -245,5 +258,5 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=_error_body("internal_error", "Внутренняя ошибка сервера.", rid),
-            headers=_error_headers(request, rid),
+            headers=_error_headers(request, rid, code="internal_error"),
         )
