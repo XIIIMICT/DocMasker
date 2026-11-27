@@ -242,6 +242,98 @@ own `<mark class="docx-marker">`, and every pass first removes previous marks,
 so re-application after a keys edit never nests or duplicates a mark. These
 cases are pinned by `front/src/shared/ui/__tests__/docx-viewer.test.ts`.
 
+## Result-archive unpacking (Phase 3.2)
+
+Both sync file responses and `/api/jobs/{id}/result` are **one flat ZIP**
+(`docs/API.md` §`POST /api/mask-file`, §`GET /api/jobs/{id}/result`). The
+frontend has to unpack it: `manifest.json` is the only authoritative source of
+statistics/coverage, the entry names are the download filenames, and the
+`.docx` Blob feeds the in-page preview. JSZip **3.10.2** is kept.
+
+### Data lifecycle (STATIC — read from source)
+
+| Object | Coexists with | Released when |
+|---|---|---|
+| `JobAccepted` handle + `sessionStorage` copy | polling, result fetch, unpack | `endJob()` on terminal state or dismissal (`use-job-lifecycle.ts:42–61`); only opaque id persisted |
+| Status JSON (`jobs.ts:77–82`) | the next fetch decision | after the terminal status is read; the URL string lives only in the local call |
+| Result response Blob (`jobs.ts:85–91`) | the JSZip ArrayBuffer during unpack | at function exit/throw; JSZip copies it into one `ArrayBuffer` via `Blob.arrayBuffer()` (`lazy-zip.ts:21–31`, JSZip `lib/utils.js::prepareContent`) |
+| JSZip instance + compressed subarray views | every extracted entry Blob | when the local `zip` leaves scope at return/throw (`jobs.ts:93–107`); clearing `zip.files` early was measured to give no benefit (below) |
+| Extracted entry Blobs (`jobs.ts:95–107`) | `JobResult.entries` → `MaskedBundle`/`RestoredBundle` | after `jobBundle`/`jobToMaskResponse` (`mask-helpers.ts:22–56`) commits state (`use-masker-workflow.ts:239–250`, `290–294`) or the error branch clears it (`:251–257`, `:303–309`); on abort/failure `entries.clear()` runs first (`jobs.ts:101–105`) |
+| `manifest.json` text → validated `ResultManifest` | the bundle | text released after `parseResultManifest`; object lives with the bundle (`mask-archive.ts:41–43`, `mask-helpers.ts:39–55`) |
+| Preview DOM (detached staging → surface) | committed nodes + highlight timers | cleared on switch/unmount/success/failure (`docx-viewer.tsx:125–141`, `157–220`); rendered nodes do not retain the source Blob |
+| Download object URL (`result-download.ts:4–24`) | the anchor until `click()` hands off | anchor removed immediately, URL revoked on the next macrotask in `finally`; the browser reads the same Blob, so no copy is made |
+| Demask input scan (`placeholder-count.ts:33–81`) | selected `File`, one XML part at a time | promise cached per Blob in a `WeakMap`; released when the Blob is collected (separate pre-operation path, not a result archive) |
+
+Abort semantics (durable): `waitForJob` checks the signal before the result
+fetch, after the fetch, after `blob()`, after `loadAsync()` and before/after
+every entry read (`jobs.ts:84–100`). JSZip has no `AbortSignal`, so an already
+started inflate cannot be stopped through its API; the loop stops at the next
+boundary and clears any already extracted Blobs instead of publishing a
+partial result. `useJobLifecycle` aborts its local polling controller on
+unmount (`use-job-lifecycle.ts:184–194`) without issuing a `DELETE` — only a
+confirmed server cancellation may claim the job was cancelled. Object URLs
+are already revoked on both success and failure; no change was needed.
+
+### Measurements — SYNTHETIC / MEASURED (local, 2026-11-27)
+
+No large committed browser fixture exists, so two deterministic archives were
+generated locally with JSZip 3.10.2 (seed 20261127), never committed:
+**media-heavy** = 8,624,882 B flat ZIP (inner `.docx` 8,620,578 B with 8 MiB
+pseudo-random media + 6,000 paragraphs), **text-heavy** = 2,270,285 B flat ZIP
+(60,000 paragraphs, ~12 MiB XML before deflate) + keys/manifest. All entries
+use `DEFLATE`, matching `back/src/masking/archives.py:40–48`.
+
+| Scenario (SYNTHETIC) | Chromium wall median [min..max] | Chromium peak Δ JS heap median [min..max] | Bun wall median [min..max] |
+|---|---:|---:|---:|
+| `waitForJob` unpack, media-heavy | 28.9 ms [27.6..183.2] | 25.75 MiB [25.73..32.19] | 22.3 ms [19.4..36.0] |
+| `waitForJob` unpack, text-heavy | 10.6 ms [9.3..12.3] | 6.89 MiB [4.37..6.91] | 4.6 ms [4.3..5.7] |
+| sync mask unpack, media-heavy | 30.6 ms [30.1..50.4] | 25.87 MiB [25.86..26.63] | 20.2 ms [19.3..23.0] |
+
+7 runs per cell. Chromium: Chrome on PATH, headless,
+`--enable-precise-memory-info`/`--js-flags=--expose-gc`, CDP
+`HeapProfiler.collectGarbage` before each run, in-page 1 ms sampler of
+`performance.memory.usedJSHeapSize` for the peak and `Performance.getMetrics`
+cross-check (post-GC `JSHeapUsedSize` delta ≈ 0.25 MiB — no retained archive).
+Bun: `Bun.gc(true)`, 2 ms sampler, `heapUsed + arrayBuffers`; the Bun RSS/heap
+proxy is noisier and is reported only as a cross-check. Phase split in
+Chromium (media-heavy): central-directory load **8.9 ms**, inflate + Blob
+materialisation **20.2 ms** — the cost is proportional to the bytes that must
+be decompressed, not a JSZip API hotspot. Explicitly deleting `zip.files`
+entries after extraction changed the Chromium peak from 25.75 to 25.74 MiB
+(media) and 10.6 → 9.6 ms wall (text, within spread), so no release code was
+added on that basis. These are **SYNTHETIC** fixtures on one local host, not
+production measurements; target-hardware browser profiling remains open.
+
+### Alternatives evaluated (paper decisions with local probes)
+
+- **Keep JSZip.** It is already lazy-loaded (`lazy-zip.ts`), single-flight, and
+  its reader stores the compressed ZIP in one `ArrayBuffer` with subarray
+  views — not one copy per entry (JSZip `lib/zipEntries.js`, `lib/reader/Uint8ArrayReader.js`).
+- **`fflate@0.8.3`** (npm tarball probed outside the repo): `unzipSync` was
+  faster in Bun (11.8 ms [10.0..15.1] media, peak 34.31 MiB) but synchronous on
+  the main thread; an async/worker path plus Blob/error adaptation would be a
+  new runtime dependency and a rewrite of every ZIP call site for a ~20 ms
+  synthetic win. Rejected.
+- **`@zip.js/zip.js@2.25.0`** (tarball probed outside the repo): its streaming
+  `BlobReader` was **slower** in Bun (23.0 ms [21.1..78.5] media, peak 77.11 MiB)
+  than JSZip (22.3 ms, 67.36 MiB). Streaming is not automatically better for a
+  flat archive whose central directory is at the end. Rejected.
+- **No client unpack / backend streams separate resources:** rejected. The
+  backend writes one flat ZIP atomically (`archives.py:40–62`; job results are
+  a single attempt-scoped artifact published only after the fenced `succeeded`
+  transition, `back/src/jobs/AGENTS.md` §"Artifacts & cache ownership"), and
+  every `/api/*` response shares `Cache-Control: no-store` (`docs/API.md`).
+  Separate resources would need new DB keys, multiple fetches with partial
+  states, filename/manifest ordering and a new cache policy — a protocol
+  change that would compromise atomicity/integrity for a few client lines.
+- **Object URL / direct download:** already the case; no extra copy and no
+  leaked URL. No change.
+
+Regression coverage: `jobs.test.ts` (cancellation after the result arrived,
+abort during the archive read), `mask-requests.test.ts` (stale accepted job
+publishes no bundle), `use-job-lifecycle.test.ts` (unmount aborts local
+polling without a server `DELETE`) and the existing unpack/failure tests.
+
 ## Tests
 
 `back/tests/test_ooxml.py` builds synthetic OPC fixtures by hand: default

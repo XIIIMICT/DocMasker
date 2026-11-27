@@ -157,7 +157,12 @@ TypeScript indexing"). Durable coding rules:
    confirmed. `waitForJob()` removes each abort listener when its poll timer
    fires and clears the timer on abort. A result ZIP without `result.json`
    clears cleanly; the browser retains the full result Blob while JSZip
-   unpacks it (documented client-side memory limit, not streaming).
+   unpacks it (documented client-side memory limit, not streaming). Result
+   unpacking checks the abort signal at every await boundary: a confirmed
+   cancellation or unmount discards partial entries and publishes no result;
+   `useJobLifecycle` aborts its local controller on unmount without cancelling
+   the server job. JSZip 3.10.2 stays — measurement and rejected alternatives
+   are in `docs/DOCX_SUPPORT.md` §"Result-archive unpacking".
 
 ## Layout (detail — docs/ARCHITECTURE.md)
 

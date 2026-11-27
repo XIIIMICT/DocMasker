@@ -181,5 +181,17 @@ export function useJobLifecycle({
         return () => controller.abort();
     }, [setStateByMode]);
 
+    // A page unmount cannot wait for a running job. Stop local polling (and
+    // any in-flight unpack/checks) without cancelling the server job: only a
+    // confirmed DELETE does that. The resume effect owns its own controller.
+    useEffect(
+        () => () => {
+            const controller = pollingController.current;
+            pollingController.current = null;
+            controller?.abort();
+        },
+        [],
+    );
+
     return { trackAccepted, endJob, finish, pollingController, onCancelJob };
 }

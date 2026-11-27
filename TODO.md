@@ -123,6 +123,58 @@ observable only as forced reflow in Chromium; happy-dom has no layout engine.
   production-image CI stack on :15001 was **not** running, so production smoke
   was not run; no target-hardware browser profiling was attempted.
 
+## Frontend result-archive memory profile (audit Phase 3.2, 2026-11-27) — CLOSED
+
+- **Lifecycle written down** (STATIC, file:line) in `docs/DOCX_SUPPORT.md`
+  §"Result-archive unpacking": job handle, status JSON, result Blob, JSZip's
+  single compressed `ArrayBuffer` + subarray views, extracted entry Blobs,
+  validated manifest, preview DOM, object URLs and the separate demask scan —
+  each with the point where it can be released. No large committed browser
+  fixture exists; two deterministic flat ZIPs were generated locally and kept
+  outside the repo (seed 20261127: 8,624,882 B media-heavy, 2,270,285 B
+  text-heavy, `DEFLATE` to match `archives.py:40–48`).
+- **SYNTHETIC / MEASURED (local, 7 runs per cell):** Chromium headless wall
+  median **28.9 ms** [27.6..183.2] and peak Δ JS heap **25.75 MiB**
+  [25.73..32.19] for the media-heavy `waitForJob` unpack, **10.6 ms**
+  [9.3..12.3] / **6.89 MiB** [4.37..6.91] for text-heavy; Bun cross-check
+  **22.3 ms** [19.4..36.0] / **4.6 ms** [4.3..5.7]. Phase split (media):
+  central-directory load 8.9 ms, inflate + Blob materialisation 20.2 ms.
+  Post-GC CDP `JSHeapUsedSize` delta ≈ 0.25 MiB — no retained archive. These
+  are synthetic local numbers, **not production measurements**; target-hardware
+  browser profiling stays in "Still to verify on target hardware".
+- **Proven defect, tests first:** four new deterministic tests failed on the
+  branch base — an already-finished job whose cancellation was confirmed while
+  its ZIP was being read still published a result, an abort during the archive
+  read still unpacked, a stale accepted job produced a bundle, and unmount left
+  the polling controller live. Fix: abort checks at every await boundary in
+  `waitForJob`, `entries.clear()` on failure/abort so no partial result escapes,
+  and `useJobLifecycle` aborting its local controller on unmount **without**
+  issuing a `DELETE`. Error stays the fixed Russian `JobFailedError("cancelled")`;
+  nothing is logged and no filename/value is exposed.
+- **Decision: KEEP JSZip 3.10.2.** It is lazy/single-flight, and its reader
+  keeps one `ArrayBuffer` with subarray views (not one copy per entry).
+  Explicitly deleting `zip.files` after extraction changed the Chromium peak
+  25.75 → 25.74 MiB and wall 10.6 → 9.6 ms (within spread), so no release
+  code was added on that basis. Local tarball probes: `fflate@0.8.3`
+  `unzipSync` 11.8 ms in Bun but synchronous on the main thread; `@zip.js/zip.js@2.25.0`
+  streaming `BlobReader` 23.0 ms / 77.11 MiB peak versus JSZip 22.3 ms /
+  67.36 MiB. Neither justifies a new runtime dependency. Rewriting every ZIP
+  call site for a synthetic ~20 ms win was rejected.
+- **No backend protocol change:** the flat ZIP is built atomically
+  (`archives.py:40–62`) and job results are one fenced, attempt-scoped artifact
+  (`back/src/jobs/AGENTS.md` §"Artifacts & cache ownership") under the global
+  `no-store` policy. Separate streams would add partial states, new DB keys and
+  filename/manifest-ordering risk — rejected for a few client lines. Object
+  URLs are already revoked in `finally` on success/failure; no copy or change.
+- **Verified:** `bun run --cwd front format:check`, `lint:check`, `typecheck`
+  (89 files), `test` (**287 pass / 0 fail**, 913 `expect()` calls, 31 files;
+  pre-existing HeroUI act warnings only), `build` (9 routes, compiled in
+  574 ms on the final run / 899 ms on the first) and `prek run --all-files`
+  green. Targeted Playwright (job + manifest subset)
+  **3/3** in 3.3 s and full `smoke` project **40/40** in 41.4 s against
+  `http://127.0.0.1:5001` via `local.playwright.config.ts`; smoke discovery
+  guard **40 tests / 4 specs**. No push or merge.
+
 ## OpenAPI → TypeScript declarations (finding 8, 2026-11-27) — CLOSED
 
 The earlier maintainer deferral (2026-11-24, «поместим в TODO») is superseded by
@@ -441,6 +493,8 @@ Remaining (all OPEN, see the target-host checklist in
 
 - real POSIX SIGTERM delivery, a real full filesystem and target-hardware
   repetitions of the crash/pool/concurrency drills;
+- browser peak-memory/wall-time repetition for result-archive unpacking on the
+  target host (only local SYNTHETIC fixtures were measured in Phase 3.2);
 - backup/restore on the authorized host with the real RO-mounted exception
   config and named volumes (now also the `dm-pgbackup` sidecar + drill); only
   the synthetic-config/disposable-stand rehearsals exist locally;

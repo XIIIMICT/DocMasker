@@ -34,6 +34,15 @@ export async function cancelJob(accepted: JobAccepted): Promise<CancelJobResult>
     }
 }
 
+/**
+ * JSZip has no AbortSignal: an already-started read cannot be stopped through
+ * its API. Check the signal at every boundary instead, so a confirmed cancel
+ * or an unmount can neither publish a result nor keep unpacking further parts.
+ */
+function assertActive(signal: AbortSignal | undefined): void {
+    if (signal?.aborted) throw new JobFailedError("cancelled");
+}
+
 function buildResult(entries: Map<string, Blob>): JobResult {
     return {
         entries,
@@ -54,9 +63,11 @@ function buildResult(entries: Map<string, Blob>): JobResult {
 /**
  * Poll a job until it reaches a terminal state, then download and unpack its
  * result. Uses exponential backoff and a bounded attempt count; the caller's
- * AbortSignal cancels polling (e.g. when the user switches modes). Job
- * results are one flat ZIP; the browser keeps the full response Blob while
- * JSZip unpacks it (a documented client-side memory limit, not streaming).
+ * AbortSignal cancels polling and every unpack step (e.g. on confirmed cancel
+ * or unmount). Job results are one flat ZIP; the browser keeps the full
+ * response Blob while JSZip unpacks it (a documented client-side memory
+ * limit, not streaming). A cancellation after the ZIP arrived discards the
+ * partial unpack instead of publishing it.
  */
 export async function waitForJob(accepted: JobAccepted, signal?: AbortSignal): Promise<JobResult> {
     let delay = POLL_BASE_MS;
@@ -70,15 +81,29 @@ export async function waitForJob(accepted: JobAccepted, signal?: AbortSignal): P
         if (!statusResponse.ok) throw new JobFailedError("status_unavailable");
         const status = (await statusResponse.json()) as JobStatus;
         if (status.status === "succeeded" && status.result_url) {
+            assertActive(signal);
             const resultResponse = await fetch(status.result_url, {
                 signal: signal ?? null,
                 cache: "no-store",
             });
             if (!resultResponse.ok) throw new JobFailedError("result_unavailable");
-            const zip = await (await loadJsZip()).loadAsync(await resultResponse.blob());
+            assertActive(signal);
+            const archive = await resultResponse.blob();
+            assertActive(signal);
+            const zip = await (await loadJsZip()).loadAsync(archive);
+            assertActive(signal);
             const entries = new Map<string, Blob>();
-            for (const [name, entry] of Object.entries(zip.files)) {
-                if (!entry.dir) entries.set(name, await entry.async("blob"));
+            try {
+                for (const [name, entry] of Object.entries(zip.files)) {
+                    assertActive(signal);
+                    if (!entry.dir) entries.set(name, await entry.async("blob"));
+                }
+                assertActive(signal);
+            } catch (error) {
+                // A failed or cancelled unpack must never leak a partially
+                // extracted archive to callers (or keep those Blobs alive).
+                entries.clear();
+                throw error;
             }
             return buildResult(entries);
         }

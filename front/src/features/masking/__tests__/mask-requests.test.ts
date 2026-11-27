@@ -289,6 +289,51 @@ describe("job failures and malformed results", () => {
         ).rejects.toBeInstanceOf(JobFailedError);
     });
 
+    it("does not publish a bundle when an accepted job is cancelled during unpacking", async () => {
+        const OriginalController = globalThis.AbortController;
+        let captured: AbortController | null = null;
+        globalThis.AbortController = new Proxy(OriginalController, {
+            construct(target, args) {
+                const instance: AbortController = Reflect.construct(target, args);
+                captured = instance;
+                return instance;
+            },
+        }) as unknown as typeof AbortController;
+        globalThis.fetch = (async (url: string | URL | Request) => {
+            const path = String(url);
+            if (path === ACCEPTED.status_url) {
+                return jsonResponse({
+                    job_id: JOB_ID,
+                    status: "succeeded",
+                    phase: "completed",
+                    progress: 100,
+                    attempt: 1,
+                    error_code: null,
+                    result_url: ACCEPTED.result_url,
+                });
+            }
+            if (path === ACCEPTED.result_url) {
+                const response = await zipResponse(MASK_ZIP);
+                // The controller created by resolveMaskBundle becomes stale
+                // between the arrived ZIP and its unpack.
+                captured?.abort();
+                return response;
+            }
+            throw new Error(`unexpected request: ${path}`);
+        }) as unknown as typeof fetch;
+        const jobs = fakeJobs();
+
+        try {
+            await expect(
+                resolveMaskBundle(jsonResponse(ACCEPTED, 202), jobs.session),
+            ).rejects.toBeInstanceOf(JobFailedError);
+            // The success path (and therefore endJob) must never run for a stale job.
+            expect(jobs.calls).toEqual(["track"]);
+        } finally {
+            globalThis.AbortController = OriginalController;
+        }
+    });
+
     it("rejects a result ZIP without a manifest on both the sync and job path", async () => {
         globalThis.fetch = (async () =>
             zipResponse({
