@@ -71,6 +71,8 @@ services:
       BACKEND_PORT: ${BACKEND_PORT:?}
       WORKER_METRICS_HOST: ${WORKER_METRICS_HOST:-worker}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-8002}
+      BACKUP_METRICS_HOST: ${BACKUP_METRICS_HOST:-pgbackup}
+      BACKUP_METRICS_PORT: ${BACKUP_METRICS_PORT:-9113}
       LOG_ENV: ${LOG_ENV:-local}
     volumes:
       - ./prometheus/prometheus.yml.tpl:/etc/prometheus/prometheus.yml.tpl:ro

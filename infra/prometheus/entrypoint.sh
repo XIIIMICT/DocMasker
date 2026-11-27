@@ -11,6 +11,8 @@ set -eu
 : "${BACKEND_PORT:?BACKEND_PORT is empty — backend scrape target is invalid}"
 : "${WORKER_METRICS_HOST:?WORKER_METRICS_HOST is empty — worker scrape target is invalid}"
 : "${WORKER_METRICS_PORT:?WORKER_METRICS_PORT is empty — worker scrape target is invalid}"
+: "${BACKUP_METRICS_HOST:?BACKUP_METRICS_HOST is empty — backup scrape target is invalid}"
+: "${BACKUP_METRICS_PORT:?BACKUP_METRICS_PORT is empty — backup scrape target is invalid}"
 : "${LOG_ENV:?LOG_ENV is empty — scrape labels would be meaningless}"
 
 # '/' and '@' can appear in a host; use '|' as sed delimiter. Values come from
@@ -20,6 +22,8 @@ sed \
   -e "s|\${BACKEND_PORT}|${BACKEND_PORT}|g" \
   -e "s|\${WORKER_METRICS_HOST}|${WORKER_METRICS_HOST}|g" \
   -e "s|\${WORKER_METRICS_PORT}|${WORKER_METRICS_PORT}|g" \
+  -e "s|\${BACKUP_METRICS_HOST}|${BACKUP_METRICS_HOST}|g" \
+  -e "s|\${BACKUP_METRICS_PORT}|${BACKUP_METRICS_PORT}|g" \
   -e "s|\${LOG_ENV}|${LOG_ENV}|g" \
   /etc/prometheus/prometheus.yml.tpl > /tmp/prometheus.yml
 

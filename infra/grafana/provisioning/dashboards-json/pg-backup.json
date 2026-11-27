@@ -1,0 +1,123 @@
+{
+  "uid": "docmasker-pg-backup",
+  "title": "DocMasker — Резервные копии PostgreSQL",
+  "tags": ["docmasker", "backup"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-7d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Возраст последнего бекапа",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "dm_pg_backup_last_success_age_seconds" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 72000 },
+              { "color": "red", "value": 90000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Размер дампа",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "dm_pg_backup_last_size_bytes" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Off-host настроен (0 = требование не выполнено)",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "dm_pg_backup_offhost_configured" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Дампы: возраст репетиции и последней неудачи",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "dm_pg_backup_drill_last_success_age_seconds", "legendFormat": "успешный drill" },
+        { "refId": "B", "expr": "dm_pg_backup_drill_last_failure_age_seconds", "legendFormat": "последняя неудача drill" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Итоги бекапов и репетиций",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (dm_pg_backup_runs_total)", "legendFormat": "backup {{outcome}}" },
+        { "refId": "B", "expr": "sum by (outcome) (dm_pg_backup_drill_runs_total)", "legendFormat": "drill {{outcome}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Последняя ошибка по операции и число дампов",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "dm_pg_backup_last_failure_timestamp_seconds", "legendFormat": "{{operation}}" },
+        { "refId": "B", "expr": "dm_pg_backup_files_retained", "legendFormat": "retained" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

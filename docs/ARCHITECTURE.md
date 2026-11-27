@@ -330,6 +330,18 @@ disk pressure, the artifact-storage readiness floor
 dashboard and say where `request_id`/`job_id` can be found; provisional
 thresholds are marked as such.
 
+The backup sidecar `dm-pgbackup` (`infra/backup/`, service declared in
+`infra/compose.db.yaml`, started with `just backup-stand`) is a separate
+`postgres:18-alpine` + python3-stdlib container: daily `pg_dump -Fc` into the
+private volume `dm-postgres-backups` and a weekly restore drill into a scratch
+database with a fingerprint assertion. It exposes only a narrow `dm_pg_backup_*`
+endpoint on `pgbackup:9113`, scraped as `docmasker-pg-backup`; its dashboard is
+«DocMasker — Резервные копии PostgreSQL» and its five alerts live in the
+`docmasker_pg_backup` group. The assumed RPO, retention, off-host caveat and
+restore procedure are in `docs/RUNBOOKS.md`; the sidecar dumps only PostgreSQL
+(the artifact spool still needs a consistent manual copy). No WAL archiving or
+PITR is provided.
+
 **Documented deviation:** Alertmanager → the in-project Postfix relay uses
 plain SMTP on port 25 (`smtp_require_tls: false`) because it is an internal hop
 to our own container. The relay → corporate SMTP hop uses STARTTLS on 587 with

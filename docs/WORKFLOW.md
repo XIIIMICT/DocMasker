@@ -13,6 +13,10 @@ this file in the same change (see "Documentation discipline").
    `just seed` (Alembic `0001_jobs` + verify the `jobs` table; idempotent).
    `just migrate` applies migrations without seeding. Required before any
    app stack or integration tests — the app does **not** start its own DB.
+   The optional backup sidecar is started separately with `just backup-stand`
+   (daily verified dump + weekly restore drill); one-shot `just backup-now` /
+   `just backup-drill` are the operator tools. Contract, RPO assumption,
+   retention, off-host config and alert response: `docs/RUNBOOKS.md`.
 4. Run: `just dev` (compose, profile `dev`, hot-reload via `--watch`) — starts
    `dm-back-dev`, `dm-worker-dev`, `dm-front-dev` against the existing stand.
    `just prod` starts `dm-back`, `dm-worker`, `dm-front`. PostgreSQL is the
@@ -167,7 +171,9 @@ Local reproduction of the `production` job: build the images (`docker compose -f
   (HTTP contract), `docs/MASKING_CONFIGURATION.md` (keys/masking configuration),
   `docs/PERFORMANCE.md`
   (benchmarks/limits), `docs/WORKFLOW.md` (process/CI), `docs/ARCHITECTURE.md`
-  (system/pipeline), `docs/DOCX_SUPPORT.md` (OOXML coverage), `docs/adr/`
+  (system/pipeline), `docs/DOCX_SUPPORT.md` (OOXML coverage),
+  `docs/RUNBOOKS.md` (PostgreSQL backup/restore, off-host, alert response),
+  `docs/adr/`
   (decisions), `TODO.md` (living status).
 - **Record a landmine immediately** when you hit it — one line in the relevant
   per-area guide (`back/AGENTS.md`, `front/AGENTS.md`, `infra/AGENTS.md`). Easy
