@@ -51,6 +51,7 @@ Database recipes: `just db-stand`, `just seed`, `just migrate`,
 - **Attention:** `bun format` (oxfmt) may rewrite line breaks in untouched files. After format, check `git status`/`git diff`; restore foreign files with `git checkout -- <file>`.
 - Unit tests — `bun test` with happy-dom (`front/src/test-setup.ts`, wired via `bunfig.toml`); they live in `__tests__` next to the code and run from `src` only.
 - `bun run --cwd front gen:labels` regenerates `src/shared/api/labels.generated.ts` from the backend's canonical `back/config/masking/labels.yaml`; CI verifies the committed file is fresh. Never edit it by hand.
+- `bun run --cwd front gen:openapi` regenerates `src/shared/api/generated/openapi.d.ts` from the in-process `app.openapi()` export (`uv run --directory back python -m src.openapi_export`); `--check` verifies freshness in CI. The pinned generator is dev-only and emits types, never a client SDK or runtime dependency. Never edit the generated file by hand.
 - e2e — Playwright (`front/playwright.config.ts`, `front/e2e/`). The `smoke` project hits a running stack; see below.
 
 ### e2e (Playwright)
@@ -133,6 +134,7 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 | `config` | actionlint + `docker compose config` for `prod`/`dev` and `infra/compose.ci.yaml` |
 | `back` | locked uv sync, ruff check/format, ty, pytest with branch coverage (real PostgreSQL + Valkey integration via job services; artifact: coverage + JUnit) |
 | `front` | Bun **1.4.4 pinned** + Node 26, `next typegen`, `gen:labels` + freshness check, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
+| `openapi-contract` | locked uv sync + pinned Bun/Node, `gen:openapi --check` against the in-process schema export (fails on a stale generated declaration) |
 | `secrets` | gitleaks over the full history (`fetch-depth: 0`); findings are reported, never allowlisted away |
 | `production` | needs `config`+`back`+`front`; builds the prod images once, boots `back`+`worker`+`front` via `infra/compose.ci.yaml`, lists the smoke tests explicitly, runs Playwright `smoke`, exports images on a `v*` tag |
 | `required` | `jq -e 'all(...result == "success")'` over `needs` — the branch-protection gate |

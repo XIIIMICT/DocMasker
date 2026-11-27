@@ -59,9 +59,11 @@ area trees above. Tests: `back/tests/` (see `docs/TESTING.md`).
 7. **`MASK_LABELS` fails startup**; profile APIs/fields were removed in Phase
    4. `GET /api/labels` is the single canonical catalogue. `/ready` checks
    PostgreSQL; `/metrics` exposes coarse safe counters only.
-8. **§8.2 (OpenAPI → TS types) is deferred by maintainer decision.** Do not
-   add `openapi-typescript`/generated `schema.ts`/CI freshness gate; see
-   `TODO.md`.
+8. **§8.2 (OpenAPI → TS types) is implemented.** `app.openapi()` is exported
+   in-process by `python -m src.openapi_export`; the pinned dev-only generator
+   writes `front/src/shared/api/generated/openapi.d.ts` (`bun run --cwd front
+   gen:openapi`, CI gate `gen:openapi --check`). Generated DTOs are compile-time
+   only — no runtime validation, no client SDK. See `docs/API.md`, `TODO.md`.
 9. **Windows/PowerShell mangles UTF-8 request bodies.** Put JSON in a UTF-8
    file and POST with `curl.exe --data-binary @file`, or run inside a container.
    Corrupted Cyrillic in the response is a harness artifact, not a server bug.

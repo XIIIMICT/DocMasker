@@ -4,6 +4,8 @@ import { loadJsZip } from "@/shared/api/lazy-zip";
 import { JOB_WAIT_TIMEOUT_MS, POLL_BASE_MS, POLL_MAX_MS } from "@/shared/api/timeouts";
 
 export { JobFailedError } from "@/shared/api/jobs-types";
+// HTTP DTOs are generated contract types (compile-time only); `JobResult` is
+// the client's own unpacked ZIP view, not an HTTP response.
 export type { JobAccepted, JobResult, JobStatus } from "@/shared/api/jobs-types";
 
 /** sessionStorage key for resuming an active job in the same tab after reload. */

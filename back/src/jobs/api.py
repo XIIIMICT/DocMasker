@@ -2,31 +2,50 @@
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any, get_args
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Response, UploadFile, status
 from fastapi.responses import FileResponse
 
 from src.config import get_settings
-from src.errors import ApiError
+from src.errors import ApiError, error_responses
 from src.masking.docx_validation import DocxValidationError, upload_limits, validate_docx_package_path
 from src.masking.executor import run_blocking
 from src.masking.mapping import KeysValidationError, validate_keys_yaml
 from src.uploads import UploadTooLargeError, cleanup, stage_upload
 
 from .dependencies import artifact_store, job_repository
+from .models import JobKind
 from .repository import JobNotFoundError, JobQueueFullError
 from .routing import enqueue, enqueue_from_path, job_urls
 from .schemas import JobAccepted, JobStatusResponse
 from .storage import ArtifactError
 
 if TYPE_CHECKING:
-    from .models import Job, JobKind
+    from .models import Job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 _ZIP_MIME = "application/zip"
+
+#: Runtime values of `JobKind`, used for both validation and the OpenAPI enum.
+ALLOWED_JOB_KINDS: tuple[JobKind, ...] = get_args(JobKind)
+
+
+def _zip_response() -> dict[str, Any]:
+    """OpenAPI declaration for the downloaded result ZIP (binary, no-store)."""
+    return {
+        "description": "Flat result ZIP (streamed from the private artifact spool).",
+        "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
+        "headers": {
+            "Content-Disposition": {
+                "description": "RFC 5987 attachment file name.",
+                "schema": {"type": "string"},
+            },
+            "Cache-Control": {"description": "Always no-store.", "schema": {"type": "string"}},
+        },
+    }
 
 
 def _unprocessable(code: str, detail: str) -> ApiError:
@@ -63,17 +82,32 @@ def _validated_keys(keys: str | None) -> bytes | None:
     return keys.encode("utf-8")
 
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=JobAccepted)
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobAccepted,
+    responses={
+        202: {"description": "Job accepted; poll status_url, then download result_url."},
+        **error_responses(413, 415, 422, 429),
+    },
+)
 async def submit_job(
     file: Annotated[UploadFile | None, File(description="DOCX file to mask/restore")] = None,
     text: Annotated[str | None, Form(description="Text to mask/restore")] = None,
     keys: Annotated[str | None, Form(description="Demasking keys YAML (unmask only)")] = None,
-    kind: Annotated[str, Form(description="mask_text | mask_file | unmask_text | unmask_file")] = "mask_text",
+    # `str` + a JSON-Schema-only enum keeps the existing 422 unknown_kind error
+    # untouched; a runtime Literal would change its code/detail to validation_error.
+    kind: Annotated[
+        str,
+        Form(
+            description="Job kind: mask_text | mask_file | unmask_text | unmask_file",
+            json_schema_extra={"enum": list(ALLOWED_JOB_KINDS)},
+        ),
+    ] = "mask_text",
     filename: Annotated[str | None, Form(description="Original file name for the result archive")] = None,
 ) -> JobAccepted:
     """Submit a large operation: 202 + opaque job id; uploads are staged/streamed."""
-    allowed: tuple[JobKind, ...] = ("mask_text", "mask_file", "unmask_text", "unmask_file")
-    if kind not in allowed:
+    if kind not in ALLOWED_JOB_KINDS:
         raise _unprocessable("unknown_kind", "Неизвестный тип задания.")
     # Operation-specific fields (§3.11): unmask_* require keys, mask_* reject
     # keys — reject inappropriate fields early.
@@ -133,7 +167,14 @@ async def submit_job(
         await run_blocking(cleanup, staged)
 
 
-@router.get("/{job_id}", response_model=JobStatusResponse)
+@router.get(
+    "/{job_id}",
+    response_model=JobStatusResponse,
+    responses={
+        200: {"description": "Safe status/progress/phase; phase and status are closed unions."},
+        **error_responses(404, 422),
+    },
+)
 async def job_status(job_id: str) -> JobStatusResponse:
     """Status/progress/phase + a safe error code; unknown id → 404."""
 
@@ -159,7 +200,14 @@ async def job_status(job_id: str) -> JobStatusResponse:
     )
 
 
-@router.get("/{job_id}/result")
+@router.get(
+    "/{job_id}/result",
+    response_class=Response,
+    responses={
+        200: _zip_response(),
+        **error_responses(404, 409, 422),
+    },
+)
 async def job_result(job_id: str) -> Response:
     """Stream the ZIP result from disk; 404 when expired, 409 when not ready."""
 
@@ -201,7 +249,14 @@ async def job_result(job_id: str) -> Response:
     return FileResponse(path, media_type=_ZIP_MIME, headers=headers)
 
 
-@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        204: {"description": "Cancellation accepted; no response body."},
+        **error_responses(404, 422),
+    },
+)
 async def cancel_job(job_id: str) -> Response:
     """Idempotent cancellation request (§3.7); unknown id → 404."""
 

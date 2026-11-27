@@ -3,16 +3,22 @@
 The single source for the DocMasker HTTP contract. Implementation:
 `back/src/main.py` (app + `GET /health`), `back/src/masking/router.py` (sync
 mask/unmask), `back/src/jobs/api.py` (`/api/jobs/*`), `back/src/masking/schemas.py`
-and `back/src/jobs/schemas.py` (Pydantic models). All `/api/*` routes are
-mounted under one `APIRouter(prefix="/api")` (`back/src/api.py`).
+and `back/src/jobs/schemas.py` (Pydantic models), `back/src/errors.py` (sanitized
+error envelope), `back/src/openapi_export.py` (deterministic schema export).
+All `/api/*` routes are mounted under one `APIRouter(prefix="/api")`
+(`back/src/api.py`).
 
 The **browser never calls the backend directly**: `front/src/app/api/*/route.ts`
 proxies each path server-side to `BACKEND_INTERNAL_URL`. CORS is enabled on the
 backend only for direct dev access (curl/tools); there is no browser CORS hop.
 
 Interactive OpenAPI docs: `/docs`, `/redoc`, `/openapi.json` (FastAPI defaults).
-Generating client types from that schema is a deferred item (`TODO.md`, §8.2), so
-the shapes below are currently duplicated by hand in `front/src/shared/api/`.
+The schema is an **explicit contract**: response models and status codes are
+declared per route instead of inferred, binary responses are `application/zip`
+with `{"type": "string", "format": "binary"}`, and every `/api/*` error is the
+sanitized `ApiErrorResponse` envelope. Compile-time HTTP DTOs are generated from
+it into `front/src/shared/api/generated/openapi.d.ts`; see §"OpenAPI contract"
+below. Generated types provide **no runtime validation**.
 
 ## Conventions
 
@@ -45,7 +51,31 @@ header with the same value:
 `not_found`, `conflict`, `payload_too_large`, `unsupported_media_type`,
 `unprocessable`, `internal_error`). `detail` stays Russian. Handler is
 `back/src/errors.py::install_error_handlers`; it logs only exception *types*,
-never messages. The Next proxies forward `X-Request-ID` verbatim.
+never messages. The Next proxies forward `X-Request-ID` verbatim. OpenAPI
+declares this envelope (model `ApiErrorResponse`) for every non-2xx `/api/*`
+response, including sanitized 422 validation errors.
+
+### OpenAPI contract and generated types (§8.2)
+
+`app.openapi()` is the single machine-readable contract. The deterministic
+in-process export lives in `back/src/openapi_export.py` (no HTTP server, no DB);
+the pinned, dev-only generator `swagger-typescript-api@13.15.0` emits types only
+(`front/src/shared/api/generated/openapi.d.ts`) — no client SDK, no runtime
+dependency. Regenerate and check freshness from the repo root:
+
+```sh
+bun run --cwd front gen:openapi
+bun run --cwd front gen:openapi --check
+```
+
+The second command is the CI freshness gate (job `openapi-contract`). Generated
+declarations are **compile-time only**; they do not validate responses at
+runtime. PII-bearing internal models (`MaskedEntity`, `JobSubmitText`,
+`JobKindInfo`) and FastAPI's `HTTPValidationError` are not in the schema.
+Non-HTTP contracts are explicitly *not* covered: the ZIP-internal
+`manifest.json`, the demasking keys YAML format, the `labels.yaml` →
+`labels.generated.ts` catalogue, and the Next.js proxy routes. The client-only
+`JobResult` (unpacked ZIP view) also stays handwritten in `jobs-types.ts`.
 
 ### Status codes
 
@@ -53,13 +83,12 @@ never messages. The Next proxies forward `X-Request-ID` verbatim.
 |---|---|---|
 | `200` | success | all |
 | `202` | accepted as a durable job (`JobAccepted`) | oversized sync input, `POST /api/jobs` |
-| `204` | cancelled | `DELETE /api/jobs/{id}` |
-| `400` | malformed JSON body / Pydantic validation | any JSON endpoint (FastAPI default) |
+| `204` | cancelled (no response body) | `DELETE /api/jobs/{id}` |
 | `404` | unknown job id or expired result artifact | `/api/jobs/{id}`, `/result` |
 | `409` | job not ready yet | `/api/jobs/{id}/result` |
 | `413` | text/keys over `MAX_TEXT_CHARS`/`MAX_KEYS_CHARS`, or upload size/entry/zip-bomb limits | text + file endpoints |
 | `415` | malformed / non-Word / encrypted OPC-ZIP package | file endpoints |
-| `422` | empty text, invalid keys YAML, unknown profile, wrong file extension | text + file endpoints |
+| `422` | request validation, empty text, invalid keys YAML, unknown job kind, wrong file extension | text + file + job endpoints |
 | `429` | bounded sync executor or job queue full | sync endpoints, `POST /api/jobs` |
 
 DOCX uploads are validated as OPC/ZIP packages (`docx_validation.py`):

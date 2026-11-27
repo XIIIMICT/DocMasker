@@ -2,9 +2,11 @@
 
 Root `AGENTS.md` is the entry point. Durable contracts: `docs/API.md`,
 `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/DOCX_SUPPORT.md`; deployment —
-`infra/AGENTS.md`; backend — `back/AGENTS.md`. OpenAPI→TS generation is deferred
-(`TODO.md`): `labels.generated.ts`, produced from the backend's
-`back/config/masking/labels.yaml`, is the only generated API file.
+`infra/AGENTS.md`; backend — `back/AGENTS.md`. Generated API files:
+`src/shared/api/generated/openapi.d.ts` (HTTP DTOs from the live `app.openapi()`,
+`bun run --cwd front gen:openapi`, compile-time only) and `labels.generated.ts`
+(from `back/config/masking/labels.yaml`, `bun run --cwd front gen:labels`).
+Never edit either by hand; CI checks both for freshness.
 
 ## Stack and commands (from `front/`)
 

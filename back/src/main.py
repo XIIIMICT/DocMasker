@@ -6,11 +6,13 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST
+from pydantic import BaseModel, Field
 
 from .api import api_router
 from .app_logging import configure_application_logging, log_event
@@ -25,6 +27,26 @@ from .observability import sample_runtime_metrics
 settings = get_settings()
 configure_application_logging()
 LOGGER = logging.getLogger("docmasker.application")
+
+
+class HealthResponse(BaseModel):
+    """Liveness body; no dependency state is exposed."""
+
+    status: Literal["ok"]
+
+
+class ReadyResponse(BaseModel):
+    """Readiness body when PostgreSQL is reachable."""
+
+    status: Literal["ready"]
+    labels: int = Field(description="Number of canonical labels in the loaded config.")
+
+
+class NotReadyResponse(BaseModel):
+    """Readiness body on dependency failure; never a DSN or DB message."""
+
+    status: Literal["not_ready"]
+    reason: str = Field(description="Safe Russian reason; no DSN, path or exception text.")
 
 
 @asynccontextmanager
@@ -67,13 +89,23 @@ app.include_router(api_router)
 install_error_handlers(app)
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    responses={200: {"description": "Always ok; no model to load."}},
+)
 async def healthcheck() -> dict[str, str]:
     """Liveness probe: always ok (no model to load), used by Docker healthcheck."""
     return {"status": "ok"}
 
 
-@app.get("/ready")
+@app.get(
+    "/ready",
+    responses={
+        200: {"model": ReadyResponse, "description": "PostgreSQL reachable."},
+        503: {"model": NotReadyResponse, "description": "PostgreSQL unreachable (safe reason only)."},
+    },
+)
 async def readiness() -> JSONResponse:
     """Verify the PostgreSQL substrate; Valkey is observed but never gates readiness."""
     started = time.perf_counter()

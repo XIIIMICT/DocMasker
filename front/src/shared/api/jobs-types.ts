@@ -1,32 +1,15 @@
+import type {
+    JobAccepted as GeneratedJobAccepted,
+    JobStatusResponse,
+} from "@/shared/api/generated/openapi";
+
+// Generated HTTP DTOs (compile-time only — no runtime validation). Local names
+// stay stable for existing callers; ZIP-internal types below are not HTTP DTOs.
 /** The 202 body returned by the backend when an input is handled as a job. */
-export interface JobAccepted {
-    job_id: string;
-    status: string;
-    status_url: string;
-    result_url: string;
-}
+export type JobAccepted = GeneratedJobAccepted;
 
 /** Client-visible job state (safe metadata only — no PII). */
-export interface JobStatus {
-    job_id: string;
-    status:
-        | "staging"
-        | "queued"
-        | "running"
-        | "cancelling"
-        | "succeeded"
-        | "failed"
-        | "cancelled"
-        | "expired";
-    phase: string;
-    progress: number;
-    attempt: number;
-    error_code: string | null;
-    cancel_requested: boolean;
-    created_at: number | null;
-    finished_at: number | null;
-    result_url: string | null;
-}
+export type JobStatus = JobStatusResponse;
 
 export class JobFailedError extends Error {
     constructor(public readonly code: string) {
