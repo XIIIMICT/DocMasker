@@ -1,0 +1,304 @@
+{
+  "cases": [
+    {
+      "name": "cli_guard",
+      "non_disposable_rejected": true,
+      "credentials_redacted": true
+    },
+    {
+      "name": "crash:staging",
+      "status": "failed",
+      "error_code": "staging_abandoned",
+      "published": false,
+      "artifact_files_after_sweep": 0
+    },
+    {
+      "name": "crash:db_commit",
+      "status": "succeeded",
+      "phase": "completed",
+      "integrity": {
+        "job_id": "cc88a197-2099-4555-9128-9f2318155c72",
+        "size_bytes": 364,
+        "sha256": "38c4bd05701fd42f0c4a36ef8608d49007642b3594ed9f3b325fa30bef580c00",
+        "zip_ok": true,
+        "entry_count": 1
+      }
+    },
+    {
+      "name": "crash:processing",
+      "status": "succeeded",
+      "attempt": 2,
+      "stale_publish_accepted": false,
+      "stale_failure": "ownership_lost",
+      "stale_heartbeat": false,
+      "integrity": {
+        "job_id": "0b633a23-21d9-46db-960d-36ae7cf870a6",
+        "size_bytes": 364,
+        "sha256": "a880ecdc1b38b0b2144b830047132ea11d9ce128ce92a47cf2a753ca115ff8b8",
+        "zip_ok": true,
+        "entry_count": 1
+      }
+    },
+    {
+      "name": "crash:zip_creation",
+      "attempt_one_status": "queued",
+      "partial_result_published": false,
+      "recovered_status": "succeeded",
+      "integrity": {
+        "job_id": "ac3e0239-f88b-4264-92da-f5b8987945be",
+        "size_bytes": 364,
+        "sha256": "9882464d3d8047a6080eaec93f80ca9a4edf7c5643cea4c45c3d7670108a77a6",
+        "zip_ok": true,
+        "entry_count": 1
+      }
+    },
+    {
+      "name": "crash:before_result_commit",
+      "stale_publish_accepted": false,
+      "published_key_is_current": true,
+      "stale_artifact_still_present": false,
+      "status": "succeeded",
+      "integrity": {
+        "job_id": "c787748b-237b-43b2-8af5-955a591fa0f1",
+        "size_bytes": 363,
+        "sha256": "2332d1d4b9c141785e8920ffaf8e2b457d87de29b4e3c9092dc5ccb2b88b2f21",
+        "zip_ok": true,
+        "entry_count": 1
+      }
+    },
+    {
+      "name": "sigterm",
+      "claims_after_handler": 1,
+      "in_flight_status": "succeeded",
+      "queued_status": "queued",
+      "queued_job_has_result": false,
+      "integrity": {
+        "job_id": "32e0e33a-33dd-4481-9dfa-d6a6b568080a",
+        "size_bytes": 35030,
+        "sha256": "9f8a98828a953d1feb665484b89fb8de96c98b118e959311822dce326b08d217",
+        "zip_ok": true,
+        "entry_count": 3
+      }
+    },
+    {
+      "name": "disk_full",
+      "staging_status": "failed",
+      "staging_error_code": "staging_failed",
+      "staging_artifact_files": 0,
+      "zip_window": {
+        "attempt_one_status": "queued",
+        "partial_result_published": false,
+        "recovered_status": "succeeded",
+        "integrity": {
+          "job_id": "0c5cfead-17be-4914-a78a-f1fde3721c10",
+          "size_bytes": 364,
+          "sha256": "bda84a8803c5439b8a52858faecbf9d9b896eef042a2f74dea11c4c1187951f8",
+          "zip_ok": true,
+          "entry_count": 1
+        }
+      }
+    },
+    {
+      "name": "pool_exhaustion",
+      "pool_size": 1,
+      "max_overflow": 0,
+      "exhausted_checkout": {
+        "seconds": 0.2141,
+        "ok": false,
+        "error_type": "TimeoutError"
+      },
+      "worker_poll_seconds": 0.2077,
+      "recovered_checkout": {
+        "seconds": 0.0029,
+        "ok": true,
+        "error_type": "none"
+      },
+      "job_status_after_recovery": "succeeded",
+      "integrity": {
+        "job_id": "c5461b6d-f4dc-4294-9807-dde73181f612",
+        "size_bytes": 343,
+        "sha256": "3f71036035a1c183522123bad6eb11905dd6ee17a6f8faaa2d684d69063cd3aa",
+        "zip_ok": true,
+        "entry_count": 1
+      }
+    },
+    {
+      "name": "expiry",
+      "expired_rows_selected": 2,
+      "remaining_statuses": [
+        "queued"
+      ],
+      "rows_removed": 2,
+      "active_rows_swept": false,
+      "swept_result_file_exists": false,
+      "missing_before_sweep": 1,
+      "orphans_before_sweep": 1,
+      "missing_after_sweep": 0,
+      "orphans_after_sweep": 1,
+      "active_status": "queued"
+    },
+    {
+      "name": "artifact_isolation",
+      "stale_failure_outcome": "ownership_lost",
+      "other_job_artifact_unchanged": true,
+      "other_job_sha256": "b7759438a59658472b8da51b8ffeadc7f4b781c337d188404f32b63aa7084120"
+    },
+    {
+      "name": "concurrency:10x1",
+      "documents": 1,
+      "concurrency": 1,
+      "synthetic_paragraphs": [
+        10
+      ],
+      "wall_seconds": 0.231014,
+      "process_cpu_seconds": 0.15625,
+      "peak_rss_bytes": 235745280,
+      "queue_wait_max_seconds": 0.172202,
+      "db_pool_checkout_max_seconds": 0.001505,
+      "outcomes": [
+        "succeeded"
+      ],
+      "artifact_integrity": [
+        {
+          "job_id": "7454b3da-c680-4f8d-9598-baae7314d915",
+          "size_bytes": 34647,
+          "sha256": "3649334940a4d17d04b7ceca66f8e716b65a4e36b47869349e8998280910b0fe",
+          "zip_ok": true,
+          "entry_count": 3
+        }
+      ]
+    },
+    {
+      "name": "concurrency:10x2",
+      "documents": 2,
+      "concurrency": 2,
+      "synthetic_paragraphs": [
+        10,
+        10
+      ],
+      "wall_seconds": 0.333264,
+      "process_cpu_seconds": 0.28125,
+      "peak_rss_bytes": 272863232,
+      "queue_wait_max_seconds": 0.173735,
+      "db_pool_checkout_max_seconds": 0.002534,
+      "outcomes": [
+        "succeeded",
+        "succeeded"
+      ],
+      "artifact_integrity": [
+        {
+          "job_id": "03f3b8ad-eab2-4cea-ad76-a88576187ce7",
+          "size_bytes": 34644,
+          "sha256": "b8410adbc5433018b23ba05ed458d3eb177b672c4882a7260cc3a8c1e1e4447f",
+          "zip_ok": true,
+          "entry_count": 3
+        },
+        {
+          "job_id": "c5ded6bf-32b0-47d5-8f67-d770489ec932",
+          "size_bytes": 34646,
+          "sha256": "2d9faa4724891d5161122a266d5acfb41e1ff8fa98e97a045fca5efe6a059f39",
+          "zip_ok": true,
+          "entry_count": 3
+        }
+      ]
+    },
+    {
+      "name": "concurrency:40x2",
+      "documents": 2,
+      "concurrency": 2,
+      "synthetic_paragraphs": [
+        40,
+        40
+      ],
+      "wall_seconds": 0.432987,
+      "process_cpu_seconds": 0.359375,
+      "peak_rss_bytes": 309587968,
+      "queue_wait_max_seconds": 0.179984,
+      "db_pool_checkout_max_seconds": 0.001982,
+      "outcomes": [
+        "succeeded",
+        "succeeded"
+      ],
+      "artifact_integrity": [
+        {
+          "job_id": "091e826c-2f47-4b3b-ba28-e2004bfde554",
+          "size_bytes": 35013,
+          "sha256": "f6b1ac4775691737d83a2f59e594f84fab2e26b3dedff192fd05221aa56b7ac3",
+          "zip_ok": true,
+          "entry_count": 3
+        },
+        {
+          "job_id": "4c400c91-e264-41af-a38f-895276e8e534",
+          "size_bytes": 35014,
+          "sha256": "fb780f2100ea05cec3c042749d59bbbaf24b184271ecd497aa60fdb76a17c664",
+          "zip_ok": true,
+          "entry_count": 3
+        }
+      ]
+    },
+    {
+      "name": "concurrency:40x4",
+      "documents": 4,
+      "concurrency": 4,
+      "synthetic_paragraphs": [
+        40,
+        40,
+        40,
+        40
+      ],
+      "wall_seconds": 0.859396,
+      "process_cpu_seconds": 0.84375,
+      "peak_rss_bytes": 385536000,
+      "queue_wait_max_seconds": 0.38163,
+      "db_pool_checkout_max_seconds": 0.001872,
+      "outcomes": [
+        "succeeded",
+        "succeeded",
+        "succeeded",
+        "succeeded"
+      ],
+      "artifact_integrity": [
+        {
+          "job_id": "6e27da19-2c0d-4530-b054-e75018e015ba",
+          "size_bytes": 35015,
+          "sha256": "99c0cd9e60a6d8a5c1b2c9f2aa8fd3dc82d3babb444dd45eed6817c18ff891bb",
+          "zip_ok": true,
+          "entry_count": 3
+        },
+        {
+          "job_id": "c1a752f6-810a-49b9-84c5-c14359e8e8b8",
+          "size_bytes": 35015,
+          "sha256": "f0a617d49f247b5d028827c87ff8482435820a7ebacff140db63fef4b1c6f195",
+          "zip_ok": true,
+          "entry_count": 3
+        },
+        {
+          "job_id": "54db8466-fc1c-445c-9baa-1aed868f2638",
+          "size_bytes": 35013,
+          "sha256": "6b3d82f8eae52364745ed081036ba634b0b2f9cc83b2a5c72f623a8a2d8949d0",
+          "zip_ok": true,
+          "entry_count": 3
+        },
+        {
+          "job_id": "e4569c72-e12d-4080-8c08-b4d41b524d65",
+          "size_bytes": 35014,
+          "sha256": "066d5015d92a945e235a5872f1e21ae93adfc6116fced924686a170e78b784a2",
+          "zip_ok": true,
+          "entry_count": 3
+        }
+      ]
+    },
+    {
+      "name": "backup_restore",
+      "environment": "local-disposable",
+      "rows_before": 2,
+      "rows_after": 2,
+      "rows_identical": true,
+      "artifacts_checked": 2,
+      "artifact_checksums_identical": true,
+      "exception_config_digest_identical": true,
+      "config_digest": "e9ca4c0222644912fc3ef653f586cab396f0c084799ff6d16e67e25d2c7b6b2b",
+      "private_exception_values_touched": false
+    }
+  ]
+}

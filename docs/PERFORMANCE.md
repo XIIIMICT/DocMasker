@@ -310,5 +310,35 @@ browser's full-result Blob and JSZip unpacking remain the client-side bound.
 - DOCX masking is two-pass over all paragraphs (document-wide numbering), so a
   5,000-paragraph document is ~2 min of CPU — exactly the case the job path
   exists for.
+
+## Isolated concurrency drill (2026-11-27, DM-3)
+
+Repeatable harness: `uv run --directory back python -m src.scripts.operational_drills
+--database-url <disposable-url> --report back/benchmarks/operational-drill-results.json`
+(`docs/TESTING.md` §3). Host: Windows 11, CPython 3.15 in the uv-managed
+`back/.venv`, dedicated PostgreSQL 18 container and temporary JOBS_DIR. Inputs
+are synthetic DOCX files (`drill_support.build_docx`) with 10 or 40 paragraphs
+and fabricated PII-shaped values; no production data, no network, no shared
+volume. Each case enqueues N distinct documents, claims them with the worker's
+real fencing path and runs `Worker.run_one` in a bounded thread pool.
+`peak_rss_bytes` is Windows `PeakWorkingSetSize` (the closest equivalent of
+RSS on this host); `process_cpu_seconds` is `time.process_time()` and can
+exceed wall time with multiple threads.
+
+| Case | Docs × paragraphs | Wall (s) | Process CPU (s) | Peak RSS (MB) | Max queue wait (s) | Max DB checkout wait (s) | Outcome | Artifact integrity |
+|---|---|---:|---:|---:|---:|---:|---|---|
+| 1 concurrent | 1 × 10 | 0.231014 | 0.15625 | 224.8 | 0.172202 | 0.001505 | 1 succeeded | 1/1 ZIP valid |
+| 2 concurrent | 2 × 10 | 0.333264 | 0.28125 | 260.2 | 0.173735 | 0.002534 | 2 succeeded | 2/2 ZIP valid |
+| 2 concurrent | 2 × 40 | 0.432987 | 0.359375 | 295.3 | 0.179984 | 0.001982 | 2 succeeded | 2/2 ZIP valid |
+| 4 concurrent | 4 × 40 | 0.859396 | 0.84375 | 367.7 | 0.381630 | 0.001872 | 4 succeeded | 4/4 ZIP valid |
+
+Queue wait is measured from the row's `created_at` to the fenced claim; DB
+pool wait is the checkout latency of a `SELECT 1` through the repository's
+pooled engine. Every result was read back by its DB-referenced attempt key,
+opened as a ZIP and checked with `testzip()` plus a SHA-256 digest. These are
+single-host observations, not a capacity model: **no throughput target is
+asserted**, and scales relevant to target hardware (hundreds of paragraphs,
+multiple workers) remain an OPEN operator gate in
+`docs/PRODUCTION_READINESS.md`.
 - A `.txt` never reaches the backend: the front reads it into the input text
   client-side, so text-mode limits are pure `MAX_TEXT_CHARS` / threshold math.

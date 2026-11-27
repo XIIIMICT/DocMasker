@@ -8,9 +8,11 @@ hot-path test notes in `back/AGENTS.md`, `back/src/jobs/AGENTS.md` and
 source is Implementation Brief §14 (the implementation brief (removed after Phase 8; remaining items in `TODO.md`)).
 
 Status labels below mean: **Covered** = a named test exists in the repository;
-**Recorded** = a historical run is documented, not re-run here; **TODO** =
-genuinely deferred and must not be claimed as passed. A named test proves the
-code path at test time; it is not a substitute for a live stress drill.
+**Recorded** = a historical run is documented, not re-run here; **Drilled
+(local)** = a controlled drill actually ran on disposable local resources, not
+on target hardware; **TODO** = genuinely deferred and must not be claimed as
+passed. A named test proves the code path at test time; it is not a substitute
+for a live stress drill.
 
 ## 1. Component-to-test map
 
@@ -35,11 +37,14 @@ code path at test time; it is not a substitute for a live stress drill.
 | Stable error contract / no PII leakage | `test_errors.py` |
 | Readiness and coarse metrics | `test_readiness.py` |
 | Cross-field settings validation | `test_settings_validation.py` |
+| Isolated operational drills | `test_operational_drills.py`, `drill_support.py`, `src/scripts/operational_drills.py` (needs `TEST_DATABASE_URL`; optional `DOCMASKER_DRILL_PG_CONTAINER` for the disposable backup rehearsal) |
 
-`test_jobs_*.py`, `test_cache.py` and parts of `test_jobs_api.py` skip without
-a real PostgreSQL/Valkey stand (`just db-stand` + `just seed`, then
-`TEST_DATABASE_URL` / `TEST_VALKEY_URL`); see `docs/WORKFLOW.md` and
-`back/src/jobs/AGENTS.md`.
+`test_jobs_*.py`, `test_cache.py`, `test_operational_drills.py` and parts of
+`test_jobs_api.py` skip without a real PostgreSQL/Valkey stand (`just db-stand`
++ `just seed`, then `TEST_DATABASE_URL` / `TEST_VALKEY_URL`); see
+`docs/WORKFLOW.md` and `back/src/jobs/AGENTS.md`. The drill harness refuses any
+database whose name does not contain `drill`, start with `test` or end in `_ci`,
+and all its artifacts live in a caller-supplied temporary spool.
 
 ### Frontend unit (`bun test` + happy-dom, `__tests__/` next to the code)
 
@@ -115,11 +120,11 @@ are historical records; rely on `--list` for the current inventory.
 | Queue full → stable 429, no staging artifacts | **Covered** | `test_jobs_store.py::test_queue_full_is_bounded`, `::test_queue_full_leaves_no_staging_row`, `test_jobs_api.py::test_queue_full_returns_429` |
 | Cancellation: queued immediate, running at checkpoint, no result/cache | **Covered** | `test_jobs_api.py::test_cancel_job`; `test_jobs_store.py::test_cancel_only_affects_active_jobs`, `::test_running_cancel_is_a_request_acknowledged_by_the_worker`; `test_jobs_worker.py::test_cancel_before_processing_publishes_nothing`, `::test_cancelled_job_never_populates_cache`; e2e `smoke.spec.ts` Cancel scenario |
 | TTL: result clock starts on completion; active jobs never expire; cleanup idempotent | **Covered** | `test_jobs_store.py::test_result_ttl_starts_on_completion`, `::test_active_jobs_are_never_swept`, `::test_ttl_sweep_removes_rows_and_artifacts`; `test_jobs_worker.py::test_sweep_removes_expired_jobs_and_artifacts` |
-| SIGTERM: stop claims, drain in-flight jobs, heartbeats continue | **Partial** | Implemented in `back/src/jobs/worker.py`; live `docker compose restart worker` during Phase 8 stress did not duplicate/lose a result, but no controlled SIGTERM-with-in-flight drill is recorded (`TODO.md`, "Old stage 6 (deferred)") |
+| SIGTERM: stop claims, drain in-flight jobs, heartbeats continue | **Drilled (local)** | Controlled handler-equivalent drill (`test_operational_drills.py::test_sigterm_drains_without_stale_publication`): exactly one claim after the handler, in-flight DOCX job `succeeded` with a valid ZIP, the second job stayed `queued` with no result. Real POSIX signal delivery on the target host remains an operator gate |
 | Transient PostgreSQL outage must not kill the worker | **Covered** | `test_jobs_worker.py::test_worker_poll_survives_transient_db_error`, `::test_heartbeat_survives_transient_db_error`; live CI-stack database restart in Phase 8: `/ready` briefly 503 then ready, worker stayed up and the in-flight job succeeded |
-| Crash after staging / DB commit / processing / ZIP creation / before commit | **Partial** | Staging-reconcile, repository-restart, stale-token and cancellation injection tests exist (`test_jobs_store.py::test_state_survives_repository_restart`, `test_jobs_worker.py`); full crash-window matrix on target hardware is TODO |
+| Crash after staging / DB commit / processing / ZIP creation / before commit | **Drilled (local)** | `test_crash_window_matrix` + `test_cross_job_artifact_isolation`: staging abandoned → `failed/staging_abandoned` with 0 artifacts; committed row → restarted worker succeeded; lease-lost claim's publish rejected, `fail` → `ownership_lost`, heartbeat false, new owner succeeded at attempt 2 with stale key absent; ENOSPC at ZIP write → queued, no partial result, retry succeeded; result bytes written before DB commit → stale key rejected and removed, only the current fenced key published. Target-hardware repetition remains OPEN |
 | Invalid user data non-retryable; transient failures bounded backoff | **Covered** | `test_jobs_store.py::test_non_retryable_failure_is_final`, `::test_retryable_failure_requeues_then_fails`; `back/src/jobs/worker.py::classify` |
-| PostgreSQL outage/pool exhaustion returns a bounded error, health never hangs | **Partial** | `/ready` 503 and `/metrics` degradation covered by `test_readiness.py`; live PostgreSQL restart in Phase 8 showed bounded errors, `/health` 200 throughout and recovery after restart; pool exhaustion drill still TODO |
+| PostgreSQL outage/pool exhaustion returns a bounded error, health never hangs | **Drilled (local)** | `/ready` 503 and `/metrics` degradation covered by `test_readiness.py`; Phase 8 live PostgreSQL restart recorded. Local pool drill (`test_pool_exhaustion_is_bounded`) pinned `pool_size=1/max_overflow=0` with a 0.2 s checkout timeout: checkout and one worker poll both failed in ~0.21 s with `TimeoutError`, worker stayed alive, job succeeded after release (0.003 s recovery checkout) |
 | Identical inputs → deterministic key + hit; keys bytes change the key | **Covered** | `test_cache.py::test_same_inputs_produce_the_same_key`, `::test_different_docx_bytes_produce_different_keys`, `::test_different_keys_yaml_changes_demask_key`, `::test_different_output_filename_changes_key` |
 | Config digest / ruleset / manifest / namespace version invalidation | **Covered** | `test_cache.py::test_exception_digest_changes_key`, `::test_ruleset_version_bump_invalidates`, `::test_manifest_and_namespace_versions_invalidate` |
 | Corrupt/missing artifact or Valkey loss → miss, not failure | **Covered** | `test_cache.py::test_corrupt_artifact_is_a_miss`, `::test_valkey_outage_degrades_to_misses`, `::test_real_valkey_corrupt_entry_evicts` |
@@ -133,10 +138,10 @@ are historical records; rely on `--list` for the current inventory.
 | Bounded route timeouts; streaming upload counts real bytes; results streamed | **Covered** | `timeouts.test.ts`, `mask.test.ts::proxy timeouts`; `test_uploads.py::test_stage_upload_counts_real_bytes_not_content_length`, `::test_stage_upload_rejects_oversized_stream_and_cleans_up`; `docs/API.md` §Proxy timeout policy |
 | `Cache-Control: no-store` on result; verify remaining document/key responses | **Partial** | `test_jobs_api.py::test_result_serves_zip_with_no_store`; other responses still a `TODO.md` stage-6 item |
 | OpenAPI → generated TS types with CI freshness | **TODO (deferred)** | Maintainer decision 2026-11-24; handwritten DTOs remain (`TODO.md`, `docs/API.md`) |
-| Restore procedure for PostgreSQL + artifacts + config | **Recorded** | Procedure documented in `docs/OPERATIONS.md` §3; no automated restore drill is recorded |
+| Restore procedure for PostgreSQL + artifacts + config | **Drilled (local)** | Disposable `pg_dump`/artifact-copy/`pg_restore` rehearsal in `test_backup_restore_rehearsal`: 2 rows restored identically, 2 artifact SHA-256s identical, synthetic exception-config digest unchanged; no private exception file read. Target-host rehearsal with the real RO-mounted config remains **OPEN** (`docs/PRODUCTION_READINESS.md`) |
 | Liveness/readiness documented and exercised | **Partial** | `/health` used by Compose healthchecks and `health.spec.ts`; `/ready` implemented and unit-tested (`test_readiness.py`) but not wired into Compose/CI (deferred stage 6) |
 | Operations runbooks for worker/DB/cache/storage failures | **Covered** | `docs/OPERATIONS.md` §6 |
-| Target-hardware stress: queue pressure, worker/DB/Valkey restart, disk full, result expiry, cancellation, N concurrent large documents | **Partial (this host)** | Phase 8 ran an isolated CI-stack drill: 3 concurrent large jobs + identical-job dedupe, queued cancel → 204/cancelled, worker restart, PostgreSQL restart (after fixing transient DB error handling), Valkey `FLUSHDB`, result download 200; target hardware, disk full and controlled crash-window matrix still TODO (`TODO.md`) |
+| Target-hardware stress: queue pressure, worker/DB/Valkey restart, disk full, result expiry, cancellation, N concurrent large documents | **Drilled (local), target host OPEN** | Phase 8 isolated CI-stack drill covered 3 concurrent jobs, dedupe, cancel, worker/DB restarts, Valkey flush and result download. The DM-3 drill adds simulated ENOSPC, expiry/byte audit (2 rows swept; 1 missing artifact counted; 1 orphan reported and retained), and 1/2/N synthetic DOCX batches with wall/CPU/RSS/queue-wait/pool-wait recorded in `back/benchmarks/operational-drill-results.json` and `docs/PERFORMANCE.md`. No throughput target is asserted. Target hardware, a real disk-full filesystem and POSIX SIGTERM remain operator gates |
 | Precision/recall corpus, TLS-bypass replacement, container hardening, branch protection | **TODO / deferred** | `TODO.md`; branch protection is a GitHub-side setting (`docs/WORKFLOW.md`) |
 
 ## 3. Commands
@@ -180,6 +185,29 @@ just lint
 just typecheck
 just test
 ```
+
+### Isolated drill harness (DM-3)
+
+Provision a *disposable* PostgreSQL (never the dev/prod stand), then run the
+conductor. The placeholder credentials below are deliberately not real:
+
+```sh
+docker run -d --name dm-drill-pg-YYYYMMDD --label dm.drill=disposable \
+  -e POSTGRES_USER=<user> -e POSTGRES_PASSWORD=<synthetic> \
+  -e POSTGRES_DB=dm_drill_YYYYMMDD -p 127.0.0.1:15533:5432 postgres:18-alpine
+uv run --directory back python -m src.scripts.operational_drills \
+  --database-url "postgresql+psycopg://<user>:<synthetic>@127.0.0.1:15533/dm_drill_YYYYMMDD" \
+  --pg-container dm-drill-pg-YYYYMMDD \
+  --report back/benchmarks/operational-drill-results.json
+docker rm -f dm-drill-pg-YYYYMMDD
+```
+
+The conductor applies Alembic, creates a temporary `JOBS_DIR`, runs only
+`tests/test_operational_drills.py` and writes JSON evidence (no credentials,
+no input text). Omit `--pg-container` to skip the backup rehearsal and record
+it as an OPEN gate instead. The 2026-11-27 run produced **13 passed**; the full
+suite with `TEST_DATABASE_URL` set to that disposable DB produced **504 passed,
+4 skipped, 86.80% branch coverage**.
 
 Gates: backend **≥80% branch coverage** (`--cov-fail-under=80`,
 `back/pyproject.toml` `[tool.coverage]`); frontend **65% line coverage**

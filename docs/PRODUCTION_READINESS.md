@@ -38,6 +38,40 @@ ahead of `origin/dev`.
   their new edge cases are covered by the follow-up matrix in
   `docs/FOLLOW_UP_MATRIX.md` and the tests named there.
 
+## DM-3 residual operational drills (2026-11-27, local disposable only)
+
+Harness: `back/src/scripts/operational_drills.py` →
+`back/tests/test_operational_drills.py` + `back/tests/drill_support.py`.
+Environment: Windows 11 host, Docker Desktop 29.8.2, a dedicated
+`dm-drill-pg-20261127a` PostgreSQL 18 container (DB `dm_drill_20261127`,
+loopback port 15533) and temporary `JOBS_DIR` paths. No dev/prod stand, shared
+volume, `.env` credential or private exception file was read. The harness
+refuses non-disposable DB names. Evidence (hashes, timings, counts only):
+`back/benchmarks/operational-drill-results.json`. Command: see
+`docs/TESTING.md` §3 "Isolated drill harness". Result: **13 passed**.
+
+| Crash window | Observed outcome |
+|---|---|
+| After staging artifacts, before publish | restarted worker sweep → `failed` / `staging_abandoned`, 0 artifact files left, no result key |
+| After staging → queued DB commit | restarted worker claimed and published; `succeeded`, ZIP `testzip() == None` |
+| During processing (lease lost, no heartbeat) | fresh claim at attempt 2; stale `succeed` rejected, stale `fail` → `ownership_lost`, stale heartbeat false; new owner `succeeded`, stale key absent |
+| During ZIP creation (injected ENOSPC) | attempt 1 `queued`, no result file; retry after restore `succeeded` with valid ZIP |
+| Result bytes written before the fenced commit | stale key publish rejected; only the current attempt key referenced; stale file removed; `succeeded` |
+| SIGTERM (handler-equivalent during in-flight DOCX) | 1 claim only; in-flight `succeeded` with valid ZIP; second job stayed `queued`, no result |
+| Disk full (injected ENOSPC at staging write) | `failed` / `staging_failed`, 0 leftover input files |
+| DB pool exhaustion (`pool_size=1`, `max_overflow=0`, 0.2 s timeout) | checkout and one worker poll both timed out in ~0.21 s (`TimeoutError`); worker alive; job `succeeded` after release (0.003 s recovery checkout) |
+| Expiry + byte audit | 2 terminal rows swept, 0 active rows swept, result bytes removed; 1 missing artifact counted before sweep; 1 orphan result file counted and **retained** after sweep (GC is row-driven) |
+| Cross-job isolation | stale owner's `fail` → `ownership_lost`; explicit stale `delete` left the other job's result SHA-256 unchanged |
+| 1/2/N synthetic DOCX batches | 1/2/2/4 jobs at 10/10/40/40 paragraphs; all `succeeded`, all result ZIPs intact; wall 0.23/0.33/0.43/0.86 s (see `docs/PERFORMANCE.md`); **no throughput target asserted** |
+
+Backup/restore: a local-disposable `pg_dump` → artifact copy → truncate →
+`pg_restore` → artifact copy-back rehearsal restored 2/2 rows identically, 2/2
+artifact SHA-256 checksums and the digest of a committed synthetic config
+snapshot; no private exception value was read. **Status: local-disposable
+pass; target-host rehearsal OPEN.** Real POSIX SIGTERM delivery, a real full
+filesystem, target-hardware stress and restoring the real RO-mounted private
+config/volumes are listed as OPEN operator gates below.
+
 ## Baseline environment (2026-11-22)
 
 - Host: Windows, Docker Desktop 29.8.2 / compose v5.6.0, uv 0.13.8, Bun 1.4.4, Node 26.13.1.
@@ -118,3 +152,26 @@ shape. Latency probes for the processing steps are in `back/benchmarks/README.md
 9. ✅ Implementation Brief Phase 6 — API contracts, timeouts, streaming, event-loop safety (F-22/F-23); §8.2 OpenAPI types deferred by maintainer decision (F-24).
 10. ✅ Implementation Brief Phase 7 — windowed detection + candidate-limited AddrExtractor + DOCX prefilter, measured before/after (F-02 closed); infra stand moved to the ReportCollector pattern with `just seed`.
 11. ✅ Implementation Brief Phase 8 — three-level AGENTS hierarchy (root → area → nested masking/jobs guides), level-3 specs (`ARCHITECTURE`, `API`, `MASKING_CONFIGURATION`, `PERFORMANCE`, `DOCX_SUPPORT`, new `SECURITY`/`OPERATIONS`/`TESTING`, ADR-0004/0005), TODO reduced to genuine deferred work; clean install, empty-DB migration, prod-image build, isolated CI e2e and a local lifecycle drill (F-25 found and fixed). Branch protection remains a GitHub-side setting.
+
+## Target-host gate checklist (OPEN until an operator signs off)
+
+Nothing here is claimed as passed by the local drills. The commands are the
+same as `docs/TESTING.md` §5; they must be repeated on the authorized host with
+that host's own `.env` and RO-mounted private config.
+
+| # | Step | Verification | Status |
+|---|---|---|---|
+| 1 | Clean install | `cp .env.example .env` with host values; `just deps` green; no credentials or real exception values in git | **OPEN — operator only** |
+| 2 | Private config mount | `back/config/masking/exceptions.yaml` present, RO-mounted into `back`/`worker`; only its digest is recorded, never its values | **OPEN — operator only** |
+| 3 | Migration from empty DB | `just db-stand` → `just seed` → `just migrate`; `alembic current` at head; `jobs` table verified | **OPEN — operator only** |
+| 4 | Prod image build | `docker compose -f infra/compose.ci.yaml build`; images `dm-back:ci` / `dm-front:ci` (or host equivalents) built from the exact commit | **OPEN — operator only** |
+| 5 | Compose health | `up -d --no-build --wait --wait-timeout 180 back worker front`; `/health` 200, `GET /ready` 200 after migration; private volumes only | **OPEN — operator only** |
+| 6 | E2E | `E2E_BASE_URL=… bun run --cwd front test:e2e --project=smoke`; exact spec discovery and all smoke tests pass | **OPEN — operator only** |
+| 7 | Real POSIX SIGTERM | `docker compose stop worker` / `kill -TERM 1` mid-job; in-flight job drains, no stale publication, no second claim | **OPEN — operator only** |
+| 8 | Real disk-full and pool pressure | Fill a disposable artifact volume, saturate the real DB pool; bounded errors, no partial output, recovery verified | **OPEN — operator only** |
+| 9 | Backup/restore on target | Quiesce → `pg_dump` → artifact copy → config backup → restore → verify rows, artifact SHA-256s and config digest; then `GET /ready` and one round-trip job | **OPEN — operator only** |
+| 10 | Concurrency on target hardware | 1/2/N representative documents; record wall/CPU/RSS/queue wait/DB pool wait and artifact integrity; calibrate any SLO from measurements, never from a target invented here | **OPEN — operator only** |
+| 11 | GitHub-side required check | Branch ruleset + required check `CI required`; repository can only document it | **OPEN — maintainer/GitHub** |
+
+Local evidence for steps 3–6 exists on this host (historical and re-runnable),
+but it does **not** discharge any row above.

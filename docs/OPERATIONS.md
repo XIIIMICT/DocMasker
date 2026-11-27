@@ -106,6 +106,17 @@ After restore, check that every `input_artifact` / `keys_artifact` /
 `GET /ready` returns `200`. Valkey needs no restore: restart/flush it and let
 the cache rebuild (`docs/SECURITY.md` §3).
 
+**Drill evidence (2026-11-27, local disposable only).** The harness in
+`back/tests/drill_support.py` executed the dump → artifact copy → truncate →
+`pg_restore` → artifact copy-back sequence against a dedicated `dm-drill-*`
+container and a temporary spool: 2/2 rows restored identically, 2/2 artifact
+SHA-256 checksums matched, and the digest of a *committed synthetic* config
+snapshot (`exceptions.example.yaml`) was unchanged. No private
+`exceptions.yaml` was read or printed (`private_exception_values_touched:
+false`). This is **not** a target-host rehearsal: restoring the real
+read-only private config and the named volumes on the deployment host stays an
+operator-only **OPEN** gate (`docs/PRODUCTION_READINESS.md`).
+
 **Historic quiesce/reset note:** before the PostgreSQL migration, the recorded
 dev volume held a 20 KB SQLite file with **0 rows** and no staged artifacts.
 The approved procedure was to quiesce with `docker compose --profile dev down`,
@@ -169,14 +180,27 @@ never a blind `rm` (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). Today
    thread was killed (`back/src/jobs/worker.py`). Compose uses its default
    stop grace; if the process is killed before the pool drains, lease expiry
    recovers the job with bounded attempts. No configurable shutdown grace is
-   claimed: Python cannot safely force-stop worker threads.
+   claimed: Python cannot safely force-stop worker threads. A local controlled
+   drill (2026-11-27) invoked the same handler path with an in-flight DOCX job:
+   one claim, then no further claims; the in-flight job published a valid ZIP
+   (`succeeded`) and a second queued job stayed `queued` with no result.
+   Delivery of a real POSIX SIGTERM to the container on target hardware is
+   still an operator gate.
 - **Crash recovery (P0.2):** `staging` rows carry a renewable
    `STAGING_LEASE_SECONDS` (default 60) lease, refreshed every 4 MiB while a
    large upload is copied. Worker maintenance/claim cycles atomically claim
    only expired staging rows (`failed`, `staging_abandoned`) and expired
    `cancelling` rows (`cancelled`), then clean their artifacts idempotently.
    Live publishers cannot publish after their staging row was recovered; a
-   `cancelling` job is never selected as ordinary work.
+   `cancelling` job is never selected as ordinary work. The local crash-window
+   drill (2026-11-27) verified all five windows against a disposable database:
+   abandoned staging → `failed/staging_abandoned` with no artifact bytes;
+   committed metadata → restart completes; lease-lost claim → stale publish,
+   fail and heartbeat all rejected while the new owner succeeds at attempt 2;
+   ENOSPC at ZIP creation → queued with no partial result then clean retry;
+   result bytes written before the fenced commit → stale key rejected and
+   removed, only the current attempt key published. Details:
+   `back/benchmarks/operational-drill-results.json`.
 
 ## 6. Runbooks
 
@@ -239,6 +263,10 @@ keys or exception messages into tickets or chat.
   space by archiving old **terminal** artifacts through the normal TTL/GC or a
   consistent backup (§3) — never delete `<job_id>.*` files for active jobs.
   Restart with `just prod`/`just dev` and verify `GET /metrics` and a test job.
+  Local simulated ENOSPC (2026-11-27) failed staging with `staging_failed` and
+  zero leftover input files, and failed ZIP creation with no published result;
+  retries succeeded after the injected error was removed. A real filesystem
+  full event on target hardware is still an operator gate.
 
 ### Stuck, cancelled or expired job
 
@@ -247,7 +275,11 @@ keys or exception messages into tickets or chat.
 - **Action:** `DELETE /api/jobs/{id}` requests cancellation — polling stops
   only locally, the server acknowledges at a checkpoint. A lease-expired job is
   reclaimed by another worker or fails at `JOBS_MAX_ATTEMPTS`. An expired result
-  returns 404; resubmit. Do not touch DB rows or spool files by hand.
+  returns 404; resubmit. Do not touch DB rows or spool files by hand. The local
+  expiry drill (2026-11-27) swept 2 terminal rows and their result bytes while
+  leaving the active row `queued`; it counted 1 referenced-but-missing artifact
+  before the sweep and 1 unreferenced orphan file after it. GC is row-driven:
+  orphan bytes are **reported, not deleted** — investigate them separately.
 
 ### Corrupt/hostile DOCX
 
@@ -268,8 +300,11 @@ keys or exception messages into tickets or chat.
   `back/src/jobs/worker.py` drain and heartbeat logs.
 - **Action:** `docker compose restart worker` (or `just prod`/`just dev` to
   rebuild). Lease recovery reassigns work with a fresh fencing token. Verify
-  a round-trip job after restart. Live crash/restart stress on target hardware
-  is still TODO — do not claim it was exercised here.
+  a round-trip job after restart. A controlled local restart/fencing drill
+  (2026-11-27) covered the five crash windows and the handler-equivalent SIGTERM
+  drain; it proved no stale/partial publication and no cross-job artifact
+  deletion. Real container SIGTERM and crash stress on target hardware are
+  operator gates — do not claim they were exercised here.
 
 ### Migration failure
 
@@ -291,9 +326,13 @@ keys or exception messages into tickets or chat.
 Reverse-proxy/TLS/auth example and rate limits; container hardening and
 internal-only backend network; `/ready` and front readiness wired into
 healthchecks; log rotation and long-term metric retention policy;
-`stop_grace_period` tuning and a live SIGTERM drill; clean-install/prod-image
+`stop_grace_period` tuning and a live POSIX SIGTERM drill; clean-install/prod-image
 verification and job lifecycle stress on target hardware (`TODO.md`,
-`docs/TESTING.md`). Branch
+`docs/TESTING.md`). Local disposable drills (2026-11-27) now cover the crash
+matrix, handler-equivalent SIGTERM drain, simulated ENOSPC, 1-slot DB pool
+exhaustion, result expiry/byte audit and 1/2/N synthetic DOCX batches; a real
+full filesystem, real SIGTERM, target hardware and restoring the real private
+config/volumes remain **OPEN** gates (`docs/PRODUCTION_READINESS.md`). Branch
 protection / the `CI required` check is a GitHub repository setting — the
 repository only documents the checklist (`docs/WORKFLOW.md`).
 
