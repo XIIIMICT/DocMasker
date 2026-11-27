@@ -62,11 +62,12 @@
     --radius: 0.5rem;
     --field-radius: 1rem;
 
-    /* DocMasker's own motion only; HeroUI ships its own reduce-motion policy. */
+    /* DocMasker's own motion only; HeroUI ships its own reduce-motion policy.
+       Theme switches are deliberately instant and expansion changes layout
+       instantly, so this single token is used for the decorative paint/composite
+       properties only. No persistent compositing hints: the reveal is short
+       and infrequent. */
     --app-motion-fast: 140ms;
-    --app-motion-gap: 180ms;
-    --app-motion-theme: 200ms;
-    --app-motion-expand: 220ms;
 }
 
 .dark,
@@ -105,12 +106,9 @@
     --warning-foreground: oklch(21.03% 0.0059 66.86);
 }
 
-/* NextThemesProvider: плавная смена темы */
-html {
-    transition:
-        background-color var(--app-motion-theme) ease,
-        color var(--app-motion-theme) ease;
-}
+/* Theme switching is intentionally instant: NextThemesProvider passes
+   `disableTransitionOnChange`, which injects `transition:none!important` for
+   the class swap. A stylesheet transition on `html` would be dead code. */
 
 /* ─── DocMasker workspace ───────────────────────── */
 .app-shell {
@@ -165,9 +163,9 @@ html {
     border-radius: 999px;
     text-decoration: none;
     cursor: pointer;
-    transition:
-        gap var(--app-motion-gap) cubic-bezier(0.22, 1, 0.36, 1),
-        background-color var(--app-motion-fast) ease;
+    /* `gap` and the label's `max-width` change layout, so they snap to their
+       end state. Only the decorative background-color transition is animated. */
+    transition: background-color var(--app-motion-fast) ease;
 }
 
 .support-link > svg {
@@ -183,8 +181,11 @@ html {
     font-size: 0.84rem;
     white-space: nowrap;
     opacity: 0;
+    /* Compositor-friendly reveal: the layout width snaps, the label slides and
+       fades. `transform`/`opacity` never force a layout pass per frame. */
+    transform: translateX(-0.25rem);
     transition:
-        max-width var(--app-motion-expand) cubic-bezier(0.22, 1, 0.36, 1),
+        transform var(--app-motion-fast) ease,
         opacity var(--app-motion-fast) ease;
 }
 
@@ -197,6 +198,7 @@ html {
 .support-link:focus-visible .support-link__label {
     max-width: 20rem;
     opacity: 1;
+    transform: translateX(0);
 }
 
 .support-link:focus-visible {
@@ -216,6 +218,7 @@ html {
 .support-link--compact:focus-visible .support-link__label {
     max-width: 0;
     opacity: 0;
+    transform: translateX(-0.25rem);
 }
 
 [data-slot="tooltip-trigger"]:has(.support-link--compact) {
@@ -604,12 +607,9 @@ textarea.result-area--error {
 
 /* DocMasker-owned transitions become instantaneous when motion is reduced.
    HeroUI's own prefers-reduced-motion rules live in @heroui/styles and are not
-   touched here; the hover/focus/theme end states keep their final values. */
+   touched here; the hover/focus end states keep their final values. */
 @media (prefers-reduced-motion: reduce) {
     :root {
         --app-motion-fast: 0ms;
-        --app-motion-gap: 0ms;
-        --app-motion-theme: 0ms;
-        --app-motion-expand: 0ms;
     }
 }
