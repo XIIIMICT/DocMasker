@@ -386,7 +386,11 @@ which would break monitoring).
   placeholder counting still start together when a DOCX is selected; both
   decompress the same file, doubling peak memory. Reliable sequencing needs a
   render-complete callback through `DocxViewer` → `masker-page.tsx` → workflow;
-  a DOM-observation heuristic was rejected as brittle.
+  a DOM-observation heuristic was rejected as brittle. Phase 3.3 removed the
+  *repeat* decompression on mode switches/re-selection (per-Blob single-flight
+  in `placeholder-count.ts`) and bounded the scan; the one-time overlap with the
+  preview render remains deferred — evidence in `docs/DOCX_SUPPORT.md`
+  §"Demasking input placeholder count".
 - **§8.2 — animation tokens on the ReportCollector side (deferred).**
   DocMasker's three app-owned transitions use `--app-motion-*` tokens; the
   ReportCollector stylesheet still has ~15 ad-hoc timing values. Consolidating

@@ -149,6 +149,55 @@ cover this ZIP-internal file, so the guard is not a cast. Rejection is a stable
 detail and no PII. This closes the Phase 3.4 finding in
 `docs/FRONTEND-AUDIT-BASELINE.md` §5.
 
+## Demasking input placeholder count (Phase 3.3)
+
+The demasking input pane shows `N фрагментов` **before** the operation runs.
+Two different numbers are displayed and must not be conflated: the headline is
+the number of **distinct values** in the parsed keys (`uniqueTotal`), while the
+tooltip line `unique (total с повторами)` adds the **total occurrences** of
+each `[LABEL_N]` in the uploaded masked DOCX. The unused-key line comes from the
+`unmask_file` manifest after the operation (`docs/API.md` §`manifest.json`).
+
+The backend does **not** already compute those occurrence aggregates:
+`ooxml/package.py::_transform_part` scans each logical container with the
+longest-first alternation built by `mapping.py::compile_placeholders` and keeps
+only a `used_placeholders` set (presence, for `unused_keys`); `EntityStats` and
+`build_mask_manifest` aggregate **detected entities of the mask input**, a
+different document and a different meaning. `UnmaskResponse` is text-only and
+`unmask_file` answers with a flat ZIP, so there is no typed HTTP response to
+extend. Emitting counts from the unmask manifest would make them available only
+after the operation, change the meaning from "every marker-shaped token in the
+uploaded package" to "known markers in processable parts", and break the
+existing pre-operation smoke assertion (`front/e2e/smoke.spec.ts`, demask stats
+visible before the run). Adding a pre-operation counting endpoint would be a new
+product/API surface. Both alternatives were rejected; the client scan stays.
+
+`front/src/shared/api/placeholder-count.ts` therefore keeps the established
+raw-XML semantics (every non-directory `.xml` part except
+`[Content_Types].xml`, `/\[([A-Z]+)_\d+\]/g`, labels lowercased — no inference
+from filenames, headers, YAML text or placeholder uniqueness). It is hardened
+instead: `scanPlaceholdersInDocx` decompresses parts **sequentially** (one part
+resident at a time, concurrency 1) and bounds both the entry count (10,000, the
+backend hard limit) and the cumulative decompressed XML bytes (64 MiB); a
+`.xml`-named entry without XML markup is skipped rather than regex-scanned.
+Exceeding a bound fails closed through the workflow's existing Russian
+result-pane error — never a fabricated `0`. `countPlaceholdersInDocx` memoises
+the promise per Blob in a `WeakMap`, so a mode switch or re-selection does not
+decompress the same file again; the lazy JSZip loader was already single-flight.
+The remaining overlap with the `docx-preview` render is the deferred §4.5
+finding in `TODO.md` (it needs a render-complete callback, not a DOM heuristic).
+Edge cases are pinned in `front/src/shared/api/__tests__/placeholder-count.test.ts`.
+
+**Known scope boundary.** The scan deliberately keeps its established scope:
+it counts marker-shaped tokens in every XML part (including copy-safe parts
+such as `word/styles.xml`) and does not scan `.rels` parts. A hand-crafted
+package with markers in a part the backend copies verbatim, or in an external
+relationship target, can therefore differ from what the backend actually
+restores. Documents produced by DocMasker place markers only in processed text
+nodes, so the two agree in normal use. Narrowing or widening the client scope
+would change the displayed meaning (and the pinned unit/e2e contracts), so it
+is a product decision rather than part of this safety change.
+
 ## Frontend preview isolation
 
 `front/src/shared/ui/docx-viewer.tsx` renders every Blob generation into its
