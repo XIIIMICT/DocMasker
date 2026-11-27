@@ -1,0 +1,321 @@
+name: Nightly heavy suite
+
+# P1-9 (DM part) — heavy, report-oriented checks on disposable CI stands.
+# This workflow is deliberately NOT part of CI required: branch protection
+# requires only the exact "CI required" check emitted by ci.yaml. Every job
+# name below is prefixed "Nightly" so a scheduled run cannot shadow a per-PR
+# check by name. Scheduled runs execute only from the default branch;
+# workflow_dispatch runs from any branch. A real scheduled night cannot be
+# observed until this file is merged/pushed to the default branch.
+on:
+  schedule:
+    # 04:13 UTC daily — off-peak for the European working day, clear of the
+    # 02:00 UTC backup, the 03:00 UTC Sunday restore drill, the 03:23 UTC
+    # Monday CodeQL slot and the sibling repos' 03:17/03:47 UTC nights.
+    - cron: "13 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One night at a time; never cancel an expensive run already in progress.
+  group: nightly-heavy-suite
+  cancel-in-progress: false
+
+jobs:
+  config:
+    name: Nightly workflow and Compose validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate GitHub Actions
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+      - name: Validate Compose
+        run: |
+          cp .env.example .env
+          docker compose --profile prod --profile dev config --quiet
+          docker compose -f infra/compose.ci.yaml config --quiet
+      - name: Validate internal port bindings
+        run: python3 infra/check-monitoring-binds.py
+
+  back:
+    name: Nightly backend coverage
+    # Same disposable services, env and locked toolchain as the per-PR job;
+    # only artifact names are prefixed so nightly reports never overwrite PR
+    # reports. No production URL or credential appears here — the loopback
+    # endpoints and ci-only values are synthetic CI fixtures from ci.yaml.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: back
+    env:
+      COVERAGE_FILE: coverage-data
+      TEST_DATABASE_URL: postgresql+psycopg://dm:ci_password@127.0.0.1:15432/dm_ci
+      # Alembic reads DATABASE_URL, pytest reads TEST_DATABASE_URL: both URL
+      # vars are required, or migrations silently target a missing database.
+      DATABASE_URL: postgresql+psycopg://dm:ci_password@127.0.0.1:15432/dm_ci
+      TEST_VALKEY_URL: redis://127.0.0.1:16379/0
+      CACHE_KEY_SECRET: ci-only-cache-secret-32-chars-long
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: dm
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: dm_ci
+        ports: ["127.0.0.1:15432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dm -d dm_ci"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ["127.0.0.1:16379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.15"
+          enable-cache: true
+          cache-dependency-glob: back/uv.lock
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check
+      - run: uv run --no-sync ruff format --check
+      - run: uv run --no-sync ty check
+      - name: Guard against the deprecated quadratic mask path
+        run: uv run --no-sync python -m src.scripts.check_legacy_mask_path
+      - name: Migrate empty database
+        run: uv run --no-sync alembic upgrade head
+      - name: Masking + PostgreSQL integration tests with full coverage
+        run: uv run --no-sync pytest -q --cov=src --cov-branch --cov-fail-under=80 --cov-report=term --cov-report=xml:coverage.xml --junitxml=test-results.xml --durations=10
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nightly-backend-reports
+          path: |
+            back/coverage.xml
+            back/test-results.xml
+            back/coverage-data
+          retention-days: 7
+
+  front:
+    name: Nightly frontend coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Exact pin shared with ci.yaml: patch drift must not change the
+          # coverage output or the 65% gate between a PR and a nightly run.
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+      - run: bun install --frozen-lockfile
+      - run: bunx --no-install next typegen
+      - run: bun run gen:labels
+      - name: Verify generated label catalogue is fresh
+        run: git diff --exit-code -- front/src/shared/api/labels.generated.ts
+      - run: bun run typecheck
+      - run: bun run lint:check
+      - run: bun run format:check
+      - run: bun test --coverage --coverage-reporter=lcov
+      - name: Enforce frontend coverage threshold
+        run: bun scripts/check-coverage.mjs 65
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nightly-frontend-coverage
+          path: front/coverage
+          retention-days: 7
+
+  openapi:
+    name: Nightly OpenAPI freshness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.15"
+          enable-cache: true
+          cache-dependency-glob: back/uv.lock
+      - run: uv sync --locked
+        working-directory: back
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+      - run: bun install --frozen-lockfile
+        working-directory: front
+      - run: bun run gen:openapi --check
+        working-directory: front
+
+  dependencies:
+    name: Nightly dependency security and freshness (report-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.15"
+          enable-cache: true
+          cache-dependency-glob: back/uv.lock
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Same exact pin as ci.yaml: patch drift must not change audit or
+          # freshness results between a PR run and a nightly run.
+          bun-version: "1.4.4"
+      - name: Install frontend lockfile for bun audit
+        working-directory: front
+        run: bun install --frozen-lockfile
+      - name: Reports — locked runtime audit, JS audit, freshness
+        # DAY-ONE POLICY: pip-audit and bun audit are REPORT-ONLY. Exit codes
+        # are recorded in the artifact and the step summary; this step always
+        # succeeds so a nightly cannot silently become a new merge gate.
+        # Promoting either scan to a blocking check is a separate maintainer
+        # decision after the baseline findings are triaged. gitleaks is the
+        # exception: already a green per-PR gate, reused unchanged below.
+        shell: bash
+        run: |
+          set +e
+          mkdir -p reports
+          uv export --directory back --locked --no-dev --no-hashes \
+            --format requirements-txt -o runtime-requirements.txt > /dev/null
+          export_code=$?
+          uv tree --directory back --locked --outdated > reports/uv-outdated.txt 2>&1
+          uv_outdated=$?
+          bun outdated > reports/bun-outdated.txt 2>&1
+          bun_outdated=$?
+          # `uv export --no-dev` is the exact locked RUNTIME set (all transitive
+          # packages pinned); --no-deps audits exactly that set with no pip
+          # resolving step and no runtime dependency added to the project.
+          uvx --from pip-audit==2.10.1 pip-audit \
+            --no-deps -r runtime-requirements.txt -f json -o reports/pip-audit.json
+          pip_audit=$?
+          bun audit --json > reports/bun-audit.json 2> reports/bun-audit.stderr
+          bun_audit=$?
+          printf 'uv-export=%s\nuv-tree-outdated=%s\nbun-outdated=%s\npip-audit=%s\nbun-audit=%s\n' \
+            "$export_code" "$uv_outdated" "$bun_outdated" "$pip_audit" "$bun_audit" \
+            > reports/scan-status.txt
+          {
+            echo "### Nightly dependency reports (day-one policy: REPORT-ONLY)"
+            echo "- pip-audit exit: \`$pip_audit\`"
+            echo "- bun audit exit: \`$bun_audit\`"
+            echo "- freshness: uv tree \`$uv_outdated\`, bun outdated \`$bun_outdated\`"
+            echo "Artifact: \`nightly-dependency-reports\` (7-day retention)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Report-only by policy: these exit codes never fail the job."
+          exit 0
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nightly-dependency-reports
+          path: |
+            reports
+            runtime-requirements.txt
+          retention-days: 7
+
+  secrets:
+    name: Nightly gitleaks (existing green gate)
+    # Reused verbatim from ci.yaml. This scan already has a green per-PR gate,
+    # so it stays blocking; the two NEW scans above do not.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The FULL history: a secret that was committed and then deleted is
+          # still in every clone, so a shallow scan would miss exactly the
+          # leak that matters most.
+          fetch-depth: 0
+      - name: Scan the history for secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: true
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+
+  production_smoke:
+    name: Nightly production image smoke
+    needs: config
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      # Loopback port of the isolated CI stand (infra/compose.ci.yaml), not a
+      # production URL. No deployment endpoint is hardcoded anywhere.
+      E2E_BASE_URL: http://127.0.0.1:15001
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+      - uses: docker/setup-buildx-action@v4
+      - name: Build backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./back
+          target: prod
+          load: true
+          tags: dm-back:ci
+          # Separate cache scopes: nightly builds never touch per-PR CI caches.
+          cache-from: type=gha,scope=back-nightly
+          cache-to: type=gha,mode=max,scope=back-nightly
+      - name: Build frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./front
+          target: prod
+          load: true
+          tags: dm-front:ci
+          cache-from: type=gha,scope=front-nightly
+          cache-to: type=gha,mode=max,scope=front-nightly
+      - name: Start tested production images (back, worker, front)
+        run: docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 180 back worker front
+      - name: Apply Alembic migrations to the isolated CI database
+        run: |
+          docker compose -f infra/compose.ci.yaml exec -T back alembic upgrade head
+          docker compose -f infra/compose.ci.yaml restart worker
+      - name: Install browser
+        working-directory: front
+        run: |
+          bun install --frozen-lockfile
+          bunx --no-install playwright install --with-deps chromium
+      - name: Verify the smoke project actually lists every regression
+        working-directory: front
+        run: |
+          bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
+          cat smoke-tests.txt
+          bun e2e/check-smoke-discovery.mjs smoke-tests.txt
+      - name: Browser smoke
+        run: bun run --cwd front test:e2e --project=smoke --reporter=list
+      - name: Collect container logs
+        if: always()
+        run: docker compose -f infra/compose.ci.yaml logs --no-color > container-logs.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nightly-browser-and-container-reports
+          path: |
+            front/playwright-report
+            front/test-results
+            container-logs.txt
+          retention-days: 7
+      - name: Stop isolated stack
+        if: always()
+        run: docker compose -f infra/compose.ci.yaml down --volumes --remove-orphans

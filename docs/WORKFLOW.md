@@ -154,6 +154,64 @@ Notes:
 
 Local reproduction of the `production` job: build the images (`docker compose -f infra/compose.ci.yaml build`), start them (`docker compose -f infra/compose.ci.yaml up -d --no-build --wait --wait-timeout 180 back worker front`), then `E2E_BASE_URL=http://127.0.0.1:15001 bun run --cwd front test:e2e --project=smoke`. Tear down with `docker compose -f infra/compose.ci.yaml down --volumes --remove-orphans`.
 
+### Nightly heavy suite (`.github/workflows/nightly.yaml`)
+
+Heavy, report-oriented checks run off the per-PR path. Triggers: `schedule`
+(`13 4 * * *` = **04:13 UTC daily**) and `workflow_dispatch`. The slot is
+off-peak for the European working day and clear of the 02:00 UTC PostgreSQL
+backup, the Sunday 03:00 UTC restore drill, Monday 03:23 UTC CodeQL, and the
+sibling repos' 03:17/03:47 UTC nights. Scheduled runs execute only from the
+default branch; `workflow_dispatch` can run any branch. **A real scheduled
+night cannot be observed until the workflow is merged/pushed to the default
+branch — never claim one passed from a local check.**
+
+The nightly is **not** part of `CI required`: it has no aggregation job and
+every job name is prefixed `Nightly`, so it cannot shadow the exact
+`CI required` check emitted by `ci.yaml`. `ci.yaml` and branch protection are
+untouched. Concurrency group `nightly-heavy-suite` with
+`cancel-in-progress: false` keeps one run at a time without cancelling an
+expensive run already in progress.
+
+| Job | What | Artifact (7-day retention) |
+|---|---|---|
+| `Nightly workflow and Compose validation` | pinned `rhysd/actionlint:1.7.7`, both compose configs, internal port bindings | — |
+| `Nightly backend coverage` | locked uv on Python 3.15, ruff/ty/legacy guard, Alembic on disposable PostgreSQL 18 + Valkey 8, full pytest with ≥80% branch coverage; sets `TEST_DATABASE_URL` and `DATABASE_URL` (Alembic) plus `TEST_VALKEY_URL` | `nightly-backend-reports` (coverage.xml, JUnit XML, coverage-data) |
+| `Nightly frontend coverage` | pinned Bun 1.4.4 + Node 26, typegen and generated-file freshness, typecheck/lint/format, `bun test --coverage` + `scripts/check-coverage.mjs 65` | `nightly-frontend-coverage` (lcov) |
+| `Nightly OpenAPI freshness` | `gen:openapi --check` against the in-process schema export | — |
+| `Nightly dependency security and freshness (report-only)` | `pip-audit` on the exported **locked runtime** set (`uv export --no-dev` + `--no-deps`), `bun audit`, `uv tree --outdated`, `bun outdated` | `nightly-dependency-reports` (JSON/text + exit codes) |
+| `Nightly gitleaks (existing green gate)` | full-history gitleaks, reused verbatim from `ci.yaml` | — (summary only) |
+| `Nightly production image smoke` | builds the exact prod images with separate `*-nightly` GHA cache scopes, boots `back`+`worker`+`front` through `infra/compose.ci.yaml`, migrates, asserts smoke discovery, runs Playwright `smoke` against the tested image on loopback 15001; `if: always()` log collection and `down --volumes --remove-orphans` | `nightly-browser-and-container-reports` (Playwright report, test results, container logs) |
+
+Only synthetic CI fixtures are hardcoded: loopback `127.0.0.1` service URLs,
+`ci_password`, `ci_cache_password` and `ci-only-cache-secret-…`. They are
+copied from `ci.yaml`, are not production credentials, and no deployment URL
+or real secret is stored in the repository.
+
+**Security policy (day one):** `pip-audit` and `bun audit` are **report-only** —
+their exit codes are written to `reports/scan-status.txt` and the job summary,
+and the step always exits 0, so a nightly cannot silently become a new merge
+gate. Promoting either scan to blocking requires triaging the baseline and an
+explicit maintainer decision — a local day-one run already flags the
+deliberately pinned `setuptools<81` (fix versions ≥83), which would break
+`pkg_resources` on Python 3.15 (`back/AGENTS.md` landmine 1). `gitleaks` is the
+exception: it is already a green per-PR gate in `ci.yaml`, so it stays
+blocking, unchanged.
+
+**Failure routing (verified 2026-11-27):** no workflow in this repository or
+the two sibling repositories (`ReportCollector`, `excel_loader`) has a
+notification step, a `workflow_run` completion handler, a repository webhook
+or an Actions alert rule. `infra/alertmanager/` renders SMTP recipients only
+from `.env` for **monitoring-stack** alerts; it has no GitHub Actions input.
+A failed night is therefore visible through **GitHub UI notifications only**
+(watch/participate/e-mail settings for Actions runs). The exact missing wiring,
+should mail/Alertmanager delivery be wanted, is: a repository secret holding
+the notification endpoint (no such secret exists here and none is invented by
+this change), a final `if: failure()` notification step or a repo-level
+`workflow_run`/webhook handler, and an Alertmanager receiver/route plus a
+Prometheus rule or a standalone sender to consume it. Until a maintainer
+decides and supplies those pieces, the GitHub run page is the single source of
+nightly status — do not claim e-mail delivery.
+
 ## Definition of done
 
 - [ ] quality checks green: back — typecheck + lint + tests; front — typecheck + lint + tests

@@ -235,6 +235,27 @@ which would break monitoring).
   host with real RO config and named volumes, RTO/stricter RPO decision, alert
   mail delivery, PITR/WAL archiving and automatic artifact-spool snapshots.
 
+## Nightly heavy suite (P1-9, DM part, 2026-11-27) — ADDED, schedule pending
+
+- `.github/workflows/nightly.yaml` runs daily **04:13 UTC** (and on
+  `workflow_dispatch`) off the per-PR path: full backend coverage on disposable
+  PostgreSQL/Valkey, the frontend 65% coverage gate, OpenAPI freshness,
+  report-only pip-audit/bun audit plus dependency freshness, blocking gitleaks,
+  and Playwright smoke against the production images on the isolated CI stand.
+  Artifacts are retained 7 days; stacks are torn down with `if: always()`.
+- Not part of `CI required`: no aggregation job, all job names prefixed
+  `Nightly`; `ci.yaml` and branch protection untouched. Contract, schedule
+  rationale and notification gap: `docs/WORKFLOW.md` §CI.
+- Day-one security policy: the two new scans are report-only; gitleaks stays
+  blocking as an existing green gate. Failure routing is **GitHub UI
+  notifications only** — no Actions→Alertmanager/SMTP wiring exists in any of
+  the three repositories (verified 2026-11-27), and no credentials are invented.
+- **Still OPEN:** a real scheduled night cannot be observed until this is
+  merged/pushed to the default branch — no claim of a passed night is made
+  here. Alertmanager/SMTP delivery and promoting the report-only scans to
+  blocking gates both need a maintainer decision and, for delivery, a supply
+  of credentials.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
