@@ -425,3 +425,53 @@ def test_sweep_removes_expired_jobs_and_artifacts(env: Settings, worker: Worker)
         repo.get(accepted.job_id)
     assert not store.exists(accepted.job_id, "input")
     repo.dispose()
+
+
+def test_collision_job_fails_without_artifact_cache_or_temp_file(
+    env: Settings, worker: Worker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DM-1: a marker collision leaves no downloadable result or cache entry."""
+    from docx import Document
+
+    from src.jobs import worker as worker_module
+
+    doc = Document()
+    doc.add_paragraph("Иван Петров и [PERSON_1]")
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    accepted = enqueue("mask_file", input_bytes=buffer.getvalue(), filename="collision.docx")
+
+    class _FakeCache:
+        def __init__(self) -> None:
+            self.puts = 0
+
+        def get_to_path(self, _key: str, _target: Path) -> bool:
+            return False
+
+        def put_from_path(self, _key: str, _source: Path) -> None:
+            self.puts += 1
+
+    cache = _FakeCache()
+    monkeypatch.setattr(worker_module.dependencies, "result_cache", lambda: cache)
+
+    repo = JobRepository(env)
+    for attempt in range(3):
+        claimed = repo.claim_with_owner(lease_seconds=30, concurrency=1)
+        assert claimed is not None
+        _, claim = claimed
+        worker.run_one(accepted.job_id, claim)
+        status = repo.get(accepted.job_id).status
+        if attempt < 2:
+            assert status == "queued"
+            if attempt == 1:
+                time.sleep(1.2)  # bounded retry backoff
+
+    job = repo.get(accepted.job_id)
+    assert status == "failed"
+    assert job.result_key is None
+    assert "Иван" not in (job.error_code or "")  # safe code only, never input text
+    assert cache.puts == 0
+    store = ArtifactStore(env.jobs_dir)
+    assert list(store.root.glob(".dm-transform-*")) == []
+    assert list(store.root.glob(f"{accepted.job_id}.result.*")) == []
+    repo.dispose()

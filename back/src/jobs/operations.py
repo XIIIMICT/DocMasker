@@ -11,7 +11,8 @@ import hashlib
 import json
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -45,12 +46,26 @@ def _stream_digest(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def _temp_output(store: ArtifactStore) -> Path:
-    """Create a bounded temporary output path inside the private spool."""
+@contextmanager
+def _temp_output(store: ArtifactStore) -> Generator[Path]:
+    """
+    Own one bounded temp output path inside the private spool.
+
+    The unique mkstemp path (immediately unlinked) belongs to this execution
+    only. Any failure before the result is handed to the worker removes it; a
+    successful return transfers ownership through the entries dict, whose
+    `Path` values are cleaned by `worker.run_one`'s finally block.
+    """
     handle, name = tempfile.mkstemp(prefix=".dm-transform-", dir=str(store.root))
     os.close(handle)
-    Path(name).unlink()
-    return Path(name)
+    path = Path(name)
+    path.unlink()
+    try:
+        yield path
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def _manifest_ctx() -> dict[str, Any]:
@@ -137,33 +152,33 @@ def execute(
             raise JobExecutionError("invalid_package") from error
         check()
         progress("detection", 40)
-        output_path = _temp_output(store)
-        stats, keys, coverage = mask_docx_to_file(source_path, output_path, masker, checkpoint=check)
-        check()
-        progress("rewrite", 80)
-        name = safe_read("name").decode("utf-8") or "document.docx"
-        base = safe_stem(name)
-        document_name = f"{base} (замаскированный).docx"
-        keys_name = f"{base} (ключи демаскировки).yaml"
-        ctx = _manifest_ctx()
-        manifest = build_mask_manifest(
-            source_bytes=b"",
-            input_digest=_stream_digest(source_path),
-            document_name=document_name,
-            keys_name=keys_name,
-            stats=stats.as_manifest_stats(),
-            coverage=coverage.as_manifest(),
-            cache_hit=False,
-            namespace_version=ctx["namespace_version"],
-            masking_ruleset_version=ctx["masking_ruleset_version"],
-            exception_config_digest=ctx["exception_config_digest"],
-        )
-        progress("archive", 95)
-        return {
-            document_name: output_path,
-            keys_name: keys.to_yaml().encode("utf-8"),
-            MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-        }
+        with _temp_output(store) as output_path:
+            stats, keys, coverage = mask_docx_to_file(source_path, output_path, masker, checkpoint=check)
+            check()
+            progress("rewrite", 80)
+            name = safe_read("name").decode("utf-8") or "document.docx"
+            base = safe_stem(name)
+            document_name = f"{base} (замаскированный).docx"
+            keys_name = f"{base} (ключи демаскировки).yaml"
+            ctx = _manifest_ctx()
+            manifest = build_mask_manifest(
+                source_bytes=b"",
+                input_digest=_stream_digest(source_path),
+                document_name=document_name,
+                keys_name=keys_name,
+                stats=stats.as_manifest_stats(),
+                coverage=coverage.as_manifest(),
+                cache_hit=False,
+                namespace_version=ctx["namespace_version"],
+                masking_ruleset_version=ctx["masking_ruleset_version"],
+                exception_config_digest=ctx["exception_config_digest"],
+            )
+            progress("archive", 95)
+            return {
+                document_name: output_path,
+                keys_name: keys.to_yaml().encode("utf-8"),
+                MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+            }
 
     if kind == "unmask_file":
         source_path = store.path_for(job_id, "input")
@@ -178,29 +193,29 @@ def execute(
             raise JobExecutionError("invalid_keys") from error
         check()
         progress("detection", 40)
-        output_path = _temp_output(store)
-        unused, coverage = unmask_docx_to_file(source_path, output_path, placeholders, checkpoint=check)
-        check()
-        progress("rewrite", 80)
-        name = safe_read("name").decode("utf-8") or "document.docx"
-        base = safe_stem(name).removesuffix(" (замаскированный)")
-        document_name = f"{base} (демаскированный).docx"
-        ctx = _manifest_ctx()
-        manifest = build_unmask_manifest(
-            source_bytes=b"",
-            input_digest=_stream_digest(source_path),
-            document_name=document_name,
-            unused_keys=unused,
-            coverage=coverage.as_manifest(),
-            cache_hit=False,
-            namespace_version=ctx["namespace_version"],
-            masking_ruleset_version=ctx["masking_ruleset_version"],
-            exception_config_digest=ctx["exception_config_digest"],
-        )
-        progress("archive", 95)
-        return {
-            document_name: output_path,
-            MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-        }
+        with _temp_output(store) as output_path:
+            unused, coverage = unmask_docx_to_file(source_path, output_path, placeholders, checkpoint=check)
+            check()
+            progress("rewrite", 80)
+            name = safe_read("name").decode("utf-8") or "document.docx"
+            base = safe_stem(name).removesuffix(" (замаскированный)")
+            document_name = f"{base} (демаскированный).docx"
+            ctx = _manifest_ctx()
+            manifest = build_unmask_manifest(
+                source_bytes=b"",
+                input_digest=_stream_digest(source_path),
+                document_name=document_name,
+                unused_keys=unused,
+                coverage=coverage.as_manifest(),
+                cache_hit=False,
+                namespace_version=ctx["namespace_version"],
+                masking_ruleset_version=ctx["masking_ruleset_version"],
+                exception_config_digest=ctx["exception_config_digest"],
+            )
+            progress("archive", 95)
+            return {
+                document_name: output_path,
+                MANIFEST_NAME: json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+            }
 
     raise JobExecutionError("unknown_kind")

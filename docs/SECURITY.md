@@ -95,6 +95,12 @@ still be treated as sensitive operational data.
   traversal) and writes are atomic temp-file + `os.replace`
   (`back/src/jobs/storage.py`, `compose.yaml`, `infra/AGENTS.md`). Nothing is
   served from a public static directory; results are streamed with `FileResponse`.
+  DOCX transform outputs are attempt-owned `.dm-transform-*` temp files: the
+  path transform publishes atomically and the job owner removes any temp output
+  on collision, cancellation, parse/serialization error or worker failure,
+  without deleting another job's artifact or a published cache entry
+  (`back/src/masking/ooxml/package.py`, `back/src/jobs/operations.py`,
+  `back/tests/test_transform_cleanup.py`).
 - **Cache writes are post-fenced.** An entry is written only after the guarded
   `succeeded` transition; cancelled/failed jobs and validation errors never
   populate the cache, and a Valkey outage degrades to misses, never a 500
