@@ -68,6 +68,61 @@ weakened. Evidence is from local runs on 2026-11-27, not from GitHub CI.
   consecutive targeted runs (15 tests each). Pre-existing HeroUI act warnings
   in unrelated component tests only.
 
+## Frontend DOCX highlight correctness (audit Phase 3.1, 2026-11-27) — CLOSED
+
+Deterministic tests were written first in
+`front/src/shared/ui/__tests__/docx-viewer.test.ts` for overlapping needles,
+prefix collisions, repeated occurrences, empty needles, regex-literal needles,
+non-BMP and combining Unicode, matches split across neighbouring text nodes,
+paragraph boundaries and re-application after previous marks. Four cases
+failed against the branch-base implementation and are the demonstrated defects:
+a shorter needle listed first shadowed a longer one («Иван» vs «Иван Петров»),
+and a needle split across rendered runs was never highlighted (two tests).
+The other cases were already correct and are now locked by passing assertions;
+no assertion was weakened. No full re-render was added, and the dynamic import,
+detached per-generation host, generation guard, 120 ms debounce and timer
+cancellation are unchanged.
+
+Fix: `highlightTexts` deduplicates and sorts literal needles longest-first
+before escaping them into one regex, so the earliest position always resolves
+to the longest match regardless of keys order (the same rule as the backend's
+`compile_placeholders`). Consecutive text nodes with the same nearest logical
+container are matched as one string and each covered node slice gets its own
+mark; matches never cross a paragraph, and the undo pass precedes every
+application. Durable rule: `docs/DOCX_SUPPORT.md` §Frontend preview isolation
+and `front/AGENTS.md` §2. The stale 5 ms comment in
+`front/e2e/rerender-smoke.spec.ts` now names the actual 120 ms debounce.
+
+**Cost — SYNTHETIC, MEASURED (no committed large DOCX fixture exists):** a
+deterministic 6,000-paragraph / 18,000-text-node / 1,285,555-character DOM with
+40 needles and 200 generated marks. happy-dom (5 traversal samples, 15 warm
+and 6 cold first-pass samples per implementation): traversal median **5.64 ms**,
+regex construction median **0.06 ms**, per-node regex search median **5.49 ms**,
+container search median **11.85 ms**; warm full pass base **22.31 ms** → current
+**21.40 ms** (min 17.48 → 16.25 ms), cold first pass base median **21.42 ms** →
+current **30.06 ms**; mark count is identical (200) before and after
+re-application. Chromium headless on the same SYNTHETIC DOM (5 rounds): base
+first pass median **4.1 ms**, current first pass median **8.6 ms**, re-apply
+median **5.8 ms** (well under a 16 ms frame budget); forced layout median
+100.9 ms without marks vs 92.3 ms with marks — difference within noise.
+`performance.memory` (~10 MB) and happy-dom heap deltas are not reliably
+attributable under GC; node counts are the deterministic proxy, with no
+duplication across seven repeated passes. No Worker, highlighter engine,
+blanket memoization or new dependency: the warm gain is within noise and the
+measured browser cost does not block typing or scrolling. Layout/paint was
+observable only as forced reflow in Chromium; happy-dom has no layout engine.
+
+- **Verified:** `bun run --cwd front format:check`, `lint:check`, `typecheck`
+  (89 files), `test` (**276 pass / 0 fail**, 889 `expect()` calls, 31 files;
+  pre-existing HeroUI act warnings only), `build` (9 routes), and
+  `prek run --all-files` green. Dev stand already up on :5001 (no container
+  restart needed): targeted `rerender-smoke.spec.ts` **1/1**, targeted DOCX
+  preview/manifest subset **4/4**, targeted job-lifecycle subset **3/3**, and
+  the full `smoke` project **35/35** (42.6 s) against
+  `http://127.0.0.1:5001` via `local.playwright.config.ts`. The isolated
+  production-image CI stack on :15001 was **not** running, so production smoke
+  was not run; no target-hardware browser profiling was attempted.
+
 ## OpenAPI → TypeScript declarations (finding 8, 2026-11-27) — CLOSED
 
 The earlier maintainer deferral (2026-11-24, «поместим в TODO») is superseded by
