@@ -10,9 +10,12 @@ modified ZIP entries are re-serialized — all other entries are copied verbatim
 """
 
 import io
+import os
 import shutil
+import tempfile
 import zipfile
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -743,6 +746,14 @@ def transform_package(
         return out.getvalue(), all_entities, unused, coverage
 
 
+def _temp_transform_path(target: Path) -> Path:
+    """Create a free sibling temp path for a streamed transform."""
+    handle, name = tempfile.mkstemp(prefix=".dm-transform-", suffix=".tmp", dir=str(target.parent))
+    os.close(handle)
+    Path(name).unlink()
+    return Path(name)
+
+
 def transform_package_to_file(
     source: Path,
     target: Path,
@@ -756,10 +767,17 @@ def transform_package_to_file(
     """
     Bounded-memory transform: one XML part at a time, streamed copy for the rest.
 
-    Unchanged media/binary entries are never decompressed into `bytes`, and the
-    output DOCX is written straight to `target`. Only the currently processed
-    XML part's tree and its serialised bytes are resident at any moment; the
-    caller gets aggregate `EntityStats`, never an occurrence-level list.
+    Unchanged media/binary entries are never decompressed into `bytes`. Only
+    the currently processed XML part's tree and its serialised bytes are
+    resident at any moment; the caller gets aggregate `EntityStats`, never an
+    occurrence-level list.
+
+    Output is written to a unique sibling temp file and published to `target`
+    with an atomic `Path.replace` only after the whole package was transformed
+    and checked.
+    A collision, cancellation, parse/serialization error or any other failure
+    removes the temp file and leaves a pre-existing `target` untouched, so no
+    partial DOCX can be downloaded or cached.
     """
     parts, coverage = build_inventory(source)
     if coverage.rejected_parts or coverage.unprocessed_text_parts:
@@ -771,42 +789,49 @@ def transform_package_to_file(
     source_markers: set[str] = set()
     allocated_markers: set[str] = set()
     used_placeholders: set[str] = set()
-    with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as output:
-        for info in sorted(original.infolist(), key=lambda item: item.filename):
-            if info.is_dir():
-                continue
-            part = processable.get(info.filename)
-            payload = (
-                _transform_part(
-                    part,
-                    original,
-                    mode=mode,
-                    masker=masker,
-                    keys=keys,
-                    placeholders=placeholders,
-                    pattern=pattern,
-                    checkpoint=checkpoint,
-                    coverage=coverage,
-                    stats=stats,
-                    detail=None,
-                    source_markers=source_markers,
-                    allocated_markers=allocated_markers,
-                    used_placeholders=used_placeholders,
+    temp_path = _temp_transform_path(target)
+    try:
+        with zipfile.ZipFile(source) as original, zipfile.ZipFile(temp_path, "w", zipfile.ZIP_DEFLATED) as output:
+            for info in sorted(original.infolist(), key=lambda item: item.filename):
+                if info.is_dir():
+                    continue
+                part = processable.get(info.filename)
+                payload = (
+                    _transform_part(
+                        part,
+                        original,
+                        mode=mode,
+                        masker=masker,
+                        keys=keys,
+                        placeholders=placeholders,
+                        pattern=pattern,
+                        checkpoint=checkpoint,
+                        coverage=coverage,
+                        stats=stats,
+                        detail=None,
+                        source_markers=source_markers,
+                        allocated_markers=allocated_markers,
+                        used_placeholders=used_placeholders,
+                    )
+                    if part is not None
+                    else None
                 )
-                if part is not None
-                else None
-            )
-            if payload is not None:
-                output.writestr(_copy_zip_info(info), payload)
-                continue
-            # Byte-for-byte semantics without materialising the entry.
-            with original.open(info) as src, output.open(_copy_zip_info(info), "w") as dst:
-                shutil.copyfileobj(src, dst, length=1024 * 1024)
-    if mode == "mask":
-        _fail_on_marker_collision(source_markers, allocated_markers)
-    unused = (
-        [value for placeholder, value in placeholders.items() if placeholder not in used_placeholders]
-        if mode == "unmask"
-        else []
-    )
+                if payload is not None:
+                    output.writestr(_copy_zip_info(info), payload)
+                    continue
+                # Byte-for-byte semantics without materialising the entry.
+                with original.open(info) as src, output.open(_copy_zip_info(info), "w") as dst:
+                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+        if mode == "mask":
+            _fail_on_marker_collision(source_markers, allocated_markers)
+        unused = (
+            [value for placeholder, value in placeholders.items() if placeholder not in used_placeholders]
+            if mode == "unmask"
+            else []
+        )
+        temp_path.replace(target)
+    except BaseException:
+        with suppress(OSError):
+            temp_path.unlink()
+        raise
     return stats, unused, coverage

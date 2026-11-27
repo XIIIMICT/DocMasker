@@ -18,7 +18,11 @@ parsing (`defusedxml.lxml`, no DTD/entities/network, 32 MiB part cap),
 namespace-URI matching, split-across-runs handling, fail-closed unsupported text
 parts and the `checkpoint` hooks (before each part and between detection
 windows) are unchanged. The path-based worker transform stays on disk: unchanged
-entries are stream-copied and the result is written straight to the spool file.
+entries are stream-copied to a unique sibling `.dm-transform-*` temp file, and
+the spool target is published with an atomic `Path.replace` only after the whole
+package was transformed and checked. On collision, cancellation, parse/serialization error
+or worker failure the temp file is removed and a pre-existing target is never
+deleted, so no partial DOCX is downloadable or cacheable.
 
 The job path replaces the per-occurrence `all_entities` list with `EntityStats`
 (total, per-label occurrences and distinct counts reusing `MaskKeys` numbering);
@@ -103,6 +107,15 @@ delivered archive.
 There is **no** `X-Docx-Unsupported-Parts` plumbing and no frontend warning —
 that mechanism was removed in Phase 5.
 
+A source literal equal to a marker allocated by the same run also fails closed:
+sync routes return `422` with stable code `marker_collision` and a fixed Russian
+detail that names only marker tokens, never source text or keys. The durable
+path records a safe `error_code`, publishes no result artifact and writes no
+cache entry. `back/tests/test_transform_cleanup.py` pins the cleanup contract
+(no partial target, no leftover `.dm-transform-*`, no cache write, no deletion
+of a pre-existing artifact) for path and in-memory flows;
+`back/tests/test_jobs_worker.py` covers the same outcomes against PostgreSQL.
+
 ## Result manifest (§7)
 
 Both sync and job file operations return the same flat ZIP and the same
@@ -139,3 +152,8 @@ proving only one decompressed part is resident, high-occurrence stats parity
 without an occurrence list, file/memory equivalence, cancellation at part and
 window boundaries, one unmask scan per container and worker-manifest parity.
 `front/e2e/smoke.spec.ts` includes a manifest-required/validated-statistics case.
+`back/tests/test_transform_cleanup.py` adds failure-path coverage: sync
+`marker_collision` envelope and no cache write for text/DOCX, no partial target
+on collision/cancellation/parse/serialization error, preservation of a
+pre-existing artifact, and job `execute()` cleanup on collision, cancellation
+and worker failure.

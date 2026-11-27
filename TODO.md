@@ -75,6 +75,12 @@ and before/after benchmarks: `docs/PRODUCTION_READINESS.md`,
   envelope, reserved marker numbering / explicit marker ids, and a reserved
   namespace that makes source collisions impossible. Reopen only with an ADR
   when colliding input is actually observed.
+- **DM-1 failure-path cleanup (done, no format change).** A collision,
+  cancellation, parse/serialization error or worker failure now removes every
+  `.dm-transform-*` temp/partial output before it can be published or cached;
+  a pre-existing artifact is never deleted. The fail-closed `marker_collision`
+  contract and legacy keys format stay exactly as above. Evidence:
+  `back/tests/test_transform_cleanup.py`, `back/tests/test_jobs_worker.py`.
 
 ## Frontend refactor audit (2026-11-26)
 
