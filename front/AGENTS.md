@@ -83,7 +83,10 @@ repo. Verified gotchas:
    host; only the current generation moves those nodes into the visible
    surface, so an already-started `renderAsync` can never overwrite a newer
    Blob. Obsolete hosts are cleared on switch/unmount/success/failure.
-   Downloaded documents are never altered.
+   Downloaded documents are never altered. Preview needles are literal and
+   **longest-match-first at the earliest position** (keys order never decides
+   an overlap); matching may span neighbouring text nodes of one paragraph but
+   never crosses paragraphs. Every pass removes previous marks first.
 3. The two panes scroll by **ratio** (`useSyncedScroll`), not pixels. Narrow
    screens (`<64rem`) stack them; only `.editor-pane__label--mask-input` drops
    its desktop `min-height`. Keep `overflow-y: auto` but hide the scrollbar;

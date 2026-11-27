@@ -6,7 +6,7 @@ import { DATA_FILE_INPUT } from "./helpers/selectors";
 import { waitForGraceFrames } from "./helpers/timing";
 
 const SAMPLE_DOCX = fileURLToPath(new URL("./fixtures/sample.docx", import.meta.url));
-/** Named contract: `docx-viewer.tsx::HIGHLIGHT_DEBOUNCE_MS` is 5 ms; allow for scheduling jitter. */
+/** Named contract: `docx-viewer.tsx::HIGHLIGHT_DEBOUNCE_MS` is 120 ms; allow for scheduling jitter. */
 const HIGHLIGHT_PASS_TIMEOUT_MS = 2000;
 
 type PreviewWatch = { paragraph: Element | null; mutations: number };

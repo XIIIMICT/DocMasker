@@ -177,6 +177,22 @@ dependency or CSS is needed. Regression coverage:
 unmount, current vs stale failures, highlight-timer cancellation, detached
 host identity and committed-node preservation).
 
+The preview highlight pass (`highlightTexts`) applies literal needles to the
+rendered DOM with a **durable overlap rule**: scanning starts at the earliest
+position and, at that position, the **longest** matching needle wins — never
+the one listed first in the keys. This mirrors the backend's longest-first
+unmask alternation (`mapping.py::compile_placeholders`), so a shorter key such
+as «Иван» cannot shadow «Иван Петров» in a demasked preview. Needles are
+deduplicated and sorted longest-first before they are escaped into one regex;
+equal-length needles cannot both match the same position, so keys order cannot
+change which value is highlighted. Consecutive text nodes inside one logical
+container (nearest `p`, `div`, list cell, heading or blockquote) are matched as
+one string, so a placeholder split across rendered runs is highlighted; a
+match never crosses a container boundary. Each covered node slice receives its
+own `<mark class="docx-marker">`, and every pass first removes previous marks,
+so re-application after a keys edit never nests or duplicates a mark. These
+cases are pinned by `front/src/shared/ui/__tests__/docx-viewer.test.ts`.
+
 ## Tests
 
 `back/tests/test_ooxml.py` builds synthetic OPC fixtures by hand: default
