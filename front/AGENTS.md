@@ -27,7 +27,7 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 `bun run format` can rewrite line breaks in untouched files — check `git status`
 and `git diff` afterwards. The current unit inventory and the Playwright `smoke`
 discovery guard live in `docs/TESTING.md` §1. The `smoke`
-project currently lists 35 tests in four spec files (`health`, `smoke`,
+project currently lists 41 tests in four spec files (`health`, `smoke`,
 `rerender-smoke`, `hover-smoke`) and needs a prepared stack; probe files are
 excluded. CI pipes `playwright test --project=smoke --list` into
 `bun e2e/check-smoke-discovery.mjs`, which requires the exact four basenames,
@@ -163,6 +163,15 @@ TypeScript indexing"). Durable coding rules:
    `useJobLifecycle` aborts its local controller on unmount without cancelling
    the server job. JSZip 3.10.2 stays — measurement and rejected alternatives
    are in `docs/DOCX_SUPPORT.md` §"Result-archive unpacking".
+9. Support-pill motion is restored by maintainer decision 2026-11-28 after the
+   user reported the audited expansion felt "слишком быстро": `.support-link`
+   animates `gap` over `--app-motion-gap: 180ms` and the label `max-width` over
+   `--app-motion-expand: 220ms` (same `cubic-bezier(0.22, 1, 0.36, 1)` easing),
+   with `background-color`/`opacity` at `--app-motion-fast: 140ms`. Do not
+   reintroduce the snap or the `translateX` reveal — the measured layout cost is
+   explicitly accepted. Reduced motion still zeroes all three tokens to `0ms`;
+   the compact Tooltip and hover/focus/keyboard end states stay intact. Evidence
+   and computed Chromium values: `docs/FRONTEND-AUDIT.md` §9.
 
 ## Layout (detail — docs/ARCHITECTURE.md)
 

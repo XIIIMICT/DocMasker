@@ -63,11 +63,13 @@
     --field-radius: 1rem;
 
     /* DocMasker's own motion only; HeroUI ships its own reduce-motion policy.
-       Theme switches are deliberately instant and expansion changes layout
-       instantly, so this single token is used for the decorative paint/composite
-       properties only. No persistent compositing hints: the reveal is short
-       and infrequent. */
+       Theme switches are deliberately instant (next-themes injects
+       `transition:none!important`). The support pill keeps its original
+       gap/expand timing by maintainer decision 2026-11-28: the layout cost of
+       animating gap/max-width is knowingly accepted over a snappier reveal. */
     --app-motion-fast: 140ms;
+    --app-motion-gap: 180ms;
+    --app-motion-expand: 220ms;
 }
 
 .dark,
@@ -163,9 +165,9 @@
     border-radius: 999px;
     text-decoration: none;
     cursor: pointer;
-    /* `gap` and the label's `max-width` change layout, so they snap to their
-       end state. Only the decorative background-color transition is animated. */
-    transition: background-color var(--app-motion-fast) ease;
+    transition:
+        gap var(--app-motion-gap) cubic-bezier(0.22, 1, 0.36, 1),
+        background-color var(--app-motion-fast) ease;
 }
 
 .support-link > svg {
@@ -181,11 +183,8 @@
     font-size: 0.84rem;
     white-space: nowrap;
     opacity: 0;
-    /* Compositor-friendly reveal: the layout width snaps, the label slides and
-       fades. `transform`/`opacity` never force a layout pass per frame. */
-    transform: translateX(-0.25rem);
     transition:
-        transform var(--app-motion-fast) ease,
+        max-width var(--app-motion-expand) cubic-bezier(0.22, 1, 0.36, 1),
         opacity var(--app-motion-fast) ease;
 }
 
@@ -198,7 +197,6 @@
 .support-link:focus-visible .support-link__label {
     max-width: 20rem;
     opacity: 1;
-    transform: translateX(0);
 }
 
 .support-link:focus-visible {
@@ -218,7 +216,6 @@
 .support-link--compact:focus-visible .support-link__label {
     max-width: 0;
     opacity: 0;
-    transform: translateX(-0.25rem);
 }
 
 [data-slot="tooltip-trigger"]:has(.support-link--compact) {
@@ -611,5 +608,7 @@ textarea.result-area--error {
 @media (prefers-reduced-motion: reduce) {
     :root {
         --app-motion-fast: 0ms;
+        --app-motion-gap: 0ms;
+        --app-motion-expand: 0ms;
     }
 }

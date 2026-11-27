@@ -52,7 +52,9 @@ describe("globals.css reduced-motion policy", () => {
         // Theme changes are instant by contract: next-themes injects
         // `transition:none!important`, so a stylesheet transition here is dead.
         expect(withoutComments).not.toMatch(/html\s*\{[^}]*\btransition\s*:/);
-        expect(withoutComments).not.toMatch(/--app-motion-(?:theme|gap|expand)\s*:/);
+        expect(withoutComments).not.toMatch(/--app-motion-theme\s*:/);
+        // Maintainer decision 2026-11-28: no transform-based shortcut remains.
+        expect(withoutComments).not.toMatch(/translateX\(/);
     });
 
     it("routes every transition duration through an app motion token", () => {
@@ -67,29 +69,55 @@ describe("globals.css reduced-motion policy", () => {
         }
     });
 
-    it("never animates layout properties on app-owned transitions", () => {
+    it("restores the original support-pill expansion timing", () => {
         const transitions = [...withoutComments.matchAll(/transition\s*:\s*([^;]+);/g)].map(
             (match) => capture(match, 1),
         );
+        const [linkTransition, labelTransition] = transitions;
+        if (!linkTransition || !labelTransition) throw new Error("missing transition declarations");
 
-        // gap/max-width animated per frame (MEASURED: 107 intermediate widths,
-        // 444 Layout events over 8 hover cycles); the reveal now uses
-        // composited transform/opacity while widths snap to their end state.
-        for (const transition of transitions) {
-            expect(transition).not.toMatch(
-                /\b(?:gap|max-width|width|height|padding|margin|inset|top|left|right|bottom)\b/,
-            );
+        // Restored by maintainer decision 2026-11-28 after the user reported
+        // that the audited snap felt too fast. The layout cost is accepted.
+        expect(linkTransition).toContain(
+            "gap var(--app-motion-gap) cubic-bezier(0.22, 1, 0.36, 1)",
+        );
+        expect(linkTransition).toContain("background-color var(--app-motion-fast) ease");
+        expect(labelTransition).toContain(
+            "max-width var(--app-motion-expand) cubic-bezier(0.22, 1, 0.36, 1)",
+        );
+        expect(labelTransition).toContain("opacity var(--app-motion-fast) ease");
+
+        // First declarations are the normal-motion tokens; the reduce block
+        // overrides them with 0ms and is asserted separately below.
+        const values = new Map<string, string>();
+        for (const match of withoutComments.matchAll(/(--app-motion-[\w-]+)\s*:\s*([^;]+);/g)) {
+            const name = capture(match, 1);
+            if (!values.has(name)) values.set(name, capture(match, 2).trim());
         }
+        expect(values.get("--app-motion-fast")).toBe("140ms");
+        expect(values.get("--app-motion-gap")).toBe("180ms");
+        expect(values.get("--app-motion-expand")).toBe("220ms");
+
         const labelRule = rules(withoutComments).find(
             (rule) => rule.selector === ".support-link__label",
         );
-        expect(labelRule?.body).toMatch(/transform:\s*translateX\(-0\.25rem\)/);
         const hoverRule = rules(withoutComments).find(
             (rule) =>
                 rule.selector ===
                 ".support-link:hover .support-link__label, .support-link:focus-visible .support-link__label",
         );
-        expect(hoverRule?.body).toMatch(/transform:\s*translateX\(0\)/);
+        const compactRule = rules(withoutComments).find(
+            (rule) =>
+                rule.selector ===
+                ".support-link--compact:hover .support-link__label, .support-link--compact:focus-visible .support-link__label",
+        );
+        for (const body of [labelRule?.body, hoverRule?.body, compactRule?.body]) {
+            expect(body).not.toMatch(/transform\s*:/);
+        }
+        expect(hoverRule?.body).toMatch(/max-width:\s*20rem/);
+        expect(hoverRule?.body).toMatch(/opacity:\s*1\b/);
+        expect(compactRule?.body).toMatch(/max-width:\s*0\b/);
+        expect(compactRule?.body).toMatch(/opacity:\s*0\b/);
     });
 
     it("zeroes every token referenced by an animated selector inside the reduce block", () => {

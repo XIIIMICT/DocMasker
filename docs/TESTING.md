@@ -64,13 +64,13 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 | Document viewer | `shared/ui/__tests__/docx-viewer.test.ts`, `docx-viewer-lifecycle.test.tsx`, `docx-viewer-scheduling.test.ts` | marker highlighting, stale generation/render guards, debounce; injectable `DocxViewer.renderDocument` seam leaves the lazy default unchanged |
 | Header | `shared/ui/__tests__/theme-switcher.test.ts`, `support-button.test.ts` | theme options, mailto parsing |
 | Masking workflow | `features/masking/__tests__/use-mode-drafts.test.ts`, `use-masker-workflow-downloads.test.ts`, `use-job-lifecycle.test.ts`, `use-file-input.test.ts`, `result-download.test.ts`, `mask-requests.test.ts`, `keys-parse.test.ts`, `demask-guard.test.ts` | per-mode drafts, downloads, job lifecycle/cancellation, file input, request guards, YAML key parsing |
-| App / tooling | `app/__tests__/globals-conventions.test.ts`, `src/__tests__/check-coverage.test.ts` | global CSS conventions (instant theme switching, no layout-property transitions, compositor-only reveal, zeroed motion token under reduce, pinned HeroUI breakpoints); coverage gate is a thin CLI wrapper over `scripts/check-coverage-parse.mjs` — malformed thresholds/LCOV fail deterministically, 65% floor unchanged; the fail-closed LCOV parser rejects duplicate/out-of-order/incomplete counters, a premature second `SF` and unsafe aggregate sums, while accepting bun's LF/CRLF, multi-file and zero-hit reports |
+| App / tooling | `app/__tests__/globals-conventions.test.ts`, `src/__tests__/check-coverage.test.ts` | global CSS conventions (instant theme switching, restored 180/220 ms `gap`/`max-width` expansion with no `translateX` reveal, zeroed motion tokens under reduce, pinned HeroUI breakpoints); coverage gate is a thin CLI wrapper over `scripts/check-coverage-parse.mjs` — malformed thresholds/LCOV fail deterministically, 65% floor unchanged; the fail-closed LCOV parser rejects duplicate/out-of-order/incomplete counters, a premature second `SF` and unsafe aggregate sums, while accepting bun's LF/CRLF, multi-file and zero-hit reports |
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
-Four spec files, 40 tests at the last `--list` run (28 in `smoke.spec.ts`
-after adding the theme/support-link/reduced-motion and disabled-action cases,
-10 hover, 1 rerender, 1 health):
+Four spec files, 41 tests at the last `--list` run (29 in `smoke.spec.ts`
+after adding the restored-timing case alongside the theme/support-link/
+reduced-motion and disabled-action cases, 10 hover, 1 rerender, 1 health):
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
 `front/e2e/rerender-smoke.spec.ts`, `front/e2e/hover-smoke.spec.ts`.
 `front/playwright.config.ts` discovers them with
@@ -243,12 +243,13 @@ stack (front **15001**, back **18001**) and first verifies exact discovery of
 `health.spec.ts`, `smoke.spec.ts`, `rerender-smoke.spec.ts` and
 `hover-smoke.spec.ts` plus the minimum test counts (§1). The CI front service
 sets a synthetic `SUPPORT_MAIL` fixture: the header support link is rendered only when that runtime env var is
-present. The smoke suite asserts that control's hover, keyboard-focus and
-compact-Tooltip end states, that reduced motion zeros only DocMasker's token
-while HeroUI's own motion-reduce CSS stays in the cascade, and that visually
-disabled actions keep `aria-disabled`/focus but accept no pointer or keyboard
-operation. Never run smoke against an unprepared stack; never paste real PII
-into a live browser session.
+present. The smoke suite asserts that control's restored 180/220 ms expansion
+(computed durations/easing plus a deterministic intermediate width in Chromium),
+its hover, keyboard-focus and compact-Tooltip end states, that reduced motion
+zeros all three DocMasker tokens while HeroUI's own motion-reduce CSS stays in
+the cascade, and that visually disabled actions keep `aria-disabled`/focus but
+accept no pointer or keyboard operation. Never run smoke against an unprepared
+stack; never paste real PII into a live browser session.
 
 ## 5. Clean-install / Compose / prod-image verification
 

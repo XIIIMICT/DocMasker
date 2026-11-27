@@ -392,6 +392,32 @@ which would break monitoring).
   blocking gates both need a maintainer decision and, for delivery, a supply
   of credentials.
 
+## Support-pill timing restore (post-audit user decision, 2026-11-28) — CLOSED
+
+- User feedback (authoritative): after audit `02f2d58` the «Связаться с
+  разработчиком» pill expanded "слишком быстро"; the maintainer asked to restore
+  the ORIGINAL expansion timing. Decision: revert only the support-pill motion —
+  all other audit fixes and `docs/FRONTEND-AUDIT-BASELINE.md` stay as evidence.
+- Restored exactly in `front/src/app/globals.css`: `gap var(--app-motion-gap)
+  cubic-bezier(0.22, 1, 0.36, 1)` on `.support-link`, `max-width
+  var(--app-motion-expand) cubic-bezier(0.22, 1, 0.36, 1)` on
+  `.support-link__label`, tokens `140ms` / `180ms` / `220ms`; the added
+  `transform: translateX(-0.25rem)` reveal and its hover/compact resets were
+  removed. `prefers-reduced-motion: reduce` still zeroes all three tokens.
+- Accepted tradeoff: animating `gap`/`max-width` forces layout (audit measurement:
+  444 Layout events / 63.9 ms over eight hover cycles). The maintainer prefers the
+  original feel over that cost; no snap/transform substitute remains. Timing is
+  pinned by `globals-conventions.test.ts` and a Chromium Playwright test that
+  freezes the real transitions at 80 ms, plus reduced-motion, hover/keyboard and
+  compact-Tooltip end-state assertions — no assertion was weakened.
+- Durable record: `docs/ARCHITECTURE.md`, `docs/FRONTEND-AUDIT.md` §9,
+  `front/AGENTS.md` §"Critical invariants", `docs/TESTING.md`.
+- **Verified:** front `format:check` / `lint:check` / `typecheck` / `test`
+  (**287 pass / 0 fail**) / `build`, `prek run --all-files`, targeted Playwright
+  **4/4** and full `smoke` **41/41** on `http://127.0.0.1:5001` via
+  `local.playwright.config.ts`; discovery guard 41 tests in 4 specs. No push,
+  no merge.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
