@@ -92,8 +92,8 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
 
 - Backend `GET /health` is a simple liveness probe (`{"status":"ok"}`, no
   model to load); front `/api/health` is a Next route. Phase 6 added
-  `GET /ready` (PostgreSQL check, 503 when down) and `GET /metrics` (coarse
-  counters without PII) on the backend — but **wiring them into compose/CI
+  `GET /ready` (PostgreSQL check, 503 when down) and `GET /metrics` (the `dm_*`
+  Prometheus scrape without PII; the legacy JSON answer was removed) on the backend — but **wiring them into compose/CI
   healthchecks and a front readiness route is still part of the deferred
   observability stage 6**; do not claim the healthchecks use `/ready`.
   Worker drains its pool on SIGTERM (see `jobs/worker.py`).

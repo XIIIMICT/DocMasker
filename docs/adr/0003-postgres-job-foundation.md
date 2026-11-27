@@ -202,7 +202,9 @@ and event-loop safety. One stable error envelope (`{code, detail, request_id}`
 backend stages uploads with a real byte counter + path validation and streams
 results via `FileResponse`; `run_cpu`/`run_blocking` separate bounded pools keep
 DB/ZIP/XML/filesystem work off the ASGI loop; `GET /ready` (PostgreSQL) +
-`GET /metrics` and Pydantic cross-field validators. §8.2 OpenAPI→TS types
+`GET /metrics` (later reduced to the Prometheus-only scrape: the legacy JSON
+answer was removed with no compatibility window, P1-6) and Pydantic
+cross-field validators. §8.2 OpenAPI→TS types
 deferred by maintainer decision (`TODO.md`).
 
 **Implemented in Phase 5 (2026-11-24):** full OPC-aware OOXML transformer

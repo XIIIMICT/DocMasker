@@ -97,6 +97,11 @@ legacy JSON `/metrics` answer retained (`back/src/main.py:150-151`).
 
 ### (a) Legacy JSON `/metrics` and consumers
 
+> Status update (P1-6): the legacy JSON representation described below was
+> removed under the no-window deprecation policy; `/metrics` is now
+> Prometheus-only (`TODO.md` §"Legacy JSON `/metrics` sunset"). This section
+> stays as the Phase 0 evidence snapshot.
+
 - Endpoint: `back/src/main.py:145` (`@app.get("/metrics", include_in_schema=False)`);
   content negotiation at `:153-155` (`Accept: text/plain` → Prometheus);
   legacy JSON body built at `:156-174`, returned at `:174`. No `Cache-Control`

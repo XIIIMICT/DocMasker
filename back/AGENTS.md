@@ -23,7 +23,7 @@ uv run --directory back pytest -q        # offline, filterwarnings=error, ≥80%
 uv run --directory back python -m src.masking.validate_config
 ```
 
-Module map: `src/main.py` (app + `/health` `/ready` `/metrics` + error handlers),
+Module map: `src/main.py` (app + `/health` `/ready` `/metrics` Prometheus-only scrape + error handlers),
 `src/errors.py`, `src/config.py`, `src/api.py`, `src/uploads.py`, then the two
 area trees above. Tests: `back/tests/` (see `docs/TESTING.md`).
 
@@ -61,7 +61,8 @@ area trees above. Tests: `back/tests/` (see `docs/TESTING.md`).
    pins them. Never relax them.
 7. **`MASK_LABELS` fails startup**; profile APIs/fields were removed in Phase
    4. `GET /api/labels` is the single canonical catalogue. `/ready` checks
-   PostgreSQL; `/metrics` exposes coarse safe counters only.
+   PostgreSQL; `/metrics` exposes only the `dm_*` Prometheus exposition (the
+   legacy JSON answer was removed without a compatibility window).
 8. **§8.2 (OpenAPI → TS types) is implemented.** `app.openapi()` is exported
    in-process by `python -m src.openapi_export`; the pinned dev-only generator
    writes `front/src/shared/api/generated/openapi.d.ts` (`bun run --cwd front
