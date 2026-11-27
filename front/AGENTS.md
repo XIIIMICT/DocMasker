@@ -121,7 +121,13 @@ TypeScript indexing"). Durable coding rules:
    replace the guard with a `as ResultManifest` cast or `?? 0` defaults. Tooltip
    body: `shared/mask-stats.ts::statsBreakdown` (`unique (total с повторами)`
    per label, plus `Не применено N:` on demasking when `N != 0`). DOCX
-   occurrence counts come from `placeholder-count.ts::countPlaceholdersInDocx`.
+   occurrence counts come from `placeholder-count.ts::countPlaceholdersInDocx`:
+   a pre-operation scan of the **uploaded masked file** (the demasking input),
+   single-flight per Blob and bounded by `PLACEHOLDER_SCAN_LIMITS`. The headline
+   stays the distinct-key count from the parsed keys; the scan only supplies
+   total occurrences. The backend has no equivalent unmask aggregate (it records
+   placeholder presence only), so this scan is not a result statistic — see
+   `docs/DOCX_SUPPORT.md` §"Demasking input placeholder count".
 5. Keys are validated on both sides: `validateKeysYaml` in
    `shared/api/mask.ts` runs on **every keystroke**; the backend authority is
    `back/src/masking/mapping.py::validate_keys_yaml` (422 with Russian `detail`).
