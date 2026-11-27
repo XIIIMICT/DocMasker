@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .api import api_router
 from .app_logging import configure_application_logging, log_event
+from .cache_headers import ApiNoStoreMiddleware
 from .config import get_settings
 from .errors import install_error_handlers
 from .jobs.dependencies import job_repository, result_cache
@@ -87,6 +88,9 @@ app.add_middleware(
 )
 app.include_router(api_router)
 install_error_handlers(app)
+# Outermost user middleware: every `/api/*` response is uncacheable, including
+# PII JSON and error envelopes. Per-route headers are left untouched.
+app.add_middleware(ApiNoStoreMiddleware)
 
 
 @app.get(

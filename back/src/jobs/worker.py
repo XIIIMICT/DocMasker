@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.app_logging import configure_application_logging, log_event, log_warning
+from src.app_logging import configure_application_logging, log_error, log_event, log_warning
 from src.config import Settings, get_settings
 from src.masking.archives import mark_cache_hit_file, write_archive_to_path
 from src.metrics import (
@@ -52,6 +52,7 @@ from .dependencies import artifact_store, job_repository
 from .metrics import start_metrics_server, stop_metrics_server
 from .models import Claim, Job, JobKind, JobPhase
 from .operations import JobExecutionError, execute
+from .readiness import ArtifactStorageError, check_artifact_storage
 from .repository import OWNERSHIP_LOST, JobRepository
 from .storage import ArtifactStore, cleanup_artifacts
 
@@ -537,6 +538,9 @@ class Worker:
 
     def run(self) -> None:
         """Poll loop until SIGTERM; bounded by JOBS_CONCURRENCY."""
+        # Startup gate: an unwritable or full spool cannot publish any result,
+        # so fail fast before the poll loop or any job claim.
+        check_artifact_storage(self._settings.jobs_dir, self._settings.jobs_min_free_bytes)
         log_event(
             LOGGER,
             "worker_started",
@@ -619,6 +623,18 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda _signum, _frame: worker._stop.set())  # noqa: SLF001
     try:
         worker.run()
+    except ArtifactStorageError as error:
+        # Typed startup failure: log the safe code only, then exit non-zero.
+        # The orchestrator restarts after the volume is fixed; no traceback
+        # with paths or exception text is emitted.
+        log_error(
+            LOGGER,
+            "worker_startup_failed",
+            "Worker startup aborted: artifact storage not ready.",
+            error_code=error.code,
+            outcome="error",
+        )
+        raise SystemExit(1) from error
     finally:
         stop_metrics_server(server)
 

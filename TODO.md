@@ -119,6 +119,23 @@ schema; runtime behavior is unchanged.
   failed the CLI gate with `Duplicate LF ...` and exit code 1. Valid multi-file,
   CRLF and zero-hit reports are pinned by tests.
 
+## Storage readiness and API cache policy (2026-11-27) — CLOSED
+
+- `ApiNoStoreMiddleware` sets `Cache-Control: no-store` + `Pragma: no-cache`
+  on every `/api/*` response (PII JSON, ZIPs, errors); the Next proxies forward
+  both headers. The pre-existing ZIP `no-store` is preserved. Evidence:
+  `back/tests/test_response_headers.py`, front proxy tests.
+- `jobs/readiness.py` checks `JOBS_MIN_FREE_BYTES` (default 1 GiB) + one write
+  probe at worker startup and job admission, before any staging row/artifact;
+  failure is the typed 503 `artifact_storage_unavailable` envelope (Russian
+  `detail`), never an ambiguous 500. Full/read-only disk paths are simulated in
+  `back/tests/test_storage_readiness.py`. No new metric/log field: the existing
+  `dm_artifact_disk_free_bytes` panel/alert carry the 1 GiB threshold together
+  with `docs/OPERATIONS.md`.
+- Verified locally: ruff/ty, backend pytest with the disposable PostgreSQL stand,
+  front typecheck/test, prek, compose config and actionlint; target-hardware
+  full-filesystem rehearsal remains in the "Still to verify" list below.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
@@ -128,11 +145,10 @@ schema; runtime behavior is unchanged.
   codes (never untrusted filenames); essential metrics (request latency/error
   counts, queue depth and oldest queued age, running jobs, lease losses,
   retries, cancellations, job durations, artifact sizes, DB pool saturation,
-  worker concurrency, memory/CPU where available); `Cache-Control: no-store`
-  on every result/document/key response (file ZIPs already send it, text/keys
-  responses do not yet); readiness must also verify **artifact storage**
-  availability (currently PostgreSQL only) while Valkey failure stays a
-  degraded cache state; compose/CI healthchecks wired to `/ready`; front
+  worker concurrency, memory/CPU where available); Valkey failure stays a
+  degraded cache state (artifact storage readiness is now implemented, see
+  "Storage readiness and API cache policy" above); compose/CI healthchecks
+  wired to `/ready`; front
   readiness route; startup/shutdown hook check on the live stack; container
   hardening (`read_only`, `tmpfs`, `cap_drop`, `no-new-privileges`,
   `pids_limit`, limits, internal-only network), reverse-proxy/TLS example,

@@ -107,6 +107,13 @@ Mandatory:
 - `BACKEND_PORT` (8001), `FRONT_PORT` (5001) — single sources for ports; `BACKEND_HOST`/`BACKEND_HOST_DEV` (`back`/`back-dev`) name the services in the compose networks.
 - `AUTH_APP_ORIGIN` — the app host used to derive CORS origins (inherited from the ReportCollector convention); in DocMasker the browser hits only the front origin, so it is mostly a placeholder.
 
+Artifact storage:
+`JOBS_MIN_FREE_BYTES` (default `1073741824`, 1 GiB) is the free-space floor on
+`JOBS_DIR` checked at worker startup and job admission. An absolute floor was
+chosen over a volume percentage so the contract stays deterministic on large
+volumes; operators of small volumes can lower it explicitly. The Prometheus
+readiness alert threshold must be kept in sync (§Observability).
+
 Masking:
 There is no env-var label override: `MASK_LABELS` was removed with the
 profile registry (setting it now fails backend startup). Entity types come
@@ -142,7 +149,7 @@ Deterministic, rule-based: `natasha` (morphology/rules) + `phonenumbers` + regul
   byte-for-byte. Genuinely unprocessable embedded objects are a strict error,
   not a warning. See `docs/DOCX_SUPPORT.md`.
 - `router.py` — `GET /api/labels`, `POST /api/mask`, `POST /api/mask-file`, `POST /api/unmask`, `POST /api/unmask-file`; inputs over the configurable thresholds are redirected to the job queue with 202 (ADR-0002).
-- `jobs/` — durable job execution (ADR-0002 / PostgreSQL substrate ADR-0003): `models.py` (status/phase), `schema.py` (SQLAlchemy `jobs` table + allowed transitions), `repository.py` (pooled sync SQLAlchemy 2 + psycopg 3: staging/enqueue, `FOR UPDATE SKIP LOCKED` claim with a fresh `uuid4()` fencing token, leases/heartbeat, bounded queue → 429, retry/TTL/cancel; fenced mutations return explicit `ownership_lost`), `migrations/` (Alembic `0001_jobs`), `storage.py` (atomic id-scoped staged inputs plus immutable attempt-scoped result keys), `routing.py` (threshold + shared enqueue), `api.py` (`/api/jobs` contract, streams only the DB-referenced result key), `dependencies.py` (process-wide repo/store). Integration tests require a real PostgreSQL (`TEST_DATABASE_URL`).
+- `jobs/` — durable job execution (ADR-0002 / PostgreSQL substrate ADR-0003): `models.py` (status/phase), `schema.py` (SQLAlchemy `jobs` table + allowed transitions), `repository.py` (pooled sync SQLAlchemy 2 + psycopg 3: staging/enqueue, `FOR UPDATE SKIP LOCKED` claim with a fresh `uuid4()` fencing token, leases/heartbeat, bounded queue → 429, retry/TTL/cancel; fenced mutations return explicit `ownership_lost`), `migrations/` (Alembic `0001_jobs`), `storage.py` (atomic id-scoped staged inputs plus immutable attempt-scoped result keys), `readiness.py` (free-space floor + write probe at worker startup and job admission → typed 503 `artifact_storage_unavailable`, no staging row/partial artifact), `routing.py` (threshold + shared enqueue), `api.py` (`/api/jobs` contract, streams only the DB-referenced result key), `dependencies.py` (process-wide repo/store). Integration tests require a real PostgreSQL (`TEST_DATABASE_URL`).
 
 The canonical catalogue reports `person, phone, email, link, organization, address` with Russian section titles (in keys-file order): `Физлица, Номера телефонов, Email, Ссылки, Организации, Адреса`. The frontend consumes a generated TypeScript copy (`front/scripts/gen-labels.mjs`, CI checks freshness); there is no `profile_id` and no profile selector.
 
@@ -169,6 +176,10 @@ Both file operations use the **same archive builder and manifest serializer** in
 Errors use the stable envelope `{code, detail, request_id}` + `X-Request-ID`
 header (Phase 6 §8.1); `detail` stays Russian and is shown in red inside the
 result TextArea. No traceback/path/DB message/PII/keys ever leaves the API.
+`ApiNoStoreMiddleware` sets `Cache-Control: no-store` and `Pragma: no-cache` on
+**every** `/api/*` response (PII JSON, ZIPs, errors); route-specific headers are
+preserved, and the Next proxies forward both headers. Probes (`/health`,
+`/ready`, `/metrics`) stay outside that scope.
 
 ## Execution model / event-loop safety (Phase 6, §10)
 
@@ -294,12 +305,15 @@ health (`dm_jobs_active`, `dm_jobs_running`, `dm_jobs_failed_total`,
 heartbeat), API errors (`dm_http_requests_total`,
 `dm_http_last_failure_timestamp_seconds`), cache hit ratio
 (`dm_cache_operations_total`) and artifact disk (`dm_artifact_disk_free_bytes`,
-`dm_runtime_disk_free_bytes`). Every panel uses a series actually emitted by
-the backend/worker; there are no placeholders.
+`dm_runtime_disk_free_bytes`, plus a `JOBS_MIN_FREE_BYTES` threshold line). Every
+panel uses a series actually emitted by the backend/worker; there are no
+placeholders. No new metric was added for readiness: rejections are visible as
+503 in `dm_http_requests_total` and as structured `error_code` log events.
 
 Alerts (`infra/prometheus/alert-rules.yml`) cover scrape targets, sustained
 and immediate 5xx, dependency failures (PostgreSQL/Valkey), failed jobs,
-stuck leases/queue backlog, disk pressure, event-loop lag, cache failures and
+stuck leases/queue backlog, disk pressure, the artifact-storage readiness floor
+(1 GiB by default, aligned with `JOBS_MIN_FREE_BYTES`), event-loop lag, cache failures and
 **full stack self-monitoring** (`prometheus`, `loki`, `alertmanager`,
 `grafana` scrape jobs; no Pushgateway rule). Annotations are Russian, name the
 dashboard and say where `request_id`/`job_id` can be found; provisional

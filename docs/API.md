@@ -28,7 +28,7 @@ below. Generated types provide **no runtime validation**.
 | Filenames | RFC 5987 `Content-Disposition`: ASCII fallback + `filename*=UTF-8''…` for Cyrillic names |
 | Errors | one stable envelope (below): Russian user-facing `detail` + machine `code` + `request_id` |
 | PII | Raw entity values/offsets never leave the API in JSON (`stats` is aggregate-only); keys files are the only carrier of originals. Error bodies never contain tracebacks, paths, DB messages, submitted PII or keys |
-| Caching | `/api/jobs/{id}/result` sends `Cache-Control: no-store`; proxies use `cache: "no-store"` |
+| Caching | Every `/api/*` response sends `Cache-Control: no-store` and `Pragma: no-cache` (ASGI middleware); per-route `Content-Disposition`/`Content-Type` are preserved. Proxies use `cache: "no-store"` and forward both headers |
 
 ### Stable error contract (Phase 6, §8.1)
 
@@ -49,9 +49,10 @@ header with the same value:
 `zip_bomb`, `unsafe_xml`, `executor_busy`, `queue_full`, `result_not_ready`,
 `result_expired`, `job_not_found`, `validation_error`, `bad_request`,
 `not_found`, `conflict`, `payload_too_large`, `unsupported_media_type`,
-`unprocessable`, `internal_error`). `detail` stays Russian. Handler is
-`back/src/errors.py::install_error_handlers`; it logs only exception *types*,
-never messages. The Next proxies forward `X-Request-ID` verbatim. OpenAPI
+`unprocessable`, `artifact_storage_unavailable`, `internal_error`). `detail`
+stays Russian. Handler is `back/src/errors.py::install_error_handlers`; it logs
+only exception *types*, never messages. The Next proxies forward `X-Request-ID`
+verbatim. OpenAPI
 declares this envelope (model `ApiErrorResponse`) for every non-2xx `/api/*`
 response, including sanitized 422 validation errors.
 
@@ -90,6 +91,20 @@ Non-HTTP contracts are explicitly *not* covered: the ZIP-internal
 | `415` | malformed / non-Word / encrypted OPC-ZIP package | file endpoints |
 | `422` | request validation, empty text, invalid keys YAML, unknown job kind, wrong file extension | text + file + job endpoints |
 | `429` | bounded sync executor or job queue full | sync endpoints, `POST /api/jobs` |
+| `503` | artifact storage not ready (full/read-only volume): `artifact_storage_unavailable` | `POST /api/jobs`, oversized sync inputs redirected to jobs |
+
+### Artifact storage readiness
+
+Before a staging row or artifact is created, admission checks the private spool
+(`JOBS_DIR`): a free-space floor `JOBS_MIN_FREE_BYTES` (default **1 GiB**) and one
+small write/remove probe. The worker runs the same check at startup and exits
+non-zero on failure. Both map every failure to the 503 envelope above with the
+single code `artifact_storage_unavailable` and one of three Russian details
+(uninspectable volume / insufficient free space / not writable). No job row,
+partial artifact or ambiguous 500 is produced; worker-side transient job I/O
+failures still use the existing bounded retry semantics. Tune the floor through
+`JOBS_MIN_FREE_BYTES` on small volumes and keep the Prometheus alert threshold
+in sync (see `docs/OPERATIONS.md` §"Self-monitoring and checks").
 
 DOCX uploads are validated as OPC/ZIP packages (`docx_validation.py`):
 actual streamed byte count (never Content-Length), entry count, uncompressed

@@ -141,6 +141,24 @@ groups:
             «DocMasker — Диск артефактов»; job_id затронутых задач — в логах
             воркера (структурное поле job_id).
 
+      - alert: DocMaskerArtifactStorageBelowReadinessFloor
+        # PROVISIONAL: 1 GiB is the default JOBS_MIN_FREE_BYTES admission/startup
+        # floor; align this rule when the setting is overridden for a small volume.
+        expr: |
+          min(dm_artifact_disk_free_bytes) < 1073741824
+          or min(dm_runtime_disk_free_bytes{storage="jobs"}) < 1073741824
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Хранилище артефактов DocMasker ниже порога готовности (1 GiB)"
+          description: >-
+            Приём заданий и старт воркера отклоняются с кодом
+            artifact_storage_unavailable (HTTP 503) до освобождения места.
+            Дашборд «DocMasker — Диск артефактов»; request_id/job_id — в
+            структурированных логах Loki (поля request_id/job_id), причина —
+            в русском detail ответа.
+
   - name: docmasker-jobs
     interval: 30s
     rules:

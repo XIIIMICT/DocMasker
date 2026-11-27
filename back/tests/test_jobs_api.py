@@ -119,6 +119,7 @@ async def test_result_serves_zip_with_no_store(client: AsyncClient, jobs_env: Se
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/zip")
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert archive.namelist() == ["masked.docx"]
 

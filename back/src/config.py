@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     db_connect_timeout_seconds: float = Field(default=5.0, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
     #: Private artifact spool (shared volume, single-host boundary).
     jobs_dir: str = Field(default="/app/jobs", validation_alias="JOBS_DIR")
+    #: Free-space floor for job admission and worker startup. Default 1 GiB;
+    #: operators on smaller volumes may lower it explicitly.
+    jobs_min_free_bytes: int = Field(default=1024 * 1024 * 1024, validation_alias="JOBS_MIN_FREE_BYTES")
     #: Infrastructure settings (Valkey is a disposable cache index, Phase 3).
     valkey_url: str = Field(default="redis://valkey:6379/0", validation_alias="VALKEY_URL")
     cache_enabled: bool = Field(default=False, validation_alias="CACHE_ENABLED")
@@ -141,6 +144,7 @@ class Settings(BaseSettings):
             "detection_overlap_chars",
             "detection_max_window_chars",
             "jobs_max_active",
+            "jobs_min_free_bytes",
             "jobs_concurrency",
             "jobs_max_attempts",
             "cache_namespace_version",

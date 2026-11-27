@@ -138,6 +138,7 @@ describe("passThrough", () => {
                 "Content-Type": "application/zip",
                 "Content-Disposition": "attachment; filename=x.zip",
                 "Cache-Control": "no-store",
+                Pragma: "no-cache",
                 "X-Request-ID": "rid-123",
             },
         });
@@ -146,7 +147,14 @@ describe("passThrough", () => {
         expect(result.headers.get("Content-Type")).toBe("application/zip");
         expect(result.headers.get("Content-Disposition")).toBe("attachment; filename=x.zip");
         expect(result.headers.get("Cache-Control")).toBe("no-store");
+        expect(result.headers.get("Pragma")).toBe("no-cache");
         expect(result.headers.get("X-Request-ID")).toBe("rid-123");
         expect(await result.text()).toBe("zip-bytes");
+    });
+
+    it("defaults to no-store when the upstream omits cache headers", async () => {
+        const result = passThrough(new Response("{}", { status: 200 }));
+        expect(result.headers.get("Cache-Control")).toBe("no-store");
+        expect(result.headers.get("Pragma")).toBe("no-cache");
     });
 });

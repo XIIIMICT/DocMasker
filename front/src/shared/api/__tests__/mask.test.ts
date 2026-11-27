@@ -78,6 +78,25 @@ describe("proxyMaskRequest", () => {
         const response = await proxyMaskRequest("Иван");
         expect(response.headers.get("X-Request-ID")).toBe("rid-42");
     });
+
+    it("keeps the backend no-store policy on PII JSON", async () => {
+        process.env.BACKEND_INTERNAL_URL = "http://back:8001";
+        globalThis.fetch = mock(
+            async () =>
+                new Response("{}", {
+                    status: 200,
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Cache-Control": "no-store",
+                        Pragma: "no-cache",
+                    },
+                }),
+        ) as unknown as typeof fetch;
+
+        const response = await proxyMaskRequest("Иван");
+        expect(response.headers.get("Cache-Control")).toBe("no-store");
+        expect(response.headers.get("Pragma")).toBe("no-cache");
+    });
 });
 
 describe("proxy timeouts", () => {

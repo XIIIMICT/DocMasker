@@ -83,6 +83,33 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Порог готовности хранилища (JOBS_MIN_FREE_BYTES)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "docmasker-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "min(dm_artifact_disk_free_bytes)", "legendFormat": "свободно (артефакты)" },
+        { "refId": "B", "expr": "vector(1073741824)", "legendFormat": "порог готовности (1 GiB)" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1073741824 },
+              { "color": "green", "value": 2147483648 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     }
   ]
 }
