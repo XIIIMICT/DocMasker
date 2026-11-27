@@ -4,7 +4,8 @@ The legacy JSON `/metrics` answer was removed (`docs/WORKFLOW.md` §Deprecation
 policy: loud breaking removal, no compatibility window). This test keeps the
 remaining consumer contract explicit: every series used by a provisioned
 dashboard or alert rule comes from the `dm_*` exposition (or Prometheus' `up`),
-and the scrape path stays `/metrics`.
+and the scrape path stays `/metrics`. The backup sidecar's `dm_pg_backup_*`
+series are part of the same contract.
 """
 
 import json
@@ -139,6 +140,7 @@ def test_dashboards_and_alerts_reference_only_prometheus_series(expressions: lis
     series = {name for expression in expressions for name in _series_in_expression(expression)}
     assert series, "expected real Prometheus series in the monitoring contract"
     assert {"dm_http_requests_total", "dm_jobs_active"} <= series
+    assert {"dm_pg_backup_last_success_age_seconds", "dm_pg_backup_runs_total"} <= series
     assert series <= {"up"} | {name for name in series if name.startswith("dm_")}
     for key in _LEGACY_KEYS:
         assert not any(key in expression for expression in expressions), key
@@ -146,6 +148,7 @@ def test_dashboards_and_alerts_reference_only_prometheus_series(expressions: lis
 
 def test_prometheus_still_scrapes_the_metrics_path() -> None:
     config = _SCRAPE_CONFIG.read_text(encoding="utf-8")
-    assert config.count("metrics_path: /metrics") >= 2
+    assert config.count("metrics_path: /metrics") >= 3
     assert "job_name: docmasker-back" in config
     assert "job_name: docmasker-worker" in config
+    assert "job_name: docmasker-pg-backup" in config

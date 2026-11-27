@@ -169,9 +169,66 @@ that host's own `.env` and RO-mounted private config.
 | 6 | E2E | `E2E_BASE_URL=… bun run --cwd front test:e2e --project=smoke`; exact spec discovery and all smoke tests pass | **OPEN — operator only** |
 | 7 | Real POSIX SIGTERM | `docker compose stop worker` / `kill -TERM 1` mid-job; in-flight job drains, no stale publication, no second claim | **OPEN — operator only** |
 | 8 | Real disk-full and pool pressure | Fill a disposable artifact volume, saturate the real DB pool; bounded errors, no partial output, recovery verified | **OPEN — operator only** |
-| 9 | Backup/restore on target | Quiesce → `pg_dump` → artifact copy → config backup → restore → verify rows, artifact SHA-256s and config digest; then `GET /ready` and one round-trip job | **OPEN — operator only** |
+| 9 | Backup/restore on target | Sidecar `just backup-stand` / `just backup-drill` (verified dump + fingerprint assertion) and quiesce → artifact copy → config backup → restore → verify rows, artifact SHA-256s and config digest; then `GET /ready` and one round-trip job. Off-host `BACKUP_OFFHOST_TARGET` also needs a configured, verified destination | **OPEN — operator only** |
 | 10 | Concurrency on target hardware | 1/2/N representative documents; record wall/CPU/RSS/queue wait/DB pool wait and artifact integrity; calibrate any SLO from measurements, never from a target invented here | **OPEN — operator only** |
 | 11 | GitHub-side required check | Branch ruleset + required check `CI required`; repository can only document it | **OPEN — maintainer/GitHub** |
 
 Local evidence for steps 3–6 exists on this host (historical and re-runnable),
 but it does **not** discharge any row above.
+
+### Backup sidecar drill evidence (2026-11-27, local disposable only)
+
+All resources below were created for this drill and removed afterwards
+(`dm-backup-drill-src`, `dm-backup-drill-net`, volumes
+`dm-backup-drill-src-data` / `dm-backup-drill-backups`, image
+`dm-pgbackup:local`). Nothing touched `dm-postgres`, `dm-valkey`,
+`dm-pg-test`, `dm-valkey-test`, the dev stands or the ReportCollector /
+excel_loader stands. Commands and exact output:
+
+```sh
+docker build -t dm-pgbackup:local infra/backup
+docker network create dm-backup-drill-net
+docker run -d --name dm-backup-drill-src --network dm-backup-drill-net \
+  -e POSTGRES_USER=dm -e POSTGRES_PASSWORD=<disposable> -e POSTGRES_DB=docmasker \
+  -v dm-backup-drill-src-data:/var/lib/postgresql/18/docker \
+  -p 127.0.0.1:15499:5432 postgres:18-alpine
+DATABASE_URL=postgresql+psycopg://dm:<disposable>@127.0.0.1:15499/docmasker \
+  uv run --directory back alembic upgrade head
+#   Running upgrade  -> 0001_jobs; Running upgrade 0001_jobs -> 0002_staging_recovery
+docker exec dm-backup-drill-src psql -U dm -d docmasker -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO jobs (id, kind, status, phase, created_at, updated_at) VALUES
+      ('11111111-1111-4111-8111-111111111111','mask_text','succeeded','done',now(),now()),
+      ('22222222-2222-4222-8222-222222222222','mask_file','queued','queued',now(),now())"
+#   INSERT 0 2; SELECT count(*) FROM jobs -> 2
+docker run --rm --network dm-backup-drill-net -e POSTGRES_HOST=dm-backup-drill-src \
+  -e POSTGRES_PORT=5432 -e POSTGRES_USER=dm -e POSTGRES_PASSWORD=<disposable> \
+  -e POSTGRES_DB=docmasker -e BACKUP_DIR=/var/backups/docmasker \
+  -v dm-backup-drill-backups:/var/backups/docmasker dm-pgbackup:local backup
+#   backup ok: dm-full-20261127T142213Z.dump (5126 bytes), fingerprint verified, retained 1 (exit 0)
+docker run --rm --network dm-backup-drill-net ... dm-pgbackup:local drill
+#   restore drill ok: dm-full-20261127T142213Z.dump -> dm_backup_drill_20261127T142227Z,
+#   fingerprint matched, scratch dropped (exit 0)
+```
+
+**Data-fidelity check.** The fingerprint query over `alembic_version` and
+`jobs` (opaque ids only — no PII) returned
+`b4b55f877b285b34b436949c64636726|2|f8797778f5a72c484e02076e4b644e57` on the
+source, was stored in `dm-full-20261127T142213Z.fingerprint` by the backup
+(after restoring the dump into a scratch DB), and matched the fingerprint
+recomputed from the drill's scratch restore. A negative control with a tampered
+fingerprint sidecar exited `1` (`restore assertion failed: fingerprint
+mismatch`), and in both cases
+`SELECT datname FROM pg_database WHERE datname LIKE 'dm_backup_%'` returned no
+rows — the scratch DB was dropped in `finally`. After restoring the sidecar the
+drill succeeded again (`dm_backup_drill_20261127T142251Z`, exit 0).
+
+The daemon's narrow endpoint was scraped from a disposable container on
+`127.0.0.1:19113`: `/healthz` → `ok`, `/metrics` → the `dm_pg_backup_*`
+exposition, including
+`dm_pg_backup_offhost_configured 0` (off-host requirement **not** satisfied by
+default), `dm_pg_backup_runs_total{outcome="success"} 1` and
+`dm_pg_backup_drill_runs_total{outcome="success"} 2 /
+{outcome="failure"} 1` (the deliberate tamper control).
+
+This is **not** the target-host rehearsal of gate 9: no named production
+volume, real private config or external database was contacted.

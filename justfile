@@ -24,6 +24,23 @@ dev:
 db-stand:
     docker compose up -d --wait postgres valkey
 
+# Sidecar резервных копий: ежедневный полный pg_dump + еженедельный drill.
+# Не входит в db-stand (явный список сервисов) — поднимается отдельно.
+backup-stand:
+    docker compose up -d --wait pgbackup
+
+# Внеочередной полный бекап (после правки конфигурации или при алерте).
+backup-now:
+    docker compose run --rm --no-deps pgbackup backup
+
+# Репетиция восстановления последнего дампа в scratch-БД с проверкой данных.
+backup-drill:
+    docker compose run --rm --no-deps pgbackup drill
+
+# Логи sidecar: причина провала pg_dump / pg_restore / off-host.
+backup-logs:
+    docker compose logs --no-color pgbackup
+
 # Только Alloy — логи идут во внешний/центральный Loki (LOKI_URL из .env)
 monitoring:
     docker compose up -d alloy

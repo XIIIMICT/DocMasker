@@ -307,6 +307,77 @@ groups:
           summary: "Grafana недоступна"
           description: >-
             Дашборды «DocMasker — Ошибки API / Рабочая очередь / Кэш / Диск
-            артефактов» не открываются. Loki, Prometheus и Alertmanager при этом
-            могут продолжать работать; request_id/job_id доступны через Loki API
-            напрямую.
+            артефактов / Резервные копии PostgreSQL» не открываются. Loki,
+            Prometheus и Alertmanager при этом могут продолжать работать;
+            request_id/job_id доступны через Loki API напрямую.
+
+  # PostgreSQL backup sidecar. Age gauges are computed by the exporter at
+  # scrape time, so no `time()` arithmetic is needed here and promtool can test
+  # the rules with constant series. The exporter has no host publication:
+  # scrape it only as job `docmasker-pg-backup`. Series/labels are documented in
+  # docs/RUNBOOKS.md, «Monitoring contract».
+  - name: docmasker_pg_backup
+    interval: 30s
+    rules:
+      - alert: DocMaskerPgBackupExporterDown
+        expr: up{job="docmasker-pg-backup"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DocMasker: сервис резервного копирования недоступен"
+          description: >-
+            Prometheus не скрапит dm-pgbackup. Проверьте контейнер и сеть net;
+            пока он не работает, бекапы и репетиции восстановления не выполняются.
+            Дашборд «DocMasker — Резервные копии PostgreSQL».
+
+      - alert: DocMaskerPgBackupFailed
+        expr: increase(dm_pg_backup_runs_total{outcome="failure",job="docmasker-pg-backup"}[6h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Не удалось сделать бекап PostgreSQL DocMasker"
+          description: >-
+            pg_dump, проверка дампа, retain или off-host копирование вернули
+            ненулевой код. Смотрите dm_pg_backup_last_failure_timestamp_seconds
+            по метке operation и причину в логах `just backup-logs`. Процедура —
+            docs/RUNBOOKS.md.
+
+      - alert: DocMaskerPgBackupOverdue
+        # 25 h = daily schedule (RPO <= 24 h) plus one hour of slack.
+        expr: dm_pg_backup_last_success_age_seconds{job="docmasker-pg-backup"} > 90000
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Нет успешного бекапа PostgreSQL DocMasker более 25 часов"
+          description: >-
+            Нарушено принятое RPO ≤ 24 ч. Выполните `just backup-now`, проверьте
+            доступность PostgreSQL и место в томе dm-postgres-backups. Процедура —
+            docs/RUNBOOKS.md; дашборд «DocMasker — Резервные копии PostgreSQL».
+
+      - alert: DocMaskerPgRestoreDrillFailed
+        expr: dm_pg_backup_drill_last_failure_age_seconds{job="docmasker-pg-backup"} < 86400
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Репетиция восстановления PostgreSQL DocMasker провалилась"
+          description: >-
+            pg_restore в scratch-БД, сверка fingerprint или удаление scratch-БД
+            не прошли. Бекап может быть невосстанавливаемым: разберитесь до
+            следующей репетиции и повторите `just backup-drill`.
+
+      - alert: DocMaskerPgRestoreDrillOverdue
+        # Weekly cadence (7 d) plus one day of slack.
+        expr: dm_pg_backup_drill_last_success_age_seconds{job="docmasker-pg-backup"} > 691200
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Нет успешной репетиции восстановления более 8 дней"
+          description: >-
+            Еженедельный drill не выполнялся. Проверьте, что dm-pgbackup запущен
+            и что роль PostgreSQL может создавать/удалять scratch-БД (CREATEDB).
+            Дашборд «DocMasker — Резервные копии PostgreSQL».

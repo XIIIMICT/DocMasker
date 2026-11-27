@@ -37,6 +37,7 @@ The browser only calls its own origin; Next proxies `/api/*` server-side.
 | Dev / prod app stack | `just dev` / `just prod` (after the stand is seeded) |
 | Quality | `just lint` · `just typecheck` · `just test` · `just e2e` |
 | Monitoring | `just monitoring` (Alloy only, external Loki) · `just monitoring-stand` (full stack) — see `infra/AGENTS.md`, `docs/OPERATIONS.md` §8 |
+| PostgreSQL backup | `just backup-stand` (daily verified dump + weekly restore drill) · `just backup-now` · `just backup-drill` — contract in `docs/RUNBOOKS.md` |
 | Backend direct | `uv run --directory back ruff check --fix` · `ruff format` · `ty check` · `pytest -q` |
 | Frontend direct | `bun run --cwd front lint` · `format` · `typecheck` · `test` |
 

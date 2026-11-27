@@ -42,6 +42,17 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   **not** make local files distributed — multi-host workers need a shared or
   object-storage adapter (out of scope). `back/Dockerfile` creates `/app/jobs`
   owned by `appuser`.
+- `pgbackup` (`dm-pgbackup`) in `infra/compose.db.yaml` + `infra/backup/` is a
+  logical-backup sidecar: daily `pg_dump -Fc` into the private volume
+  `dm-postgres-backups`, weekly restore drill into a scratch DB with a
+  fingerprint assertion, optional off-host copy. It is **not** in `just
+  db-stand`'s explicit service list: `just backup-stand` starts it, `just
+  backup-now` / `just backup-drill` are one-shot, `just backup-logs` shows why a
+  run failed. Prometheus scrapes `pgbackup:9113` as `docmasker-pg-backup` (no
+  host publication); `BACKUP_METRICS_HOST`/`BACKUP_METRICS_PORT` override the
+  target. No new credentials: `POSTGRES_*` are reused. Contract and OPEN items
+  (`BACKUP_OFFHOST_TARGET` empty by default, target host, alert mail) —
+  `docs/RUNBOOKS.md`.
 
 ## Ports & env
 

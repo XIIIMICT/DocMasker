@@ -67,56 +67,39 @@ runs. `POSTGRES_PASSWORD` is read from the same components in both places.
 
 | Volume | Name | Contents | Backup? |
 |---|---|---|---|
-| PostgreSQL data | `dm-postgres-data` (declared in `infra/compose.db.yaml`) | Authoritative job state, leases, attempts, artifact references | **Yes** |
-| Job artifacts | `dm-jobs-data` (declared in `compose.yaml`) | Id-keyed staged inputs/keys, results and the cache spool, shared by `back`/`worker` | **Yes, consistent with the DB** |
+| PostgreSQL data | `dm-postgres-data` (declared in `infra/compose.db.yaml`) | Authoritative job state, leases, attempts, artifact references | **Yes — automated logical dump** |
+| Backup dumps | `dm-postgres-backups` (declared in `infra/compose.db.yaml`) | Verified `pg_dump -Fc` files + fingerprint sidecars | Sidecar's own volume; copy off-host separately |
+| Job artifacts | `dm-jobs-data` (declared in `compose.yaml`) | Id-keyed staged inputs/keys, results and the cache spool, shared by `back`/`worker` | **Yes, consistent with the DB — manual copy** |
 | Valkey | none (no persistence, `appendonly no`, `maxmemory 256mb`, `allkeys-lru`) | Disposable cache index only | **No** |
 
 A PostgreSQL dump without its referenced artifacts is not a recovery point, and
 an artifact copy without the matching DB rows is not one either
 (ADR-0003 §Migration/backup notes, Brief §2.4).
 
-**Consistent backup procedure:**
+The `dm-pgbackup` sidecar (`infra/backup/`, service in `infra/compose.db.yaml`)
+takes a daily verified full dump and runs a weekly restore drill with a real
+data-fidelity assertion. **The canonical contract — assumed RPO, schedule,
+retention, restore procedure, off-host configuration, monitoring contract,
+alert response and exit codes — lives in `docs/RUNBOOKS.md`.** Start the sidecar
+with `just backup-stand`; one-shot `just backup-now` / `just backup-drill`
+reproduce its work. The sidecar dumps only PostgreSQL: the **artifact spool and
+private config still need the quiesce/copy procedure documented in
+`docs/RUNBOOKS.md`**, and Valkey needs no restore (restart/flush it and let the
+cache rebuild, `docs/SECURITY.md` §3).
 
-1. Stop writers: `docker compose --profile prod stop worker back front`
-   (use `--profile dev` with the dev service names for a dev stand). Wait until
-   no active jobs remain — query the `jobs` table or read `dm_jobs_active` in
-   Prometheus/Grafana (the legacy JSON `/metrics` answer was removed). Do not
-   back up mid-publication.
-2. Dump PostgreSQL (credentials come from the root `.env`; example uses the
-   template values):
-   `docker compose exec -T postgres pg_dump -U dm -d docmasker -Fc > dm-postgres.dump`
-3. Copy the artifact spool:
-   `docker compose cp back:/app/jobs ./dm-jobs-data-backup`
-   (for the dev stack use `back-dev`).
-4. Back up the private configuration securely:
-   `back/config/masking/exceptions.yaml` and the lexicons under
-   `back/config/masking/lexicons/` (the latter are committed, the former is not).
-5. Resume the stack: `just prod` or `just dev`.
-
-**Restore:** restore configuration, then the **database first, artifacts
-second**:
-
-```sh
-docker compose exec -T postgres pg_restore -U dm -d docmasker --clean --if-exists < dm-postgres.dump
-docker compose cp ./dm-jobs-data-backup/. back:/app/jobs
-just prod
-```
-
-After restore, check that every `input_artifact` / `keys_artifact` /
-`result_artifact` reference resolves to a file in `/app/jobs` and that
-`GET /ready` returns `200`. Valkey needs no restore: restart/flush it and let
-the cache rebuild (`docs/SECURITY.md` §3).
-
-**Drill evidence (2026-11-27, local disposable only).** The harness in
+**Drill evidence (local, disposable only).** The earlier harness in
 `back/tests/drill_support.py` executed the dump → artifact copy → truncate →
 `pg_restore` → artifact copy-back sequence against a dedicated `dm-drill-*`
 container and a temporary spool: 2/2 rows restored identically, 2/2 artifact
 SHA-256 checksums matched, and the digest of a *committed synthetic* config
 snapshot (`exceptions.example.yaml`) was unchanged. No private
 `exceptions.yaml` was read or printed (`private_exception_values_touched:
-false`). This is **not** a target-host rehearsal: restoring the real
-read-only private config and the named volumes on the deployment host stays an
-operator-only **OPEN** gate (`docs/PRODUCTION_READINESS.md`).
+false`). The newer sidecar drill restores into a scratch database and asserts
+a fingerprint captured at backup time; its exact commands and output are
+recorded in `docs/PRODUCTION_READINESS.md`. Both are **not** target-host
+rehearsals: restoring the real read-only private config and the named volumes
+on the deployment host stays an operator-only **OPEN** gate
+(`docs/PRODUCTION_READINESS.md`).
 
 **Historic quiesce/reset note:** before the PostgreSQL migration, the recorded
 dev volume held a 20 KB SQLite file with **0 rows** and no staged artifacts.
@@ -263,6 +246,19 @@ keys or exception messages into tickets or chat.
   `just seed` / `just migrate`, then restart the app stack (`just prod` or
   `just dev`). Jobs left `running` are reclaimed by lease expiry with bounded
   attempts; do not manually edit rows. A PostgreSQL restart no longer kills the worker: poll/heartbeat DB errors are caught and retried (Worker._claim_safe / Heartbeat._run, Phase 8 stress finding), so the worker stays up and lease fencing recovers in-flight jobs. If data is missing, follow §3 restore.
+
+### Backup failed / overdue / drill failed
+
+- **Symptoms:** `DocMaskerPgBackupFailed`, `DocMaskerPgBackupOverdue`,
+  `DocMaskerPgRestoreDrillFailed`, `DocMaskerPgRestoreDrillOverdue` or
+  `DocMaskerPgBackupExporterDown` in Alertmanager; dashboard
+  «DocMasker — Резервные копии PostgreSQL».
+- **Checks:** `docker compose ps pgbackup`, `just backup-logs`, the
+  `dm_pg_backup_*` series (especially `operation` labels), `just backup-drill`.
+- **Action:** follow the alert-response table and restore procedure in
+  `docs/RUNBOOKS.md`. An overdue backup is an assumed-RPO breach; a failed
+  drill means the newest dump must not be trusted. Never restore over the live
+  database in place — restore into a new database, verify, then switch.
 
 ### Valkey unavailable / corrupt cache
 
@@ -425,8 +421,10 @@ to `dm-postgres-data`/`dm-jobs-data`: losing it loses history, not job state.
 ### Self-monitoring and checks
 
 Prometheus scrapes `prometheus`, `loki`, `alertmanager` and `grafana` in
-addition to `docmasker-back`/`docmasker-worker`; rules for all five live in
-`docmasker-stack` / the `up` alerts of `infra/prometheus/alert-rules.yml`.
+addition to `docmasker-back`/`docmasker-worker` and the loopback-only backup
+sidecar `docmasker-pg-backup`; rules for the five stack services live in
+`docmasker-stack` / the `up` alerts of `infra/prometheus/alert-rules.yml`, and
+the backup rules in the `docmasker_pg_backup` group.
 Health checks after a change:
 
 ```sh
@@ -438,7 +436,10 @@ curl -s http://localhost:3000/api/health
 ```
 
 Grafana dashboards (folder `DocMasker`): «Рабочая очередь», «Ошибки API»,
-«Кэш», «Диск артефактов». The worker dashboard has two additional panels —
+«Кэш», «Диск артефактов», «Резервные копии PostgreSQL». The backup dashboard
+uses only the sidecar's `dm_pg_backup_*` exposition; the scrape target
+`docmasker-pg-backup` and the backup alerts are documented in
+`docs/RUNBOOKS.md` («Monitoring contract»). The worker dashboard has two additional panels —
 queue depth against the `JOBS_MAX_ACTIVE` line (24 = 75% warning threshold, 32 =
 capacity) and worker saturation against `JOBS_CONCURRENCY` (4) with the backlog
 series; both reuse `dm_jobs_active` / `dm_jobs_running` and constant lines, with

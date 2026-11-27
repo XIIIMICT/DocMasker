@@ -208,6 +208,33 @@ which would break monitoring).
   rule was edited, so actionlint / `promtool check rules` were not applicable;
   the monitoring contract test parses the unchanged rules and dashboards.
 
+## PostgreSQL backup sidecar (P1-8, 2026-11-27) — CLOSED (local)
+
+- Phase 0 fact: no automated PostgreSQL backup; only a manual `pg_dump` +
+  artifact-copy procedure, target-host rehearsal OPEN. Chosen `pg_dump -Fc`
+  custom-format sidecar (`infra/backup/`, `dm-pgbackup`), **not** WAL-G /
+  pgBackRest: no PITR requirement and no server-side archive access in this
+  repository. Escalation criteria (stricter RPO, PITR, WAL access, multiple DBs,
+  automatic artifact snapshots) are recorded in `docs/RUNBOOKS.md`.
+- Assumed **RPO ≤ 24 h** (not an accepted SLO), full dump daily 02:00Z,
+  `BACKUP_RETENTION_COUNT=7` in `dm-postgres-backups`, weekly Sunday 03:00Z
+  restore drill. `.part` → `pg_restore --list` → restore-based data fingerprint
+  → atomic rename; fingerprint mismatch or any tool failure exits non-zero.
+- `BACKUP_OFFHOST_TARGET` is OPTIONAL and empty by default: when empty,
+  `dm_pg_backup_offhost_configured=0` and **the off-host requirement is NOT
+  satisfied**. No credentials are stored in the repo; external/production DB
+  caveat and `CREATEDB` requirement are in `docs/RUNBOOKS.md`.
+- Monitoring contract landed in the same change: five alerts in the
+  `docmasker_pg_backup` group, the `docmasker-pg-backup` scrape job, the
+  «Резервные копии PostgreSQL» dashboard and the `dm_pg_backup_*` contract in
+  `docs/RUNBOOKS.md` / `back/tests/test_monitoring_contract.py`.
+- Verified: exact restore-drill commands, output and data-fidelity check in
+  `docs/PRODUCTION_READINESS.md`; `docker compose config`, `promtool check
+  rules`, ruff/ty + full pytest (≥80%), front test and `prek run --all-files`.
+- **Still OPEN:** off-host destination (nothing configured/contacted), target
+  host with real RO config and named volumes, RTO/stricter RPO decision, alert
+  mail delivery, PITR/WAL archiving and automatic artifact-spool snapshots.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
@@ -306,7 +333,8 @@ Remaining (all OPEN, see the target-host checklist in
 - real POSIX SIGTERM delivery, a real full filesystem and target-hardware
   repetitions of the crash/pool/concurrency drills;
 - backup/restore on the authorized host with the real RO-mounted exception
-  config and named volumes; only the synthetic-config rehearsal exists locally;
+  config and named volumes (now also the `dm-pgbackup` sidecar + drill); only
+  the synthetic-config/disposable-stand rehearsals exist locally;
 - Clean-install → migration → prod-image build → Compose health → e2e repeated
   on the target machine (already green on this host, but not a gate discharge).
 

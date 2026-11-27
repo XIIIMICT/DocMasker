@@ -65,3 +65,12 @@ scrape_configs:
       - targets: ["${WORKER_METRICS_HOST}:${WORKER_METRICS_PORT}"]
         labels:
           env: "${LOG_ENV}"
+
+  # The backup sidecar exposes a narrow stdlib /metrics on the private `net`
+  # (no host publication). Same env override pattern as the app targets.
+  - job_name: docmasker-pg-backup
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["${BACKUP_METRICS_HOST}:${BACKUP_METRICS_PORT}"]
+        labels:
+          env: "${LOG_ENV}"
