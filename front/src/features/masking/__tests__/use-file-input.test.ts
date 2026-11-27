@@ -82,12 +82,12 @@ describe("useFileInput — file selection", () => {
         await act(async () => {
             hook.result.current.file.onFileSelected(changeEvent([file]));
         });
+        // Exact equality already proves the DISK-MARKER reason is not exposed.
         await waitFor(() =>
             expect(hook.result.current.drafts.state.error).toBe(
                 "Не удалось прочитать текстовый файл.",
             ),
         );
-        expect(hook.result.current.drafts.state.error).not.toContain("DISK-MARKER");
     });
 
     it("selects a .docx for the backend and clears the text input", async () => {
@@ -140,12 +140,12 @@ describe("useFileInput — file selection", () => {
         await act(async () => {
             hook.result.current.file.onKeysDrop(dragEvent([unreadable]).event);
         });
+        // Exact equality already proves the DISK-MARKER reason is not exposed.
         await waitFor(() =>
             expect(hook.result.current.drafts.state.error).toBe(
                 "Не удалось прочитать файл ключей.",
             ),
         );
-        expect(hook.result.current.drafts.state.error).not.toContain("DISK-MARKER");
     });
 });
 

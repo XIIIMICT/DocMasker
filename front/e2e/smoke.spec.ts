@@ -2,6 +2,9 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { DATA_FILE_INPUT } from "./helpers/selectors";
+import { waitForGraceFrames } from "./helpers/timing";
+
 const MASK_DATA = "Данные для маскировки";
 const DEMASK_DATA = "Данные для демаскировки";
 /** A minimal .docx fixture (one paragraph with a name and a phone). */
@@ -14,14 +17,6 @@ async function switchMode(page: Page, name: string): Promise<void> {
     await page.getByRole("button", { name: /Режим:/ }).hover();
     await page.getByRole("menuitemradio", { name, exact: true }).click();
 }
-
-test("страница маскирования загружается с обоими полями", async ({ page }) => {
-    await page.goto("/");
-    await expect(page.getByText("ДокМаскер")).toBeVisible();
-    await expect(page.getByRole("textbox", { name: MASK_DATA })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Результат маскировки" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Замаскировать" })).toBeVisible();
-});
 
 test("reduced-motion убирает переходы приложения, сохраняя конечное состояние", async ({
     page,
@@ -102,6 +97,12 @@ test("на мобильной ширине у подписи ввода маск
 
 test("вкладки и кнопки видны сразу, ключи недоступны без маскировки", async ({ page }) => {
     await page.goto("/");
+    // One initial-render contract: the brand, both panes and the action are
+    // present immediately, while the key/download affordances stay gated.
+    await expect(page.getByText("ДокМаскер")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: MASK_DATA })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Результат маскировки" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Замаскировать" })).toBeVisible();
     const keysTab = page.getByRole("tab", { name: "Ключи демаскировки" });
     await expect(keysTab).toBeVisible();
     await expect(keysTab).toBeDisabled();
@@ -114,11 +115,9 @@ test("текст с PII маскируется через /api/mask", async ({ p
     await page.getByRole("textbox", { name: MASK_DATA }).fill("Иван Петров, тел +7 900 123-45-67");
     await page.getByRole("button", { name: "Замаскировать" }).click();
     // The masked result lands in the result tab, with numbered placeholders.
-    await expect
-        .poll(async () => page.getByRole("textbox", { name: "Результат" }).inputValue(), {
-            timeout: 30000,
-        })
-        .toContain("[PERSON_1]");
+    await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue(/\[PERSON_1\]/, {
+        timeout: 30000,
+    });
     const stats = page.locator(".editor-pane__stats");
     await expect(stats).toHaveText("2 фрагмента");
     await stats.focus();
@@ -138,11 +137,9 @@ test("текст с PII маскируется через /api/mask", async ({ p
                 "Это у каждой из Сторон.",
         );
     await page.getByRole("button", { name: "Замаскировать" }).click();
-    await expect
-        .poll(async () => page.getByRole("textbox", { name: "Результат" }).inputValue(), {
-            timeout: 30000,
-        })
-        .toContain("[LINK_1]");
+    await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue(/\[LINK_1\]/, {
+        timeout: 30000,
+    });
     const masked = await page.getByRole("textbox", { name: "Результат" }).inputValue();
     expect(masked).toContain("[ADDRESS_1]");
     expect(masked).toContain("у каждой из Сторон");
@@ -167,11 +164,9 @@ test("демаскировка восстанавливает текст из к
     // First mask a text and read its keys off the result pane.
     await page.getByRole("textbox", { name: MASK_DATA }).fill("Иван Петров, тел +7 900 123-45-67");
     await page.getByRole("button", { name: "Замаскировать" }).click();
-    await expect
-        .poll(async () => page.getByRole("textbox", { name: "Результат" }).inputValue(), {
-            timeout: 30000,
-        })
-        .toContain("[PERSON_1]");
+    await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue(/\[PERSON_1\]/, {
+        timeout: 30000,
+    });
     const masked = await page.getByRole("textbox", { name: "Результат" }).inputValue();
     await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
     const keys = await page.getByRole("textbox", { name: "Ключи демаскировки" }).inputValue();
@@ -223,8 +218,19 @@ test("пустые ключи блокируют демаскировку и н�
     await page.getByRole("textbox", { name: DEMASK_DATA }).fill("[PERSON_1]");
     const demask = page.getByRole("button", { name: "Демаскировать" });
     await expect(demask).toHaveAttribute("aria-disabled", "true");
-    const requests: string[] = [];
-    page.on("request", (request) => requests.push(request.url()));
+
+    // A route counter is the evidence: every unmask attempt passes through
+    // this route, including one scheduled after the gesture. No fixed sleep.
+    const unmaskRequests: string[] = [];
+    await page.route("**/api/unmask", async (route) => {
+        unmaskRequests.push(`${route.request().method()} ${route.request().url()}`);
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ text: "Иван Петров" }),
+        });
+    });
+
     // Keyboard activation and a forced DOM event must both be blocked by the
     // operation-boundary predicate, not by the visual disabled styling.
     await demask.press("Enter");
@@ -234,22 +240,36 @@ test("пустые ключи блокируют демаскировку и н�
         );
         button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    await page.waitForTimeout(300);
-    expect(requests.filter((url) => url.includes("unmask"))).toEqual([]);
+    // Explicit grace: flush the gesture's task and the following microtasks.
+    await waitForGraceFrames(page);
+
+    // Synchronisation barrier: one *valid* demask through the same endpoint
+    // must complete. Any request caused by either illegal activation would
+    // already be counted by then, so the final count is exact.
+    await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+    await page
+        .getByRole("textbox", { name: "Ключи демаскировки" })
+        .fill("Физлица:\n  - Иван Петров");
+    await expect(demask).not.toHaveAttribute("aria-disabled", "true");
+    await demask.click();
+    await expect(page.getByRole("textbox", { name: "Результат демаскировки" })).toHaveValue(
+        "Иван Петров",
+    );
+    expect(unmaskRequests).toHaveLength(1);
 });
 
 test("на демаскировке выбранный файл данных даёт кнопку удаления", async ({ page }) => {
     await page.goto("/");
     await switchMode(page, "Демаскировка");
     // Attach a .docx to the hidden data input.
-    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
     await expect(page.getByRole("button", { name: "Удалить файл" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Выбрать файл данных" })).toHaveCount(0);
 });
 
 test("замаскированный превью подсвечивает плейсхолдеры ровно один раз", async ({ page }) => {
     await page.goto("/");
-    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
     await page.getByRole("button", { name: "Замаскировать" }).click();
     // The masked preview is the second surface (the first is the source file).
     const surfaces = page.locator(".docx-viewer__surface");
@@ -334,7 +354,7 @@ test("tooltip демаскировки перечисляет неприменё
 test("демаскировка файла сообщает неприменённые ключи", async ({ page }) => {
     await page.goto("/");
     await switchMode(page, "Демаскировка");
-    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_MASKED_DOCX);
+    await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_MASKED_DOCX);
     await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
     // The first two keys exist in the masked fixture; the third does not.
     await page
@@ -359,7 +379,7 @@ test("статистика файла совпадает при маскиров
     page,
 }) => {
     await page.goto("/");
-    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
     await page.getByRole("button", { name: "Замаскировать" }).click();
     const maskStats = page.locator(".editor-pane__stats");
     await expect(maskStats).toBeVisible({ timeout: 30000 });
@@ -371,7 +391,7 @@ test("статистика файла совпадает при маскиров
     expect(keys).toContain("Физлица:");
 
     await switchMode(page, "Демаскировка");
-    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_MASKED_DOCX);
+    await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_MASKED_DOCX);
     await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
     await page.getByRole("textbox", { name: "Ключи демаскировки" }).fill(keys);
     const demaskStats = page.locator(".editor-pane__stats");
@@ -540,7 +560,7 @@ test("результат маскировки файла требует manifest
     });
 
     await page.goto("/");
-    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
     await page.getByRole("button", { name: "Замаскировать" }).click();
     // Statistics come from the manifest, not from headers.
     await expect(page.locator(".editor-pane__stats")).toHaveText("2 фрагмента", { timeout: 15000 });
@@ -556,7 +576,7 @@ test("результат маскировки файла требует manifest
         await route.fulfill({ status: 200, contentType: "application/zip", body: badArchive });
     });
     await page.getByRole("button", { name: "Удалить файл" }).click();
-    await page.setInputFiles('input[type="file"][accept*=".docx"]', SAMPLE_DOCX);
+    await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
     await page.getByRole("button", { name: "Замаскировать" }).click();
     await expect(page.getByText(/отчёт о результате/i)).toBeVisible({ timeout: 15000 });
 });
