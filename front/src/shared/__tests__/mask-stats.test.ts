@@ -211,6 +211,13 @@ describe("totalText", () => {
     });
 });
 
+describe("statsFromManifest", () => {
+    it("fails closed on partial statistics instead of showing zero fragments", () => {
+        const partial = { statistics: { unused_keys: [] } } as unknown as ResultManifest;
+        expect(() => statsFromManifest(partial)).toThrow("Некорректный отчёт о результате.");
+    });
+});
+
 describe("file mask/demask stats parity", () => {
     it("shows the same unique counts when the keys are not changed", () => {
         const manifest = {
