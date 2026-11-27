@@ -88,6 +88,14 @@ describe("parseLcov", () => {
         expect(parseLcov(lcov(records, "\r\n"))).toEqual(parseLcov(lcov(records, "\n")));
     });
 
+    it("accepts a valid zero-hit record", () => {
+        expect(parseLcov(lcov([{ source: "src/a.ts", lf: 10, lh: 0 }]))).toEqual({
+            linesFound: 10,
+            linesHit: 0,
+            files: 1,
+        });
+    });
+
     it("flushes a trailing record without end_of_record", () => {
         const report = ["SF:src/a.ts", "LF:4", "LH:4"].join("\n");
         expect(parseLcov(report)).toEqual({ linesFound: 4, linesHit: 4, files: 1 });
@@ -134,8 +142,66 @@ describe("parseLcov", () => {
     it("rejects records where LF and LH do not appear together", () => {
         const onlyLf = lcov([{ source: "src/a.ts", lf: 3, lh: 3 }]).replace("LH:3\n", "");
         const onlyLh = lcov([{ source: "src/a.ts", lf: 3, lh: 3 }]).replace("LF:3\n", "");
-        expect(() => parseLcov(onlyLf)).toThrow(CoverageGateError);
-        expect(() => parseLcov(onlyLh)).toThrow(CoverageGateError);
+        const noCounters = ["SF:src/a.ts", "end_of_record"].join("\n");
+        const trailingLf = ["SF:src/a.ts", "LF:3"].join("\n");
+        for (const report of [onlyLf, onlyLh, noCounters, trailingLf]) {
+            expect(() => parseLcov(report)).toThrow(CoverageGateError);
+        }
+        expect(messageOf(() => parseLcov(onlyLf))).toContain("LF and LH must appear together");
+    });
+
+    it("rejects a duplicate LF counter instead of accepting the last value", () => {
+        // LF:100 / LF:10 / LH:10 used to be accepted as a 10/10 record.
+        const report = ["SF:src/a.ts", "LF:100", "LF:10", "LH:10", "end_of_record"].join("\n");
+        const message = messageOf(() => parseLcov(report));
+        expect(message).toContain("Duplicate LF");
+        expect(message).toContain("src/a.ts");
+    });
+
+    it("rejects a duplicate LH counter", () => {
+        const report = ["SF:src/a.ts", "LF:10", "LH:10", "LH:0", "end_of_record"].join("\n");
+        const message = messageOf(() => parseLcov(report));
+        expect(message).toContain("Duplicate LH");
+        expect(message).toContain("src/a.ts");
+    });
+
+    it("rejects LF after LH as an out-of-order duplicate", () => {
+        const report = ["SF:src/a.ts", "LF:10", "LH:8", "LF:10", "end_of_record"].join("\n");
+        const message = messageOf(() => parseLcov(report));
+        expect(message).toContain("Duplicate LF");
+        expect(message).toContain("LH");
+    });
+
+    it("rejects LH before LF", () => {
+        const report = ["SF:src/a.ts", "LH:8", "LF:10", "end_of_record"].join("\n");
+        const message = messageOf(() => parseLcov(report));
+        expect(message).toContain("LH requires a preceding LF");
+        expect(message).toContain("src/a.ts");
+    });
+
+    it("rejects a second SF before the preceding record is finalized", () => {
+        const report = [
+            "SF:src/a.ts",
+            "LF:10",
+            "LH:8",
+            "SF:src/b.ts",
+            "LF:5",
+            "LH:5",
+            "end_of_record",
+        ].join("\n");
+        const message = messageOf(() => parseLcov(report));
+        expect(message).toContain("src/a.ts");
+        expect(message).toContain("end_of_record");
+    });
+
+    it("rejects an aggregate LF sum beyond Number.MAX_SAFE_INTEGER", () => {
+        const report = lcov([
+            { source: "src/a.ts", lf: Number.MAX_SAFE_INTEGER, lh: 0 },
+            { source: "src/b.ts", lf: 1, lh: 0 },
+        ]);
+        const message = messageOf(() => parseLcov(report));
+        expect(message).toContain("Number.MAX_SAFE_INTEGER");
+        expect(message).toContain("LF");
     });
 });
 

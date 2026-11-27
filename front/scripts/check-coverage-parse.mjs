@@ -61,40 +61,65 @@ function parseCount(value, label, context) {
 }
 
 /**
+ * Add a validated record count to an aggregate. Two individually safe counts
+ * can still sum past Number.MAX_SAFE_INTEGER, so each addition is checked.
+ */
+function addCount(total, count, label, source) {
+    const sum = total + count;
+    if (!Number.isSafeInteger(sum)) {
+        throw new CoverageGateError(
+            `Unsafe coverage total for source ${source}: ${label} sum (${total} + ${count}) exceeds Number.MAX_SAFE_INTEGER`,
+        );
+    }
+    return sum;
+}
+
+/**
  * Parse an LCOV report (LF/CRLF) into aggregate line totals.
  *
- * Every source record is validated on its own: LF/LH must be non-negative
- * integers and LH must not exceed LF. All records are then summed. Empty or
- * malformed reports throw CoverageGateError.
+ * Each source record is a strict state machine: SF must be followed by exactly
+ * one LF, then exactly one LH, then end_of_record before the next SF. Any
+ * duplicate, out-of-order, incomplete, inconsistent or unsafe counter throws
+ * CoverageGateError; unrelated LCOV tokens (TN, DA, FN, ...) are ignored.
  */
 export function parseLcov(text) {
     if (typeof text !== "string" || text.trim() === "") {
         throw new CoverageGateError("Empty coverage report: no LCOV records found");
     }
 
+    const NO_RECORD = "none";
+    const EXPECT_LF = "expect-lf";
+    const EXPECT_LH = "expect-lh";
+    const COMPLETE = "complete";
+
     let linesFound = 0;
     let linesHit = 0;
     let files = 0;
     let source = "<unknown>";
+    let state = NO_RECORD;
     let recordLf;
     let recordLh;
 
+    const incomplete = () =>
+        new CoverageGateError(
+            `Malformed coverage record for source ${source}: LF and LH must appear together`,
+        );
+
     const finalize = () => {
-        if (recordLf === undefined && recordLh === undefined) return;
-        const where = `source ${source}`;
-        if (recordLf === undefined || recordLh === undefined) {
-            throw new CoverageGateError(
-                `Malformed coverage record for ${where}: LF and LH must appear together`,
-            );
+        if (state === COMPLETE) {
+            if (recordLh > recordLf) {
+                throw new CoverageGateError(
+                    `Invalid coverage record for source ${source}: LH (${recordLh}) exceeds LF (${recordLf})`,
+                );
+            }
+            linesFound = addCount(linesFound, recordLf, "LF", source);
+            linesHit = addCount(linesHit, recordLh, "LH", source);
+            files += 1;
+        } else if (state !== NO_RECORD) {
+            throw incomplete();
         }
-        if (recordLh > recordLf) {
-            throw new CoverageGateError(
-                `Invalid coverage record for ${where}: LH (${recordLh}) exceeds LF (${recordLf})`,
-            );
-        }
-        linesFound += recordLf;
-        linesHit += recordLh;
-        files += 1;
+        state = NO_RECORD;
+        source = "<unknown>";
         recordLf = undefined;
         recordLh = undefined;
     };
@@ -102,14 +127,49 @@ export function parseLcov(text) {
     for (const rawLine of text.split(/\r?\n/)) {
         const line = rawLine.trim();
         if (line.startsWith("SF:")) {
+            if (state !== NO_RECORD) {
+                throw new CoverageGateError(
+                    `Malformed coverage record for source ${source}: the previous record must be finalized with end_of_record before the next SF`,
+                );
+            }
             source = line.slice(3).trim() || "<unknown>";
+            state = EXPECT_LF;
         } else if (line.startsWith("LF:")) {
+            if (state === NO_RECORD) {
+                throw new CoverageGateError(
+                    `Unexpected LF counter for source ${source}: SF must appear before LF`,
+                );
+            }
+            if (state !== EXPECT_LF) {
+                throw new CoverageGateError(
+                    `Duplicate LF counter for source ${source}: LF must appear exactly once before LH`,
+                );
+            }
             recordLf = parseCount(line.slice(3), "LF", `source ${source}`);
+            state = EXPECT_LH;
         } else if (line.startsWith("LH:")) {
+            if (state === NO_RECORD) {
+                throw new CoverageGateError(
+                    `Unexpected LH counter for source ${source}: SF must appear before LH`,
+                );
+            }
+            if (state === EXPECT_LF) {
+                throw new CoverageGateError(
+                    `Malformed coverage record for source ${source}: LH requires a preceding LF`,
+                );
+            }
+            if (state === COMPLETE) {
+                throw new CoverageGateError(
+                    `Duplicate LH counter for source ${source}: LH must appear exactly once after LF`,
+                );
+            }
             recordLh = parseCount(line.slice(3), "LH", `source ${source}`);
+            state = COMPLETE;
         } else if (line === "end_of_record") {
+            if (state === NO_RECORD) {
+                throw new CoverageGateError("Unexpected end_of_record without an open SF record");
+            }
             finalize();
-            source = "<unknown>";
         }
     }
     finalize(); // flush a trailing record that has no explicit end_of_record

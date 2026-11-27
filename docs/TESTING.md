@@ -64,7 +64,7 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 | Document viewer | `shared/ui/__tests__/docx-viewer.test.ts`, `docx-viewer-lifecycle.test.tsx`, `docx-viewer-scheduling.test.ts` | marker highlighting, stale generation/render guards, debounce; injectable `DocxViewer.renderDocument` seam leaves the lazy default unchanged |
 | Header | `shared/ui/__tests__/theme-switcher.test.ts`, `support-button.test.ts` | theme options, mailto parsing |
 | Masking workflow | `features/masking/__tests__/use-mode-drafts.test.ts`, `use-masker-workflow-downloads.test.ts`, `use-job-lifecycle.test.ts`, `use-file-input.test.ts`, `result-download.test.ts`, `mask-requests.test.ts`, `keys-parse.test.ts`, `demask-guard.test.ts` | per-mode drafts, downloads, job lifecycle/cancellation, file input, request guards, YAML key parsing |
-| App / tooling | `app/__tests__/globals-conventions.test.ts`, `src/__tests__/check-coverage.test.ts` | global CSS conventions; coverage gate is a thin CLI wrapper over `scripts/check-coverage-parse.mjs` — malformed thresholds/LCOV fail deterministically, 65% floor unchanged |
+| App / tooling | `app/__tests__/globals-conventions.test.ts`, `src/__tests__/check-coverage.test.ts` | global CSS conventions; coverage gate is a thin CLI wrapper over `scripts/check-coverage-parse.mjs` — malformed thresholds/LCOV fail deterministically, 65% floor unchanged; the fail-closed LCOV parser rejects duplicate/out-of-order/incomplete counters, a premature second `SF` and unsafe aggregate sums, while accepting bun's LF/CRLF, multi-file and zero-hit reports |
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 

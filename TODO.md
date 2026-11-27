@@ -102,6 +102,23 @@ schema; runtime behavior is unchanged.
   compiler API and peer range without a second toolchain, or the HTTP contract
   itself changes (then regenerate).
 
+## Coverage gate LCOV hardening (finding 2, 2026-11-27) — CLOSED
+
+- `front/scripts/check-coverage-parse.mjs::parseLcov` now validates each source
+  record with a strict `SF → LF → LH → end_of_record` state machine. Duplicate
+  `LF`/`LH` (including `LF` after `LH`), `LH` before `LF`, a second `SF` before
+  finalizing, incomplete pairs, `LH > LF` and per-record counts or aggregate
+  sums outside the safe integer range all throw `CoverageGateError` before the
+  record is accepted. Unrelated LCOV tokens (`TN`, `DA`, `FN`, ...) stay ignored;
+  parsing/evaluation remain pure — file reads and process exit stay in
+  `check-coverage.mjs`. No new dependencies.
+- **Verified:** `bun run --cwd front format:check`, `lint:check`, `typecheck`,
+  `test` (244 pass / 0 fail) and `build` green; coverage gate
+  `bun test --coverage --coverage-reporter=lcov` → `bun scripts/check-coverage.mjs 65`
+  reported 86.40% (2002/2317). The malformed `LF:100 / LF:10 / LH:10` record
+  failed the CLI gate with `Duplicate LF ...` and exit code 1. Valid multi-file,
+  CRLF and zero-hit reports are pinned by tests.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
