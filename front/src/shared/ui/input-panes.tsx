@@ -70,7 +70,7 @@ export function MaskInputPane({
                         fullWidth
                     >
                         {activeJob
-                            ? "Отменить задание"
+                            ? "Отменить операцию"
                             : inFileMode
                               ? "Удалить файл"
                               : "Выбрать файл"}
@@ -221,7 +221,7 @@ export function DemaskInputPane({
                         fullWidth
                     >
                         {activeJob
-                            ? "Отменить задание"
+                            ? "Отменить операцию"
                             : inFileMode
                               ? "Удалить файл"
                               : "Выбрать файл данных"}
