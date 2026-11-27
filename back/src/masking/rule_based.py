@@ -13,6 +13,7 @@ import difflib
 import re
 import threading
 import unicodedata
+import warnings
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -646,6 +647,22 @@ class RuleBasedMasker:
         return _merge_spans([*kept, *self._find_always_masked(text)])
 
     def mask(self, text: str, entities: list[Entity] | None = None) -> str:
+        """
+        Keep the deprecated reference renderer out of request/worker paths.
+
+        It rewrites the text with one full-string slice per entity
+        (O(|text| * entities)); production uses `service.mask_text`, a validated
+        single join (O(|text| + entities)). Tests and benchmarks retain this
+        method only as a readable way to assert `detect()` output. A static CI
+        guard fails if it is referenced anywhere under `back/src`.
+        """
+        warnings.warn(
+            "RuleBasedMasker.mask() is deprecated: it copies the whole text "
+            "once per entity and is kept only as a test/benchmark reference "
+            "for detect(). Use src.masking.service.mask_text() in production.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if entities is None:
             entities = self.detect(text)
         masked = text

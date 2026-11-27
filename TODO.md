@@ -160,6 +160,13 @@ schema; runtime behavior is unchanged.
   budget assumption and target-host Linux RSS soak remain **OPEN** gates.
   Numbers, method and caveats: `docs/PERFORMANCE.md` §Concurrency and queue budget.
 
+## Legacy quadratic mask path (P1-5, 2026-11-27) — CLOSED
+
+- Phase 0 fact re-verified from code: `RuleBasedMasker.mask()` has zero production call sites (AST guard over `back/src` finds no `.mask` attribute access; the only `rg '\.mask\(' back/src` hits are docstrings/messages, and `RuleBasedMasker` imports in `service.py`/`docx_service.py`/`detectors.py` use `detect()`/types only). No migration was needed: request/worker paths already run `detect()` + `service.mask_text` (one validated join, O(|text| + entities)).
+- Kept as a deprecated test/benchmark reference rather than removed: deletion would break legitimate reference assertions in `test_rule_based.py`, `test_config.py`, `test_address_prefilter.py`, `test_unmask.py` and `back/benchmarks/docx_mask.py`. `warnings.warn(DeprecationWarning, stacklevel=2)` + a contract docstring mark it; the linear path and its metrics are untouched.
+- Added `back/src/scripts/check_legacy_mask_path.py`: AST guard over `back/src` rejecting `.mask` attribute access and `getattr`/`methodcaller(..., "mask")` lookups, wired into the CI `back` job. `back/tests/test_legacy_mask_path_guard.py` proves the real tree is clean, direct/dynamic calls fail, `detect()` + `mask_text()` pass, an allow-list entry is skipped, and both CLI exit codes.
+- Verified (local, 2026-11-27): `python -m src.scripts.check_legacy_mask_path` exit 0 on the real tree; temporary `back/src/_guard_probe.py` with `masker.mask(text)` → exit 1 (`_guard_probe.py:5`), removed → exit 0; `pytest -q tests/test_legacy_mask_path_guard.py` 8 passed; full `pytest -q --cov=src --cov-branch --cov-fail-under=80` with the disposable PG/Valkey stand 543 passed / 2 skipped, 87.28% branch coverage; ruff check/format, `ty check --python-platform linux`, `bun run --cwd front typecheck` (86 files) and `test` (248 pass / 0 fail, pre-existing HeroUI act warnings), `prek run --all-files`, actionlint 1.7.7 — all exit 0.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
