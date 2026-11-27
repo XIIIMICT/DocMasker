@@ -63,11 +63,17 @@ export async function waitForJob(accepted: JobAccepted, signal?: AbortSignal): P
     const deadline = Date.now() + JOB_WAIT_TIMEOUT_MS;
     while (Date.now() < deadline) {
         if (signal?.aborted) throw new JobFailedError("cancelled");
-        const statusResponse = await fetch(accepted.status_url, { signal, cache: "no-store" });
+        const statusResponse = await fetch(accepted.status_url, {
+            signal: signal ?? null,
+            cache: "no-store",
+        });
         if (!statusResponse.ok) throw new JobFailedError("status_unavailable");
         const status = (await statusResponse.json()) as JobStatus;
         if (status.status === "succeeded" && status.result_url) {
-            const resultResponse = await fetch(status.result_url, { signal, cache: "no-store" });
+            const resultResponse = await fetch(status.result_url, {
+                signal: signal ?? null,
+                cache: "no-store",
+            });
             if (!resultResponse.ok) throw new JobFailedError("result_unavailable");
             const zip = await (await loadJsZip()).loadAsync(await resultResponse.blob());
             const entries = new Map<string, Blob>();

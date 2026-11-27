@@ -157,6 +157,35 @@ schema; runtime behavior is unchanged.
   compiler API and peer range without a second toolchain, or the HTTP contract
   itself changes (then regenerate).
 
+## Frontend strict TypeScript indexing (audit Phase 4.1, 2026-11-27) — CLOSED
+
+`front/tsconfig.json` now matches ReportCollector's two safeguards and adds two
+zero-diagnostic guards: `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noImplicitReturns` and
+`noFallthroughCasesInSwitch`. Measured with TypeScript 7.0.2
+`bunx --no-install tsc --noEmit --incremental false -p tsconfig.json` from
+`front/`: baseline 0 diagnostics; the two primary options gave **21** (13 from
+`noUncheckedIndexedAccess`, 8 from `exactOptionalPropertyTypes`, no overlap);
+after honest fixes **0**. `noPropertyAccessFromIndexSignature` was evaluated
+separately: **167 total = 21 + 146 new**, concentrated in
+`manifest-validation.ts` (39) and `__tests__/manifest-validation.test.ts` (79)
+across 17 files — an unreviewable avalanche on deliberate dot access to record
+types, so it was reverted while the other four options stayed. A temporary
+probe confirmed the two extra guards are not vacuous (TS7030 for a partial
+return, TS7029 for a switch fallthrough; probe removed, final count 0). No new
+dependency; generated `openapi.d.ts` and `labels.generated.ts` are untouched
+and compile unchanged. No blanket `as`, `!`, `@ts-ignore`, `any`, widened types
+or weakened tests. Durable coding rules: `front/AGENTS.md` §"Strict TypeScript
+options".
+
+- **Verified:** `bun run --cwd front format:check`, `lint:check`, `typecheck`
+  (89 files), `test` (276 pass / 0 fail, 889 `expect()` calls, 31 files;
+  pre-existing HeroUI act warnings only), `build` (9 routes) and
+  `gen:openapi --check` green; `prek run --all-files` all hooks passed; full
+  `smoke` project **35/35** (43.2 s) against `http://127.0.0.1:5001` via
+  `local.playwright.config.ts`. Committed on `fix/strict-ts-indexing`; no
+  push or merge.
+
 ## Coverage gate LCOV hardening (finding 2, 2026-11-27) — CLOSED
 
 - `front/scripts/check-coverage-parse.mjs::parseLcov` now validates each source

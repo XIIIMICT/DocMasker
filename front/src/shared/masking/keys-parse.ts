@@ -59,8 +59,9 @@ export function parseKeys(text: string): KeysParseResult {
     const seenSections = new Set<string>();
     for (const line of text.split(/\r?\n/)) {
         const match = line.match(SECTION_LINE);
-        if (match === null) continue;
-        const title = match[1].trim();
+        const rawTitle = match?.[1];
+        if (rawTitle === undefined) continue;
+        const title = rawTitle.trim();
         if (KEYS_ENVELOPE_KEYS.includes(title)) continue;
         if (seenSections.has(title)) {
             return failure(`Раздел «${title}» встречается в файле больше одного раза.`);
@@ -156,25 +157,28 @@ export function parseSimpleYaml(text: string): Record<string, unknown> | unknown
         const line = rawLine.replace(/\s+$/, "");
         if (line.trim().length === 0 || line.trimStart().startsWith("#")) continue;
         // A section header followed by a list: `Раздел:`
-        const bareSection = line.match(SECTION_LINE);
-        if (bareSection) {
+        const bareSectionTitle = line.match(SECTION_LINE)?.[1];
+        if (bareSectionTitle !== undefined) {
             isTopLevelList = false;
-            currentTitle = unquote(bareSection[1].trim());
+            currentTitle = unquote(bareSectionTitle.trim());
             result[currentTitle] = [];
             continue;
         }
         // An inline scalar value: `Раздел: value`
         const inlineSection = line.match(/^([^\s#][^:]*):\s+(.+)$/);
-        if (inlineSection) {
+        const inlineTitle = inlineSection?.[1];
+        const inlineValue = inlineSection?.[2];
+        if (inlineTitle !== undefined && inlineValue !== undefined) {
             isTopLevelList = false;
-            currentTitle = unquote(inlineSection[1].trim());
-            result[currentTitle] = unquote(inlineSection[2].trim());
+            currentTitle = unquote(inlineTitle.trim());
+            result[currentTitle] = unquote(inlineValue.trim());
             continue;
         }
         // A list item under the current section.
-        const item = line.match(/^\s+-\s+(.*)$/);
-        if (item && currentTitle !== null && Array.isArray(result[currentTitle])) {
-            (result[currentTitle] as unknown[]).push(unquote(item[1].trim()));
+        const itemValue = line.match(/^\s+-\s+(.*)$/)?.[1];
+        const currentValues = currentTitle === null ? undefined : result[currentTitle];
+        if (itemValue !== undefined && Array.isArray(currentValues)) {
+            currentValues.push(unquote(itemValue.trim()));
             continue;
         }
         // A top-level list item: the document is not a mapping.

@@ -6,11 +6,18 @@ const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
 
 type Rule = { selector: string; body: string };
 
+/** The patterns below always have the group; fail loudly if one ever drifts. */
+function capture(match: RegExpMatchArray, group: 1 | 2): string {
+    const value = match[group];
+    if (value === undefined) throw new Error("missing regex capture");
+    return value;
+}
+
 /** Flat list of innermost CSS rules; @media wrappers have nested braces and are skipped. */
 function rules(text: string): Rule[] {
     return [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
-        selector: match[1].trim().replace(/\s+/g, " "),
-        body: match[2],
+        selector: capture(match, 1).trim().replace(/\s+/g, " "),
+        body: capture(match, 2),
     }));
 }
 
@@ -46,7 +53,7 @@ describe("globals.css reduced-motion policy", () => {
 
     it("routes every transition duration through an app motion token", () => {
         const transitions = [...withoutComments.matchAll(/transition\s*:\s*([^;]+);/g)].map(
-            (match) => match[1],
+            (match) => capture(match, 1),
         );
 
         expect(transitions).toHaveLength(3);
@@ -61,19 +68,19 @@ describe("globals.css reduced-motion policy", () => {
         expect(block).not.toBe("");
 
         const transitions = [...withoutComments.matchAll(/transition\s*:\s*([^;]+);/g)].map(
-            (match) => match[1],
+            (match) => capture(match, 1),
         );
         const referenced = [
             ...new Set(
-                [...transitions.join(" ").matchAll(/var\((--app-motion-[\w-]+)\)/g)].map(
-                    (match) => match[1],
+                [...transitions.join(" ").matchAll(/var\((--app-motion-[\w-]+)\)/g)].map((match) =>
+                    capture(match, 1),
                 ),
             ),
         ].sort();
         const reducedTokens = new Map(
             [...block.matchAll(/(--app-motion-[\w-]+)\s*:\s*([^;]+);/g)].map((match) => [
-                match[1],
-                match[2].trim(),
+                capture(match, 1),
+                capture(match, 2).trim(),
             ]),
         );
 
@@ -111,7 +118,7 @@ describe("globals.css breakpoint conventions", () => {
         expect(css).toMatch(/--breakpoint-md:\s*0rem;/);
 
         const mediaQueries = [...css.matchAll(/@media\s*([^{}]+)\s*\{/g)].map((match) =>
-            match[1].trim(),
+            capture(match, 1).trim(),
         );
         expect(mediaQueries).toContain("(width < 64rem)");
         expect(mediaQueries).toContain("(width < 40rem)");

@@ -73,9 +73,15 @@ test("на мобильной ширине панели не накладыва�
         const panes = [...document.querySelectorAll(".editor-pane")].map((x) =>
             x.getBoundingClientRect(),
         );
+        const firstActions = actions[0];
+        const firstPane = panes[0];
+        const secondLabel = labels[1];
+        if (!firstActions || !firstPane || !secondLabel) {
+            throw new Error("expected two panes with actions and a second label");
+        }
         return {
-            buttonsInsideFirstPane: actions[0].bottom <= panes[0].bottom + 1,
-            buttonsBeforeNextLabel: actions[0].bottom <= labels[1].top + 1,
+            buttonsInsideFirstPane: firstActions.bottom <= firstPane.bottom + 1,
+            buttonsBeforeNextLabel: firstActions.bottom <= secondLabel.top + 1,
         };
     });
     expect(geometry.buttonsInsideFirstPane).toBe(true);
