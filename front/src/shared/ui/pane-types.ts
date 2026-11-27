@@ -8,11 +8,16 @@ import type { DragEvent } from "react";
  * `undefined` on the client, so `isDisabled` on a conditionally-disabled button
  * trips React's hydration check — `aria-disabled` + a class is stable.
  */
-export function disabledProps(disabled: boolean) {
-    return {
-        "aria-disabled": disabled,
-        className: disabled ? "action-disabled" : undefined,
-    } as const;
+export interface DisabledProps {
+    "aria-disabled": boolean;
+    /** Absent (not `undefined`) when enabled: HeroUI props reject an explicit undefined. */
+    className?: "action-disabled";
+}
+
+export function disabledProps(disabled: boolean): DisabledProps {
+    return disabled
+        ? { "aria-disabled": true, className: "action-disabled" }
+        : { "aria-disabled": false };
 }
 
 /** Drag-and-drop handlers shared by both input panes. */

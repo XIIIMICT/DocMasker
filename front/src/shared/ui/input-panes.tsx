@@ -80,7 +80,7 @@ export function MaskInputPane({
                         onPress={onMask}
                         fullWidth
                         aria-disabled={!maskEnabled}
-                        className={!maskEnabled ? "action-disabled" : undefined}
+                        {...(!maskEnabled ? { className: "action-disabled" } : {})}
                     >
                         {busy ? "Маскируем…" : "Замаскировать"}
                     </Button>
@@ -239,7 +239,7 @@ export function DemaskInputPane({
                         onPress={onUnmask}
                         fullWidth
                         aria-disabled={!unmaskEnabled}
-                        className={!unmaskEnabled ? "action-disabled" : undefined}
+                        {...(!unmaskEnabled ? { className: "action-disabled" } : {})}
                     >
                         {busy ? "Демаскируем…" : "Демаскировать"}
                     </Button>

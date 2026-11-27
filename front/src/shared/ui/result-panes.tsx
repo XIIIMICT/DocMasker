@@ -102,7 +102,7 @@ export function MaskResultPane({
                         onPress={onDownloadResult}
                         fullWidth
                         {...disabledProps(!canDownloadResult)}
-                        aria-describedby={error !== null ? MASK_ERROR_ID : undefined}
+                        {...(error !== null ? { "aria-describedby": MASK_ERROR_ID } : {})}
                     >
                         Скачать результат маскировки
                     </Button>
@@ -111,7 +111,7 @@ export function MaskResultPane({
                         onPress={onDownloadKeys}
                         fullWidth
                         {...disabledProps(!canDownloadKeys)}
-                        aria-describedby={error !== null ? MASK_ERROR_ID : undefined}
+                        {...(error !== null ? { "aria-describedby": MASK_ERROR_ID } : {})}
                     >
                         Скачать ключи демаскировки
                     </Button>
@@ -277,7 +277,7 @@ export function UnmaskResultPane({
                     onPress={onDownload}
                     fullWidth
                     {...disabledProps(!canDownload)}
-                    aria-describedby={error !== null ? DEMASK_ERROR_ID : undefined}
+                    {...(error !== null ? { "aria-describedby": DEMASK_ERROR_ID } : {})}
                 >
                     Скачать файл
                 </Button>

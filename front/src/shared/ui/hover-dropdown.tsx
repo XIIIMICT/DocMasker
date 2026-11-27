@@ -246,7 +246,7 @@ export function HoverDropdown({
     return (
         <Dropdown isOpen={open} onOpenChange={setOpen}>
             {triggerElement}
-            <Dropdown.Popover ref={popoverRef} className={className}>
+            <Dropdown.Popover ref={popoverRef} {...(className !== undefined ? { className } : {})}>
                 {content}
             </Dropdown.Popover>
         </Dropdown>

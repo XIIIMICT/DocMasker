@@ -65,6 +65,25 @@ repo. Verified gotchas:
   button, wrap icons in `Tooltip.Trigger`. Theme switcher: icon-only `Tabs`,
   **no `Tabs.Panel`**, `next-themes` persists to `localStorage`.
 
+## Strict TypeScript options
+
+`tsconfig.json` keeps `strict` and adds `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noImplicitReturns` and
+`noFallthroughCasesInSwitch` (evidence and the rejected
+`noPropertyAccessFromIndexSignature`: root `TODO.md` §"Frontend strict
+TypeScript indexing"). Durable coding rules:
+
+- Indexed access and regex captures are `T | undefined` — guard explicitly
+  (`capture()` in `globals-conventions.test.ts`, capture locals in
+  `keys-parse.ts`); no `!`, blanket `as` or `?? 0` to silence diagnostics.
+- HeroUI 3.2.8 optional props exclude `undefined`: omit the prop when absent
+  (conditional spread); `disabledProps()` omits `className` when enabled.
+  Passing `undefined` explicitly is a type error by design.
+- `RequestInit.signal` accepts `AbortSignal | null` only: use `signal ?? null`
+  for an optional caller signal.
+- Generated API declarations compile unchanged under all four options; never
+  hand-edit them.
+
 ## Critical invariants
 
 1. Two modes («Маскировка» / «Демаскировка») switch through a hover dropdown in
