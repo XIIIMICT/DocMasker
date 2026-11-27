@@ -79,8 +79,9 @@ an artifact copy without the matching DB rows is not one either
 
 1. Stop writers: `docker compose --profile prod stop worker back front`
    (use `--profile dev` with the dev service names for a dev stand). Wait until
-   no active jobs remain — `GET /metrics` `active_jobs` should be `0`, or query
-   the `jobs` table. Do not back up mid-publication.
+   no active jobs remain — query the `jobs` table or read `dm_jobs_active` in
+   Prometheus/Grafana (the legacy JSON `/metrics` answer was removed). Do not
+   back up mid-publication.
 2. Dump PostgreSQL (credentials come from the root `.env`; example uses the
    template values):
    `docker compose exec -T postgres pg_dump -U dm -d docmasker -Fc > dm-postgres.dump`
@@ -139,12 +140,16 @@ never a blind `rm` (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). Today
   logs only the exception type. **Do not claim Compose/CI healthchecks use
   `/ready`** — wiring it (and a front readiness route) is deferred stage 6
   (`infra/AGENTS.md`, `TODO.md`).
-- **`GET /metrics`** keeps the legacy coarse JSON answer for a plain request,
-  e.g. `{"active_jobs":0,"cache":{"hits":3,"misses":1,"writes":1,"failures":0,"evictions":0,"gc_candidates":0,"gc_deleted":0,"gc_reclaimed_bytes":0,"gc_failures":0}}`;
-  a DB outage degrades to `active_jobs: null` and a cache outage to zeroed
-  counters; neither returns 500. With `Accept: text/plain` (what Prometheus
-  sends) the same route returns the full `dm_*` exposition instead. No ids,
-  inputs, keys or key names are exposed (`docs/SECURITY.md`, §8).
+- **`GET /metrics`** is Prometheus-only: it always returns the full `dm_*`
+  exposition (`Content-Type: text/plain`), regardless of `Accept`. The legacy
+  JSON answer (`active_jobs`, `cache.*`) was removed as a loud breaking change
+  with no compatibility window (`TODO.md` P1-6); no content negotiation or shim
+  remains. The scrape reads only the in-process registry — it makes no DB or
+  Valkey call and cannot return 500 on a dependency outage. Queue depth is
+  `dm_jobs_active{kind}`, cache/GC state is `dm_cache_operations_total` and
+  `dm_cache_gc_*`, dependency failures are
+  `dm_dependency_check_duration_seconds{outcome="error"}` plus `/ready` 503.
+  No ids, inputs, keys or key names are exposed (`docs/SECURITY.md`, §8).
 - Full metrics (latency, queue depth/age, lease losses, retries, job durations,
   DB pool saturation) and structured JSON logs are now emitted by the backend
   and worker and shipped by the monitoring stack — see §8. Compose/CI
@@ -248,8 +253,9 @@ keys or exception messages into tickets or chat.
 
 ### PostgreSQL unavailable
 
-- **Symptoms:** `/ready` returns 503 with the fixed Russian reason; `/metrics`
-  shows `active_jobs: null`; job submissions/status return a safe bounded error,
+- **Symptoms:** `/ready` returns 503 with the fixed Russian reason; Prometheus
+  shows `dm_dependency_check_duration_seconds{outcome="error"}` and the `up`
+  target stays healthy; job submissions/status return a safe bounded error,
   not a hung request.
 - **Checks:** `docker compose ps postgres`, compose healthcheck,
   `GET /ready`; inspect only the exception *type* in logs.
@@ -260,8 +266,8 @@ keys or exception messages into tickets or chat.
 
 ### Valkey unavailable / corrupt cache
 
-- **Symptoms:** `/metrics` cache counters are zeroed or failures rise, but
-  mask/unmask still work; no 500s.
+- **Symptoms:** `dm_cache_operations_total{operation="failure"}` rises (or hit
+  counters fall) in Prometheus, but mask/unmask still work; no 500s.
 - **Checks:** `docker compose ps valkey`, its healthcheck; confirm
   `CACHE_ENABLED` / `CACHE_KEY_SECRET` unchanged.
 - **Action:** `docker compose restart valkey`. Flushing the cache is safe
@@ -285,10 +291,10 @@ keys or exception messages into tickets or chat.
 - A corrupt/missing artifact or hostile `artifact_id` is a cache miss plus
   eviction, never an operation failure. Valkey/disk errors are logged by type
   and the pass is skipped; masking and jobs continue.
-- Safe aggregates: `/metrics` JSON `cache.gc_candidates`, `gc_deleted`,
-  `gc_reclaimed_bytes`, `gc_failures`, plus the worker Prometheus counters
-  `dm_cache_gc_*` / `dm_cache_operations_total{operation="gc"}`. No artifact
-  ids, keys or payloads are exposed.
+- Safe aggregates: the Prometheus series `dm_cache_gc_candidates`,
+  `dm_cache_gc_deleted_total`, `dm_cache_gc_reclaimed_bytes_total`,
+  `dm_cache_gc_failures_total` and `dm_cache_operations_total{operation="gc"}`.
+  No artifact ids, keys or payloads are exposed.
 
 ### Disk / artifact volume full
 
@@ -300,7 +306,8 @@ keys or exception messages into tickets or chat.
 - **Action:** stop claims first (`docker compose stop worker`), let/free disk
   space by archiving old **terminal** artifacts through the normal TTL/GC or a
   consistent backup (§3) — never delete `<job_id>.*` files for active jobs.
-  Restart with `just prod`/`just dev` and verify `GET /metrics` and a test job.
+  Restart with `just prod`/`just dev` and verify the `dm_*` scrape targets in
+  Prometheus/Grafana and a test job.
   Local simulated ENOSPC (2026-11-27) failed staging with `staging_failed` and
   zero leftover input files, and failed ZIP creation with no published result;
   retries succeeded after the injected error was removed. A real filesystem
@@ -309,7 +316,8 @@ keys or exception messages into tickets or chat.
 ### Stuck, cancelled or expired job
 
 - **Checks:** `GET /api/jobs/{id}` (`status`, `phase`, `attempt`,
-  `cancel_requested`, safe `error_code`); `GET /metrics` active count.
+  `cancel_requested`, safe `error_code`); `dm_jobs_active` / `dm_jobs_running`
+  in Prometheus/Grafana.
 - **Action:** `DELETE /api/jobs/{id}` requests cancellation — polling stops
   only locally, the server acknowledges at a checkpoint. A lease-expired job is
   reclaimed by another worker or fails at `JOBS_MAX_ATTEMPTS`. An expired result
@@ -334,7 +342,7 @@ keys or exception messages into tickets or chat.
 
 - **Symptoms:** worker container restarted or exited; jobs stay `running`
   briefly until lease expiry; no duplicate result publication.
-- **Checks:** `docker compose ps worker`, `GET /metrics`, job statuses;
+- **Checks:** `docker compose ps worker`, the `dm_*` scrape targets, job statuses;
   `back/src/jobs/worker.py` drain and heartbeat logs.
 - **Action:** `docker compose restart worker` (or `just prod`/`just dev` to
   rebuild). Lease recovery reassigns work with a fresh fencing token. Verify

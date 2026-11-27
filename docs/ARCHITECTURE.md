@@ -168,10 +168,10 @@ Both file operations use the **same archive builder and manifest serializer** in
 - `GET /health` — liveness probe used by the Docker healthcheck; always `ok` (no warm-up).
 - `GET /ready` — readiness probe (Phase 6): verifies PostgreSQL; `503` with a
   sanitized Russian reason when the store is unavailable.
-- `GET /metrics` — coarse safe JSON counters (`active_jobs`, cache
-  hits/misses/…) for a plain request; with `Accept: text/plain` it serves the
-  full `dm_*` Prometheus exposition scraped by the monitoring stack. No PII;
-  degrades instead of 500 on a DB/cache outage (see «Observability» below).
+- `GET /metrics` — the `dm_*` Prometheus exposition only (legacy JSON answer
+  removed as a loud breaking change, no shim). No `Accept` negotiation, no DB or
+  cache call on the scrape; no PII and bounded label vocabularies. Scraped by
+  the monitoring stack (see «Observability» below).
 
 Errors use the stable envelope `{code, detail, request_id}` + `X-Request-ID`
 header (Phase 6 §8.1); `detail` stays Russian and is shown in red inside the
@@ -203,8 +203,9 @@ preserved, and the Next proxies forward both headers. Probes (`/health`,
 - `jobs/api.py::submit_job` streams multipart uploads into a private temp file
   with a real byte counter, validates from the path and streams into the spool;
   `/api/jobs/{id}/result` uses `FileResponse`. Cleanup is exception/abort-safe.
-- `GET /health` stays responsive during CPU/DB/ZIP work; `/ready` and `/metrics`
-  do their DB calls on the IO pool.
+- `GET /health` stays responsive during CPU/DB/ZIP work; `/ready` does its DB
+  check on the IO pool. `/metrics` only renders the in-process Prometheus
+  registry and performs no dependency call.
 
 ## Front (`front/src/`)
 

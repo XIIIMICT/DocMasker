@@ -181,7 +181,7 @@ Local reproduction of the `production` job: build the images (`docker compose -f
 
 ### Deprecation policy
 
-No timed compatibility window is declared — breaking removals are loud (e.g. `MASK_LABELS` fails startup, `docs/adr/0001`). When a deprecated helper must stay as a test/benchmark reference, mark it with `warnings.warn(..., DeprecationWarning, stacklevel=2)` and add a static guard that fails CI if production code uses it. `RuleBasedMasker.mask()` is the current case: deprecated renderer kept for reference, guarded by `src/scripts/check_legacy_mask_path.py`; `mask_text` remains the production path.
+No timed compatibility window is declared — breaking removals are loud (e.g. `MASK_LABELS` fails startup, `docs/adr/0001`). The legacy JSON answer of `GET /metrics` was removed the same way: no "one release with a notice" shim, because a timed window would contradict this policy (`TODO.md` §"Legacy JSON `/metrics` sunset (P1-6)"; the `/metrics` scrape path stays for Prometheus). When a deprecated helper must stay as a test/benchmark reference, mark it with `warnings.warn(..., DeprecationWarning, stacklevel=2)` and add a static guard that fails CI if production code uses it. `RuleBasedMasker.mask()` is the current case: deprecated renderer kept for reference, guarded by `src/scripts/check_legacy_mask_path.py`; `mask_text` remains the production path.
 
 ## Working principles
 

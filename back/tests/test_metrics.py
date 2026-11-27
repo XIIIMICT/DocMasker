@@ -1,5 +1,7 @@
 """Metrics contract: exact names/labels, bounded labels and safe exposure."""
 
+import json
+
 import pytest
 from fastapi import FastAPI
 from httpx2 import ASGITransport, AsyncClient
@@ -158,28 +160,32 @@ def test_metrics_emission_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     mark_http_failure()
 
 
-async def test_backend_metrics_endpoint_negotiates_content_type(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Repo:
-        def count_active(self) -> int:
-            return 2
+async def test_backend_metrics_endpoint_is_prometheus_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The legacy JSON contract is gone; the scrape never touches DB or cache."""
 
-    class _Cache:
-        @property
-        def metrics(self) -> dict[str, int]:
-            return {"hits": 1, "misses": 0, "writes": 0, "evictions": 0}
+    def _forbidden_repository() -> object:
+        msg = "scrape must not query PostgreSQL"
+        raise AssertionError(msg)
 
-    monkeypatch.setattr(main_module, "job_repository", _Repo)
-    monkeypatch.setattr(main_module, "result_cache", _Cache)
+    def _forbidden_cache() -> object:
+        msg = "scrape must not query Valkey"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(main_module, "job_repository", _forbidden_repository)
+    monkeypatch.setattr(main_module, "result_cache", _forbidden_cache)
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        prometheus = await client.get("/metrics", headers={"Accept": "text/plain"})
-        legacy = await client.get("/metrics")
+        plain = await client.get("/metrics")
+        scrape = await client.get("/metrics", headers={"Accept": "text/plain"})
+        stale_json_client = await client.get("/metrics", headers={"Accept": "application/json"})
 
-    assert prometheus.status_code == 200
-    assert prometheus.headers["content-type"].startswith("text/plain")
-    assert "# HELP dm_http_requests_total" in prometheus.text
-    assert legacy.status_code == 200
-    assert legacy.json() == {"active_jobs": 2, "cache": {"hits": 1, "misses": 0, "writes": 0, "evictions": 0}}
+    for response in (plain, scrape, stale_json_client):
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/plain")
+        assert "# HELP dm_http_requests_total" in response.text
+        assert "active_jobs" not in response.text  # no legacy JSON key at any Accept
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(response.text)
 
 
 async def test_http_middleware_records_the_route_template_only() -> None:

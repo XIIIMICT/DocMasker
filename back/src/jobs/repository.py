@@ -116,9 +116,9 @@ class JobRepository:
         """
         Return the number of non-terminal jobs and refresh queue/pool gauges.
 
-        One grouped query feeds both the legacy integer contract (used by the
-        JSON `/metrics` view) and `dm_jobs_active{kind}` (queue depth). No job
-        ids, keys or filenames are read.
+        One grouped query feeds `dm_jobs_active{kind}` (queue depth) and the
+        bounded active-job total used by worker polling. No job ids, keys or
+        filenames are read.
         """
         with self._session() as session:
             rows = session.execute(

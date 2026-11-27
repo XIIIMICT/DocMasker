@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST
@@ -147,32 +147,6 @@ def log_warning_readiness(error_type: str) -> None:
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics(request: Request) -> Response:
-    """
-    Scrape endpoint.
-
-    `Accept: text/plain` selects Prometheus exposition; the default keeps the
-    legacy coarse JSON contract consumed by existing clients.
-    """
-    accept = request.headers.get("accept", "")
-    if "text/plain" in accept.lower():
-        return Response(content=generate_metrics(), media_type=CONTENT_TYPE_LATEST)
-    try:
-        active = await run_blocking(job_repository().count_active)
-    except Exception as exc:  # noqa: BLE001 - only the type is logged
-        LOGGER.warning("metrics: PostgreSQL unavailable (error_type=%s)", type(exc).__name__)
-        active = None
-    try:
-        cache = await run_blocking(lambda: dict(result_cache().metrics))
-    except Exception:  # noqa: BLE001 - cache is never a correctness dependency
-        cache = {
-            "hits": 0,
-            "misses": 0,
-            "writes": 0,
-            "evictions": 0,
-            "gc_candidates": 0,
-            "gc_deleted": 0,
-            "gc_reclaimed_bytes": 0,
-            "gc_failures": 0,
-        }
-    return JSONResponse(content={"active_jobs": active, "cache": cache})
+async def metrics() -> Response:
+    """Prometheus scrape endpoint: only the `dm_*` exposition, never legacy JSON."""
+    return Response(content=generate_metrics(), media_type=CONTENT_TYPE_LATEST)

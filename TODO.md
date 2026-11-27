@@ -167,6 +167,47 @@ schema; runtime behavior is unchanged.
 - Added `back/src/scripts/check_legacy_mask_path.py`: AST guard over `back/src` rejecting `.mask` attribute access and `getattr`/`methodcaller(..., "mask")` lookups, wired into the CI `back` job. `back/tests/test_legacy_mask_path_guard.py` proves the real tree is clean, direct/dynamic calls fail, `detect()` + `mask_text()` pass, an allow-list entry is skipped, and both CLI exit codes.
 - Verified (local, 2026-11-27): `python -m src.scripts.check_legacy_mask_path` exit 0 on the real tree; temporary `back/src/_guard_probe.py` with `masker.mask(text)` → exit 1 (`_guard_probe.py:5`), removed → exit 0; `pytest -q tests/test_legacy_mask_path_guard.py` 8 passed; full `pytest -q --cov=src --cov-branch --cov-fail-under=80` with the disposable PG/Valkey stand 543 passed / 2 skipped, 87.28% branch coverage; ruff check/format, `ty check --python-platform linux`, `bun run --cwd front typecheck` (86 files) and `test` (248 pass / 0 fail, pre-existing HeroUI act warnings), `prek run --all-files`, actionlint 1.7.7 — all exit 0.
 
+## Legacy JSON `/metrics` sunset (P1-6, 2026-11-27) — CLOSED (breaking)
+
+**Release note — BREAKING, no compatibility window.** `GET /metrics` no longer
+has a legacy JSON representation. Every request (any `Accept`) now returns the
+`dm_*` Prometheus exposition with `Content-Type: text/plain`, so a stale JSON
+client fails loudly on the content type instead of receiving
+`active_jobs`/`cache.*`. There is no deprecation header, log-only shim,
+fallback representation or scheduled follow-up removal. The scrape path,
+Grafana dashboards, alert rules and Prometheus config are unchanged.
+
+**Interpretation of the deprecation policy.** `docs/WORKFLOW.md` §Deprecation
+policy declares no timed compatibility window: breaking removals are loud
+(precedents: `MASK_LABELS` fails startup, ADR-0001; `GET /api/profiles` removed,
+ADR-0005). Keeping a shim "for one release" would invent the very window the
+policy forbids, and keeping both representations forever is not acceptable
+either. So the JSON representation is removed now, with the breaking change
+recorded here and in `docs/API.md`. The `/metrics` **route** cannot be deleted:
+Prometheus scrapes it (`infra/prometheus/prometheus.yml.tpl`) and the
+dashboards/alerts are live consumers of `dm_*`. "Removed" therefore means the
+legacy JSON contract is gone; the endpoint is Prometheus-only (not a 404,
+which would break monitoring).
+
+- Endpoint: `back/src/main.py` — no PostgreSQL/Valkey call on the scrape, so a
+  dependency outage cannot degrade it. Replacements: `dm_jobs_active{kind}`
+  for `active_jobs`, `dm_cache_operations_total` / `dm_cache_gc_*` for cache
+  counters, `dm_dependency_check_duration_seconds{outcome="error"}` plus a
+  `/ready` 503 for dependency failures.
+- Tests: `test_metrics.py::test_backend_metrics_endpoint_is_prometheus_only`
+  (plain / `text/plain` / `application/json` all return Prometheus text, no
+  `active_jobs`, not JSON), `test_readiness.py::test_metrics_scrape_is_prometheus_only_and_db_independent`,
+  and `test_monitoring_contract.py` (every provisioned dashboard/alert series
+  is `dm_*`/`up`, no legacy JSON key in any expression, both scrape jobs keep
+  `metrics_path: /metrics`). No assertion was weakened.
+- Verified (local, 2026-11-27): ruff check/format and `ty check` green; full
+  pytest with the disposable PostgreSQL/Valkey stand (`DATABASE_URL` +
+  `TEST_DATABASE_URL`) 543 passed / 4 skipped, 87.19% branch coverage; front
+  typecheck (86 files) and `bun test` 248 pass / 0 fail (pre-existing HeroUI
+  act warnings); `prek run --all-files` all hooks passed. No workflow or alert
+  rule was edited, so actionlint / `promtool check rules` were not applicable;
+  the monitoring contract test parses the unchanged rules and dashboards.
+
 ## Deferred by maintainer decision
 
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:

@@ -136,18 +136,25 @@ A DB failure logs only the exception type — no DSN, path, PII or keys. The
 full readiness/liveness rollout (compose/CI healthchecks, front readiness)
 remains part of the deferred observability stage.
 
-## `GET /metrics` (Phase 6, §10)
+## `GET /metrics` — Prometheus only (legacy JSON removed)
 
-Coarse counters only, never PII/keys/job ids/cache keys:
+**BREAKING CHANGE — no compatibility window.** The legacy coarse JSON answer
+(`{"active_jobs": …, "cache": {…}}`) was removed outright: there is no content
+negotiation, no deprecation header and no fallback representation. Every
+request returns the `dm_*` Prometheus exposition with
+`Content-Type: text/plain; version=0.0.4; charset=utf-8`, whatever the
+`Accept` header says, so a stale JSON client fails loudly on the content type.
+The policy and the recorded interpretation are in `docs/WORKFLOW.md`
+§Deprecation policy and `TODO.md` §"Legacy JSON `/metrics` sunset (P1-6)".
 
-```json
-{"active_jobs": 0, "cache": {"hits": 3, "misses": 1, "writes": 1, "failures": 0, "evictions": 0, "gc_candidates": 0, "gc_deleted": 0, "gc_reclaimed_bytes": 0, "gc_failures": 0}}
-```
-
-A PostgreSQL outage degrades to `active_jobs: null` instead of a 500; a cache
-outage yields zeroed cache counters. The `gc_*` fields are safe aggregate counts
-from the bounded cache-artifact collection pass (`docs/OPERATIONS.md` §"Cache
-artifact GC"). Full metrics/latency/structured logs remain deferred (TODO stage 6).
+The scrape reads only the in-process registry (`back/src/metrics.py`); it makes
+no PostgreSQL/Valkey call, so a dependency outage cannot degrade it. The
+equivalent signals are `dm_jobs_active{kind}` (queue depth),
+`dm_cache_operations_total` / `dm_cache_gc_*` (cache and GC), and
+`dm_dependency_check_duration_seconds{outcome="error"}` plus a `/ready` 503
+(dependency failures). No ids, inputs, keys, key names or filenames are exposed;
+every label vocabulary is bounded. Prometheus/Grafana/alert wiring is unchanged
+(`docs/OPERATIONS.md` §§4, 8; `docs/ARCHITECTURE.md` "Observability").
 
 ## Proxy timeout policy (canonical: `front/src/shared/api/timeouts.ts`)
 
