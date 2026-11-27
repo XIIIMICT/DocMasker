@@ -77,7 +77,11 @@ repo. Verified gotchas:
 2. `docx-preview` is client-only (`"use client"` + `useEffect`); never call
    `renderAsync` server-side. Highlights are applied to rendered DOM **after**
    render, preview-only, idempotent, and guarded by `generationRef` against a
-   stale file switch. Downloaded documents are never altered.
+   stale file switch. Each generation renders into its own **detached** staging
+   host; only the current generation moves those nodes into the visible
+   surface, so an already-started `renderAsync` can never overwrite a newer
+   Blob. Obsolete hosts are cleared on switch/unmount/success/failure.
+   Downloaded documents are never altered.
 3. The two panes scroll by **ratio** (`useSyncedScroll`), not pixels. Narrow
    screens (`<64rem`) stack them; only `.editor-pane__label--mask-input` drops
    its desktop `min-height`. Keep `overflow-y: auto` but hide the scrollbar;

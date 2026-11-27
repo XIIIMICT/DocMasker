@@ -69,6 +69,33 @@ describe("DocxViewer async lifecycle", () => {
         expect(seen).toEqual([BLOB_A, BLOB_B]);
     });
 
+    it("renders into a detached per-generation host and moves only the current host into the surface", async () => {
+        const hosts: HTMLElement[] = [];
+        const renderDocument: DocxRender = async (blob, container) => {
+            hosts.push(container);
+            container.innerHTML = `<p>${blob === BLOB_A ? "первый" : "второй"}</p>`;
+        };
+
+        const view = render(<DocxViewer blob={BLOB_A} renderDocument={renderDocument} />);
+        await flush();
+        const surface = surfaceOf(view.container);
+        expect(hosts).toHaveLength(1);
+        expect(hosts[0]).not.toBe(surface);
+        expect(hosts[0]?.isConnected).toBe(false);
+        expect(surface.innerHTML).toBe("<p>первый</p>");
+        // Nodes are moved, not copied: the staging host keeps no committed DOM.
+        expect(hosts[0]?.childNodes).toHaveLength(0);
+
+        await act(async () => {
+            view.rerender(<DocxViewer blob={BLOB_B} renderDocument={renderDocument} />);
+        });
+        expect(hosts).toHaveLength(2);
+        expect(hosts[1]).not.toBe(hosts[0]);
+        expect(hosts[1]?.isConnected).toBe(false);
+        expect(surface.innerHTML).toBe("<p>второй</p>");
+        expect(hosts[0]?.childNodes).toHaveLength(0);
+    });
+
     it("a stale render that completes after a blob switch cannot overwrite the newer DOM", async () => {
         const gate = deferred<void>();
         const renderDocument: DocxRender = async (blob, container, isCurrent) => {
@@ -111,13 +138,19 @@ describe("DocxViewer async lifecycle", () => {
         expect(view.container.querySelector(".docx-viewer__error")).toBeNull();
     });
 
-    it("a stale completion that ignores the guard never applies highlights or error state", async () => {
+    it("a late A completion that ignores isCurrent never replaces B's committed DOM", async () => {
         const gateA = deferred<void>();
         const gateB = deferred<void>();
+        const hosts: HTMLElement[] = [];
+        let stalePaint = "";
         const renderDocument: DocxRender = async (blob, container) => {
+            hosts.push(container);
             if (blob === BLOB_A) {
                 await gateA.promise;
+                // Deliberately ignores isCurrent, like an already-started
+                // renderAsync writing into its own host after B committed.
                 container.innerHTML = "<p>[PERSON_1]</p>";
+                stalePaint = container.innerHTML;
                 return;
             }
             await gateB.promise;
@@ -144,26 +177,67 @@ describe("DocxViewer async lifecycle", () => {
         });
         expect(surface.textContent).toBe("новый документ");
         expect(marks(surface)).toEqual([]); // no marker in B's document
+        const committed = surface.firstElementChild;
 
-        // A ignores the generation and paints into the live container. The
-        // component's own post-render guard must refuse to highlight stale DOM.
         await act(async () => {
             gateA.resolve();
             await gateA.promise;
             await Promise.resolve();
         });
-        expect(surface.textContent).toBe("[PERSON_1]");
+        expect(stalePaint).toBe("<p>[PERSON_1]</p>"); // A really did paint
+        expect(hosts[0]).not.toBe(surface);
+        expect(hosts[0]?.childNodes).toHaveLength(0); // stale host cleaned up
+        // The visible surface still holds B, with the very same nodes.
+        expect(surface.firstElementChild).toBe(committed);
+        expect(surface.textContent).toBe("новый документ");
+        expect(surface.textContent).not.toContain("PERSON_1");
         expect(marks(surface)).toEqual([]);
         expect(view.container.querySelector(".docx-viewer__error")).toBeNull();
+    });
+
+    it("a switch before A's import resolves never starts A's render", async () => {
+        const importGate = deferred<void>();
+        const started: Blob[] = [];
+        const renderDocument: DocxRender = async (blob, container, isCurrent) => {
+            await importGate.promise; // stands in for import("docx-preview")
+            if (!isCurrent()) return;
+            started.push(blob);
+            container.innerHTML = blob === BLOB_A ? "<p>[PERSON_1]</p>" : "<p>другой</p>";
+        };
+
+        const view = render(
+            <DocxViewer blob={BLOB_A} highlight={["[PERSON_1]"]} renderDocument={renderDocument} />,
+        );
+        await act(async () => {
+            view.rerender(
+                <DocxViewer
+                    blob={BLOB_B}
+                    highlight={["[PERSON_1]"]}
+                    renderDocument={renderDocument}
+                />,
+            );
+        });
+        await act(async () => {
+            importGate.resolve();
+            await importGate.promise;
+        });
+
+        expect(started).toEqual([BLOB_B]);
+        const surface = surfaceOf(view.container);
+        expect(surface.textContent).toBe("другой");
+        expect(surface.textContent).not.toContain("PERSON_1");
+        expect(marks(surface)).toEqual([]);
     });
 
     it("a late completion after unmount touches neither DOM nor React state", async () => {
         const gate = deferred<void>();
         const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
         try {
-            const renderDocument: DocxRender = async (_blob, container, isCurrent) => {
+            const hosts: HTMLElement[] = [];
+            const renderDocument: DocxRender = async (_blob, container) => {
+                hosts.push(container);
                 await gate.promise;
-                if (!isCurrent()) return; // production's post-import guard
+                // Even ignoring the guard, this can only reach the private host.
                 container.innerHTML = "<p>[PERSON_1]</p>";
             };
 
@@ -184,6 +258,7 @@ describe("DocxViewer async lifecycle", () => {
             });
 
             expect(surface.innerHTML).toBe("");
+            expect(hosts[0]?.isConnected).toBe(false);
             expect(marks(surface)).toEqual([]);
             expect(errorSpy).not.toHaveBeenCalled();
         } finally {
@@ -210,13 +285,18 @@ describe("DocxViewer async lifecycle", () => {
             });
 
             expect(errorSpy).not.toHaveBeenCalled();
+            expect(document.querySelector(".docx-viewer__error")).toBeNull();
         } finally {
             errorSpy.mockRestore();
         }
     });
 
-    it("a rejected dynamic import surfaces the preview error", async () => {
-        const renderDocument: DocxRender = () => Promise.reject(new Error("chunk unavailable"));
+    it("a rejected dynamic import surfaces the preview error and cleans its host", async () => {
+        const hosts: HTMLElement[] = [];
+        const renderDocument: DocxRender = (blob, container) => {
+            hosts.push(container);
+            return Promise.reject(new Error("chunk unavailable"));
+        };
         const view = render(<DocxViewer blob={BLOB_A} renderDocument={renderDocument} />);
 
         await waitFor(() => {
@@ -225,11 +305,14 @@ describe("DocxViewer async lifecycle", () => {
             );
         });
         expect(surfaceOf(view.container).innerHTML).toBe("");
+        expect(hosts[0]?.childNodes).toHaveLength(0);
     });
 
-    it("a failed renderAsync surfaces the preview error", async () => {
+    it("a failed renderAsync surfaces the preview error without committing partial DOM", async () => {
+        const hosts: HTMLElement[] = [];
         let painted = false;
         const renderDocument: DocxRender = async (_blob, container) => {
+            hosts.push(container);
             container.innerHTML = "<p>partial</p>";
             painted = true;
             throw new Error("render failed");
@@ -242,6 +325,42 @@ describe("DocxViewer async lifecycle", () => {
             );
         });
         expect(painted).toBe(true);
+        expect(surfaceOf(view.container).innerHTML).toBe("");
+        expect(hosts[0]?.childNodes).toHaveLength(0);
+    });
+
+    it("a stale rejection cannot replace the current generation's error", async () => {
+        const gateA = deferred<void>();
+        const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+            const renderDocument: DocxRender = async (blob, _container, isCurrent) => {
+                if (blob === BLOB_A) {
+                    await gateA.promise;
+                    if (!isCurrent()) return;
+                    throw new Error("stale failure");
+                }
+                throw new Error("current failure");
+            };
+            const view = render(<DocxViewer blob={BLOB_A} renderDocument={renderDocument} />);
+            await act(async () => {
+                view.rerender(<DocxViewer blob={BLOB_B} renderDocument={renderDocument} />);
+            });
+            await flush();
+            expect(view.container.querySelector(".docx-viewer__error")?.textContent).toBe(
+                ERROR_TEXT,
+            );
+
+            await act(async () => {
+                gateA.reject(new Error("late stale failure"));
+                await gateA.promise.catch(() => undefined);
+            });
+            expect(view.container.querySelector(".docx-viewer__error")?.textContent).toBe(
+                ERROR_TEXT,
+            );
+            expect(errorSpy).not.toHaveBeenCalled();
+        } finally {
+            errorSpy.mockRestore();
+        }
     });
 
     it("highlight-only changes reuse the render and never nest marks", async () => {
@@ -357,6 +476,31 @@ describe("DocxViewer async lifecycle", () => {
             jest.advanceTimersByTime(HIGHLIGHT_DEBOUNCE_MS + 10);
         });
         expect(surface.innerHTML).toBe(afterUnmount);
+    });
+
+    it("unmount during a pending render cancels its highlight timer", async () => {
+        jest.useFakeTimers();
+        const gate = deferred<void>();
+        const renderDocument: DocxRender = async (_blob, container) => {
+            await gate.promise;
+            container.innerHTML = "<p>[PERSON_1]</p>";
+        };
+
+        const view = render(
+            <DocxViewer blob={BLOB_A} renderDocument={renderDocument} highlight={["[PERSON_1]"]} />,
+        );
+        expect(jest.getTimerCount()).toBe(1);
+        const surface = surfaceOf(view.container);
+        view.unmount();
+        expect(jest.getTimerCount()).toBe(0);
+
+        await act(async () => {
+            gate.resolve();
+            await gate.promise;
+            jest.advanceTimersByTime(HIGHLIGHT_DEBOUNCE_MS + 10);
+        });
+        expect(surface.innerHTML).toBe("");
+        expect(jest.getTimerCount()).toBe(0);
     });
 
     it("a newer render leaves a single pending highlight timer", async () => {
