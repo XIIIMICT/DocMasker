@@ -76,6 +76,8 @@ jobs:
       - run: uv run --no-sync ruff check
       - run: uv run --no-sync ruff format --check
       - run: uv run --no-sync ty check
+      - name: Guard against the deprecated quadratic mask path
+        run: uv run --no-sync python -m src.scripts.check_legacy_mask_path
       - name: Migrate empty database
         run: uv run --no-sync alembic upgrade head
       - name: Masking + PostgreSQL integration tests

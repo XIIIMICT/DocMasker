@@ -44,6 +44,7 @@ Database recipes: `just db-stand`, `just seed`, `just migrate`,
 - `pytest`: `asyncio_mode=auto`, `filterwarnings=error` (with a scoped ignore for the `pkg_resources` deprecation that `natasha`→`pymorphy2` emits). Tests are deterministic and offline — no model, no network.
 - Test files: `test_rule_based.py` (CAPSLOCK, names, phone/email/address/org cases), `test_config.py` / `test_labels_api.py` (Phase 4 config), `test_ooxml.py` (Phase 5 OPC fixtures + manifest parity), `test_cache.py` (Phase 3), `test_errors.py` / `test_readiness.py` / `test_settings_validation.py` / `test_uploads.py` / `test_windowed.py` (Phase 6 error contract, Phase 7 windowing), `test_response_headers.py` (`/api/*` no-store on PII JSON and ZIPs), `test_storage_readiness.py` (typed 503, full/read-only probe before staging/claims), `test_mask.py`, `test_docx.py`, `test_mask_file.py` (multipart + versioned manifest), `test_unmask.py`, `test_jobs_*.py`, `test_executor.py` (`run_cpu`/`run_blocking`).
 - Coverage: `--cov=src --cov-branch`; CI requires ≥80% (see `[tool.coverage]` in `back/pyproject.toml`).
+- Static guard: `uv run --directory back python -m src.scripts.check_legacy_mask_path` parses every `back/src/**/*.py` and fails on any `.mask` attribute access or `getattr`/`methodcaller(..., "mask")` lookup. The deprecated quadratic `RuleBasedMasker.mask()` stays reference-only for tests/benchmarks; `test_legacy_mask_path_guard.py` proves both directions (clean tree accepted, fake call rejected).
 
 ### Front
 
@@ -132,7 +133,7 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 | Job | What |
 |---|---|
 | `config` | actionlint + `docker compose config` for `prod`/`dev` and `infra/compose.ci.yaml` |
-| `back` | locked uv sync, ruff check/format, ty, pytest with branch coverage (real PostgreSQL + Valkey integration via job services; artifact: coverage + JUnit) |
+| `back` | locked uv sync, ruff check/format, ty, legacy mask-path AST guard, pytest with branch coverage (real PostgreSQL + Valkey integration via job services; artifact: coverage + JUnit) |
 | `front` | Bun **1.4.4 pinned** + Node 26, `next typegen`, `gen:labels` + freshness check, typecheck, oxlint, oxfmt `--check`, `bun test --coverage` + `scripts/check-coverage.mjs` gate |
 | `openapi-contract` | locked uv sync + pinned Bun/Node, `gen:openapi --check` against the in-process schema export (fails on a stale generated declaration) |
 | `secrets` | gitleaks over the full history (`fetch-depth: 0`); findings are reported, never allowlisted away |
@@ -177,6 +178,10 @@ Local reproduction of the `production` job: build the images (`docker compose -f
   exception — keep them to map docs to the UI.
 - **One home per fact.** A fact lives either in a per-area `AGENTS.md` (hot
   path) or in `docs/` (detail) — never duplicated, so the two cannot drift.
+
+### Deprecation policy
+
+No timed compatibility window is declared — breaking removals are loud (e.g. `MASK_LABELS` fails startup, `docs/adr/0001`). When a deprecated helper must stay as a test/benchmark reference, mark it with `warnings.warn(..., DeprecationWarning, stacklevel=2)` and add a static guard that fails CI if production code uses it. `RuleBasedMasker.mask()` is the current case: deprecated renderer kept for reference, guarded by `src/scripts/check_legacy_mask_path.py`; `mask_text` remains the production path.
 
 ## Working principles
 
