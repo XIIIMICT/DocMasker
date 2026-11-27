@@ -204,6 +204,19 @@ describe("useJobLifecycle — active job handle", () => {
         expect(hook.result.current.drafts.state.busy).toBe(false);
     });
 
+    it("aborts local polling on unmount without requesting a server cancellation", async () => {
+        const { hook } = setup();
+        await trackActiveJob(hook);
+        const controller = new AbortController();
+        hook.result.current.jobs.pollingController.current = controller;
+        cancelRequests.length = 0;
+
+        hook.unmount();
+
+        expect(controller.signal.aborted).toBe(true);
+        expect(cancelRequests).toEqual([]);
+    });
+
     it("an in-flight job finishes into the mode where it started", async () => {
         const { hook } = setup();
         await trackActiveJob(hook);

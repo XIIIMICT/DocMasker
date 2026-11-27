@@ -127,6 +127,68 @@ describe("waitForJob", () => {
         );
     });
 
+    it("rejects a cancellation confirmed while the result is being read", async () => {
+        const controller = new AbortController();
+        globalThis.fetch = (async (url: string | URL | Request) => {
+            if (String(url) === ACCEPTED.status_url) {
+                return jsonResponse({
+                    job_id: ACCEPTED.job_id,
+                    status: "succeeded",
+                    phase: "completed",
+                    progress: 100,
+                    attempt: 1,
+                    error_code: null,
+                    result_url: ACCEPTED.result_url,
+                });
+            }
+            const response = await zipResponse({
+                "result.json": JSON.stringify({ text: "VALUE-A" }),
+            });
+            // The job won the race, but cancellation was confirmed before the
+            // result was unpacked: no result may escape to the UI.
+            controller.abort();
+            return response;
+        }) as unknown as typeof fetch;
+
+        await expect(waitForJob(ACCEPTED, controller.signal)).rejects.toThrow("Задание отменено.");
+    });
+
+    it("stops unpacking when the signal aborts during the archive read", async () => {
+        const controller = new AbortController();
+        const originalArrayBuffer = Blob.prototype.arrayBuffer;
+        let reads = 0;
+        const readSpy = spyOn(Blob.prototype, "arrayBuffer").mockImplementation(async function (
+            this: Blob,
+        ) {
+            const buffer = await originalArrayBuffer.call(this);
+            reads += 1;
+            if (reads === 1) controller.abort();
+            return buffer;
+        });
+        globalThis.fetch = (async (url: string | URL | Request) => {
+            if (String(url) === ACCEPTED.status_url) {
+                return jsonResponse({
+                    job_id: ACCEPTED.job_id,
+                    status: "succeeded",
+                    phase: "completed",
+                    progress: 100,
+                    attempt: 1,
+                    error_code: null,
+                    result_url: ACCEPTED.result_url,
+                });
+            }
+            return zipResponse({ "result.json": JSON.stringify({ text: "VALUE-A" }) });
+        }) as unknown as typeof fetch;
+        try {
+            await expect(waitForJob(ACCEPTED, controller.signal)).rejects.toBeInstanceOf(
+                JobFailedError,
+            );
+            expect(reads).toBeGreaterThan(0);
+        } finally {
+            readSpy.mockRestore();
+        }
+    });
+
     it("removes one abort listener for every poll delay", async () => {
         const addSpy = spyOn(AbortSignal.prototype, "addEventListener");
         const removeSpy = spyOn(AbortSignal.prototype, "removeEventListener");
