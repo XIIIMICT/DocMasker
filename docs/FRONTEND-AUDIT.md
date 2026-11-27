@@ -129,6 +129,16 @@ OS temp/gitignored output, not committed.
 - RevoGrid/collab, 300/500-client presence, Keycloak OIDC browser CI and live migration
   gates belong to ReportCollector and are tracked there.
 
+## 9. Post-audit maintainer decisions (final state)
+
+- The support-pill snap introduced by the audit was REJECTED by the maintainer as
+  "слишком быстро". Original timing was restored (`gap 180 ms`, label `max-width 220 ms`,
+  `background/opacity 140 ms`, same easing; no `translateX`), with reduced motion still
+  instant. Measured computed values and the accepted layout cost are in
+  `docs/ARCHITECTURE.md` and `front/AGENTS.md` (`fe178b8`).
+- The active-job cancel control was renamed to **«Отменить операцию»**; DELETE semantics
+  and its E2E regression are unchanged (`55683f7`).
+
 Cross-project comparison is in `ReportCollector/docs/FRONTEND-AUDIT.md` and the final
 response; both apps keep intentionally different DOM/workflow architectures.
 
