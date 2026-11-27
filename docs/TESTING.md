@@ -58,18 +58,19 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 | Config / stats | `shared/__tests__/config.test.ts`, `shared/__tests__/mask-stats.test.ts` | runtime config, stats breakdown and counts |
 | API adapters | `shared/api/__tests__/mask.test.ts`, `mask-archive.test.ts`, `jobs.test.ts`, `timeouts.test.ts`, `placeholder-count.test.ts`, `lazy-zip.test.ts` | requests/responses, ZIP + manifest parsing, canonical timeouts, job polling, single-flight JSZip loader |
 | Hooks | `shared/hooks/__tests__/use-synced-scroll.test.ts` | ratio-based pane scrolling |
-| Pane boundaries | `shared/ui/__tests__/action-boundaries.test.tsx`, `pane-boundaries.test.ts` | Enter/Space on visually disabled actions is blocked by the workflow guard (not by CSS); stable `disabledProps` and one lazy-import guard — no export-name, import-order or retired-module string checks |
+| Pane boundaries | `shared/ui/__tests__/action-boundaries.test.tsx`, `pane-boundaries.test.ts` | Enter/Space and synthetic pointer clicks on visually disabled actions are blocked by the workflow guard (not by CSS); stable `disabledProps` and one lazy-import guard — no export-name, import-order or retired-module string checks |
 | Accessibility | `shared/ui/__tests__/pane-accessibility.test.tsx`, `brand-accessibility.test.tsx` | accessible names for text areas, file actions, tabs and downloads; `aria-describedby` for invalid keys and result errors; tab/menu keyboard operation; focus return after Escape |
 | Dropdown | `shared/ui/__tests__/hover-dropdown.test.ts` | geometry check, capture-phase scroll listener and disposer |
 | Document viewer | `shared/ui/__tests__/docx-viewer.test.ts`, `docx-viewer-lifecycle.test.tsx`, `docx-viewer-scheduling.test.ts` | marker highlighting, stale generation/render guards, debounce; injectable `DocxViewer.renderDocument` seam leaves the lazy default unchanged |
 | Header | `shared/ui/__tests__/theme-switcher.test.ts`, `support-button.test.ts` | theme options, mailto parsing |
 | Masking workflow | `features/masking/__tests__/use-mode-drafts.test.ts`, `use-masker-workflow-downloads.test.ts`, `use-job-lifecycle.test.ts`, `use-file-input.test.ts`, `result-download.test.ts`, `mask-requests.test.ts`, `keys-parse.test.ts`, `demask-guard.test.ts` | per-mode drafts, downloads, job lifecycle/cancellation, file input, request guards, YAML key parsing |
-| App / tooling | `app/__tests__/globals-conventions.test.ts`, `src/__tests__/check-coverage.test.ts` | global CSS conventions; coverage gate is a thin CLI wrapper over `scripts/check-coverage-parse.mjs` — malformed thresholds/LCOV fail deterministically, 65% floor unchanged; the fail-closed LCOV parser rejects duplicate/out-of-order/incomplete counters, a premature second `SF` and unsafe aggregate sums, while accepting bun's LF/CRLF, multi-file and zero-hit reports |
+| App / tooling | `app/__tests__/globals-conventions.test.ts`, `src/__tests__/check-coverage.test.ts` | global CSS conventions (instant theme switching, no layout-property transitions, compositor-only reveal, zeroed motion token under reduce, pinned HeroUI breakpoints); coverage gate is a thin CLI wrapper over `scripts/check-coverage-parse.mjs` — malformed thresholds/LCOV fail deterministically, 65% floor unchanged; the fail-closed LCOV parser rejects duplicate/out-of-order/incomplete counters, a premature second `SF` and unsafe aggregate sums, while accepting bun's LF/CRLF, multi-file and zero-hit reports |
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
-Four spec files, 35 tests at the last `--list` run (24 → 23 in `smoke.spec.ts`
-after merging the two initial-render assertions into one test):
+Four spec files, 40 tests at the last `--list` run (28 in `smoke.spec.ts`
+after adding the theme/support-link/reduced-motion and disabled-action cases,
+10 hover, 1 rerender, 1 health):
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
 `front/e2e/rerender-smoke.spec.ts`, `front/e2e/hover-smoke.spec.ts`.
 `front/playwright.config.ts` discovers them with
@@ -242,8 +243,11 @@ stack (front **15001**, back **18001**) and first verifies exact discovery of
 `health.spec.ts`, `smoke.spec.ts`, `rerender-smoke.spec.ts` and
 `hover-smoke.spec.ts` plus the minimum test counts (§1). The CI front service
 sets a synthetic `SUPPORT_MAIL` fixture: the header support link is rendered only when that runtime env var is
-present, and the reduced-motion smoke test asserts that real control and its
-hover state. Never run smoke against an unprepared stack; never paste real PII
+present. The smoke suite asserts that control's hover, keyboard-focus and
+compact-Tooltip end states, that reduced motion zeros only DocMasker's token
+while HeroUI's own motion-reduce CSS stays in the cascade, and that visually
+disabled actions keep `aria-disabled`/focus but accept no pointer or keyboard
+operation. Never run smoke against an unprepared stack; never paste real PII
 into a live browser session.
 
 ## 5. Clean-install / Compose / prod-image verification

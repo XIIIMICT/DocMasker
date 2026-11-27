@@ -252,6 +252,29 @@ describe("visually disabled actions — keyboard boundary", () => {
         expect(fetchSpy).not.toHaveBeenCalled();
         await flush();
     });
+
+    it("does not treat the CSS pointer-events workaround as a guard", async () => {
+        // jsdom/happy-dom does not load globals.css, so a synthetic click reaches
+        // `onPress` exactly as a forced DOM event would in a real browser. The
+        // workflow boundary — not `pointer-events: none` — must stop the work.
+        const press = renderPanes();
+        // Keep both inputs empty: mask, demask and all downloads stay visually
+        // disabled, so every side effect can only come from the boundary check.
+        const buttons = [
+            action("Замаскировать"),
+            action("Скачать результат маскировки"),
+            action("Скачать ключи демаскировки"),
+            action("Демаскировать"),
+        ];
+        for (const button of buttons) fireEvent.click(button);
+        for (const spy of [press.mask, press.result, press.keys, press.unmask]) {
+            expect(spy).toHaveBeenCalledTimes(1);
+        }
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+        expect(clickSpy).not.toHaveBeenCalled();
+        await flush();
+    });
 });
 
 describe("enabled actions — keyboard usable", () => {

@@ -48,7 +48,11 @@ describe("globals.css reduced-motion policy", () => {
             .filter((selector) => selector.length > 0 && !selector.startsWith("@"))
             .sort();
 
-        expect(animated).toEqual([".support-link", ".support-link__label", "html"]);
+        expect(animated).toEqual([".support-link", ".support-link__label"]);
+        // Theme changes are instant by contract: next-themes injects
+        // `transition:none!important`, so a stylesheet transition here is dead.
+        expect(withoutComments).not.toMatch(/html\s*\{[^}]*\btransition\s*:/);
+        expect(withoutComments).not.toMatch(/--app-motion-(?:theme|gap|expand)\s*:/);
     });
 
     it("routes every transition duration through an app motion token", () => {
@@ -56,11 +60,36 @@ describe("globals.css reduced-motion policy", () => {
             (match) => capture(match, 1),
         );
 
-        expect(transitions).toHaveLength(3);
+        expect(transitions).toHaveLength(2);
         for (const transition of transitions) {
             expect(transition).toMatch(/var\(--app-motion-[\w-]+\)/);
             expect(transition).not.toMatch(/\d+(?:\.\d+)?m?s\b/);
         }
+    });
+
+    it("never animates layout properties on app-owned transitions", () => {
+        const transitions = [...withoutComments.matchAll(/transition\s*:\s*([^;]+);/g)].map(
+            (match) => capture(match, 1),
+        );
+
+        // gap/max-width animated per frame (MEASURED: 107 intermediate widths,
+        // 444 Layout events over 8 hover cycles); the reveal now uses
+        // composited transform/opacity while widths snap to their end state.
+        for (const transition of transitions) {
+            expect(transition).not.toMatch(
+                /\b(?:gap|max-width|width|height|padding|margin|inset|top|left|right|bottom)\b/,
+            );
+        }
+        const labelRule = rules(withoutComments).find(
+            (rule) => rule.selector === ".support-link__label",
+        );
+        expect(labelRule?.body).toMatch(/transform:\s*translateX\(-0\.25rem\)/);
+        const hoverRule = rules(withoutComments).find(
+            (rule) =>
+                rule.selector ===
+                ".support-link:hover .support-link__label, .support-link:focus-visible .support-link__label",
+        );
+        expect(hoverRule?.body).toMatch(/transform:\s*translateX\(0\)/);
     });
 
     it("zeroes every token referenced by an animated selector inside the reduce block", () => {

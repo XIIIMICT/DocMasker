@@ -16,7 +16,7 @@ const REQUIRED_SPECS = [
     "rerender-smoke.spec.ts",
     "hover-smoke.spec.ts",
 ];
-// 35 tests are listed on this branch: 23 main smoke, 10 hover, 1 rerender,
+// 40 tests are listed on this branch: 28 main smoke, 10 hover, 1 rerender,
 // 1 health. Leave one test of slack; dropping any whole spec falls below it.
 const MIN_TOTAL_TESTS = 34;
 const MIN_MAIN_SPEC_TESTS = 20;

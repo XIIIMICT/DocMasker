@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { DATA_FILE_INPUT } from "./helpers/selectors";
 import { waitForGraceFrames } from "./helpers/timing";
@@ -18,6 +18,18 @@ async function switchMode(page: Page, name: string): Promise<void> {
     await page.getByRole("menuitemradio", { name, exact: true }).click();
 }
 
+/**
+ * Reach a control with real Tab presses: programmatic `focus()` does not
+ * reliably trigger `:focus-visible`, which is part of the support-link contract.
+ */
+async function focusByKeyboard(page: Page, locator: Locator, maxTabs = 20): Promise<number> {
+    for (let press = 1; press <= maxTabs; press += 1) {
+        await page.keyboard.press("Tab");
+        if (await locator.evaluate((node) => node === document.activeElement)) return press;
+    }
+    throw new Error(`control was not reached within ${maxTabs} Tab presses`);
+}
+
 test("reduced-motion убирает переходы приложения, сохраняя конечное состояние", async ({
     page,
 }) => {
@@ -25,17 +37,174 @@ test("reduced-motion убирает переходы приложения, со�
     await page.goto("/");
     await expect(page.locator(".support-link")).toBeVisible();
     const styles = await page.evaluate(() => {
-        const node = document.querySelector(".support-link");
-        if (!node) throw new Error("support-link is missing");
-        const style = getComputedStyle(node);
-        return { transition: style.transitionDuration, animation: style.animationName };
+        const link = document.querySelector(".support-link");
+        const label = document.querySelector(".support-link__label");
+        if (!link || !label) throw new Error("support-link is missing");
+        const linkStyle = getComputedStyle(link);
+        const labelStyle = getComputedStyle(label);
+        return {
+            link: linkStyle.transitionDuration,
+            linkAnimation: linkStyle.animationName,
+            label: labelStyle.transitionDuration,
+            labelProperties: labelStyle.transitionProperty,
+            labelAnimation: labelStyle.animationName,
+        };
     });
-    // Two transition properties (gap, background-color) → "0s, 0s".
-    expect(styles.transition.split(",").every((value) => value.trim() === "0s")).toBe(true);
-    expect(styles.animation).toBe("none");
-    // The control stays usable and reaches its hover end state instantly.
+    // App-owned paint/composite transitions only; all durations collapse to 0.
+    for (const value of [styles.link, styles.label]) {
+        expect(value.split(",").every((part) => part.trim() === "0s")).toBe(true);
+    }
+    expect(styles.labelProperties).toContain("transform");
+    expect(styles.labelProperties).toContain("opacity");
+    expect(styles.linkAnimation).toBe("none");
+    expect(styles.labelAnimation).toBe("none");
+    // The control stays usable and reaches its hover end state instantly;
+    // the keyboard end state is covered by the focus test below.
     await page.locator(".support-link").hover();
-    await expect(page.locator(".support-link__label")).toBeVisible();
+    await expect(page.locator(".support-link__label")).toHaveCSS("opacity", "1");
+    await expect(page.locator(".support-link__label")).toHaveCSS(
+        "transform",
+        "matrix(1, 0, 0, 1, 0, 0)",
+    );
+});
+
+test("reduced-motion не отключает собственные правила HeroUI", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    const info = await page.evaluate(() => {
+        let reduceRules = 0;
+        const walk = (rules: CSSRuleList) => {
+            for (let index = 0; index < rules.length; index += 1) {
+                const rule = rules.item(index);
+                if (!rule) continue;
+                if (
+                    rule instanceof CSSMediaRule &&
+                    rule.conditionText.replace(/\s/g, "").includes("prefers-reduced-motion:reduce")
+                ) {
+                    reduceRules += 1;
+                }
+                if ("cssRules" in rule) walk((rule as CSSGroupingRule).cssRules);
+            }
+        };
+        for (const sheet of document.styleSheets) {
+            try {
+                walk(sheet.cssRules);
+            } catch {
+                /* cross-origin sheet */
+            }
+        }
+        const button = document.querySelector("button");
+        if (!button) throw new Error("no button on the page");
+        return {
+            reduceRules,
+            buttonTransition: getComputedStyle(button).transitionProperty,
+        };
+    });
+    // HeroUI's own motion-reduce CSS stays in the cascade; our reduce block
+    // only zeroes DocMasker's token and cannot silence these rules.
+    expect(info.reduceRules).toBeGreaterThan(0);
+    expect(info.buttonTransition).toBe("none");
+});
+
+test("смена темы мгновенная: CSS-переход html не используется", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate(() => localStorage.setItem("theme", "light"));
+    await page.reload();
+    const read = () =>
+        page.evaluate(() => {
+            const html = document.documentElement;
+            return {
+                transition: getComputedStyle(html).transitionDuration,
+                className: html.className,
+                color: getComputedStyle(html).color,
+            };
+        });
+    const before = await read();
+    expect(before.transition).toBe("0s");
+    await page.getByRole("tab", { name: "Тёмная" }).click();
+    const after = await read();
+    expect(after.transition).toBe("0s");
+    expect(after.className).toContain("dark");
+    expect(after.color).toBe("rgb(255, 255, 255)");
+});
+
+test("ссылка поддержки доступна с клавиатуры и сохраняет подпись при фокусе", async ({ page }) => {
+    await page.goto("/");
+    const link = page.locator(".support-link");
+    await focusByKeyboard(page, link);
+    await expect(link).toBeFocused();
+    await expect(link).toHaveAttribute("aria-label", "Связаться с разработчиком");
+    await expect(link).toHaveAttribute("href", /^mailto:/);
+    await expect(link).toHaveCSS("outline-style", "solid");
+    await expect(page.locator(".support-link__label")).toHaveCSS("opacity", "1");
+    await expect(page.locator(".support-link__label")).toHaveCSS(
+        "transform",
+        "matrix(1, 0, 0, 1, 0, 0)",
+    );
+});
+
+test("на узком экране подпись поддержки остаётся в Tooltip при фокусе", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    const link = page.locator(".support-link");
+    await focusByKeyboard(page, link);
+    await expect(page.getByRole("tooltip")).toContainText("Связаться с разработчиком");
+    await expect(page.locator(".support-link__label")).toHaveCSS("opacity", "0");
+});
+
+test("визуально неактивная кнопка недоступна мышью, но фокусируется и защищена на границе операции", async ({
+    page,
+}) => {
+    await page.goto("/");
+    let maskCalls = 0;
+    await page.route("**/api/mask", async (route) => {
+        maskCalls += 1;
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+                text: "[PERSON_1]",
+                keys: "Физлица:\n  - Иван Петров",
+                stats: {
+                    total: 1,
+                    occurrences_by_label: { person: 1 },
+                    unique_by_label: { person: 1 },
+                },
+            }),
+        });
+    });
+    const mask = page.getByRole("button", { name: "Замаскировать" });
+    const state = await mask.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return {
+            pointerEvents: style.pointerEvents,
+            cursor: style.cursor,
+            ariaDisabled: node.getAttribute("aria-disabled"),
+            nativeDisabled: node.hasAttribute("disabled"),
+            tabIndex: (node as HTMLElement).tabIndex,
+        };
+    });
+    expect(state).toEqual({
+        pointerEvents: "none",
+        cursor: "not-allowed",
+        ariaDisabled: "true",
+        nativeDisabled: false,
+        tabIndex: 0,
+    });
+
+    const box = await mask.boundingBox();
+    if (!box) throw new Error("mask button has no box");
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await waitForGraceFrames(page);
+    expect(maskCalls).toBe(0);
+
+    // Keyboard activation still reaches the handler; the operation boundary
+    // (not CSS) is the only thing that may stop the request.
+    await mask.press("Enter");
+    await waitForGraceFrames(page);
+    expect(maskCalls).toBe(0);
+    await focusByKeyboard(page, mask);
+    await expect(mask).toBeFocused();
 });
 
 test("заголовок вкладки следует за режимом", async ({ page }) => {
