@@ -1,0 +1,132 @@
+# Frontend audit & remediation — DocMasker (2026-11-27)
+
+## 1. Executive summary
+
+Audited commit `e7ae19558ea54f612fc75ba7e7abac79c4b5d2ef`; final local `dev` =
+`78487f6`. Worktree was clean at start and end. Environment: Bun 1.4.4, Node
+v26.13.1, Next 16.4.6, React/ReactDOM 19.3.1, HeroUI 3.2.8, Tailwind 4.3.5,
+TypeScript 7.0.2, docx-preview 0.4.1, JSZip 3.10.2, Playwright 1.65.1. All task
+branches were merged with `--no-ff`; nothing was pushed.
+
+Six verified defects were fixed (manifest cast, two highlight defects, two strict-TS
+semantic gaps, contradictory theme transition, layout-animating support link), plus
+bounded placeholder counting and abort-aware archive unpacking. No runtime dependency
+was added and no speculative framework was introduced. All checks and 40/40 E2E smoke
+tests pass on the dev stand.
+
+## 2. Baseline and after measurements
+
+Baseline evidence: `docs/FRONTEND-AUDIT-BASELINE.md` (`9515f4b`), produced with
+`next analyze` — the Turbopack-supported analyzer in installed Next 16.4.6
+(`experimental-analyze` is an alias); huge JSONL was kept in temp/gitignored output.
+
+| Measure (MEASURED) | Baseline | After |
+|---|---:|---:|
+| `/` client JS | 1,189,488 B raw / 451,000 B gzip | unchanged (no bundle-growth change) |
+| `/` CSS | 484,697 B raw / 45,897 B gzip | unchanged except motion declarations |
+| `/` total | 3,932,188 B raw / 1,237,958 B gzip | unchanged |
+| Unit tests | 248 pass | **287 pass** |
+| Frontend line coverage | (not separately reported) | **89.59%** (gate 65) |
+| Build | 4,979 ms, 9 routes | 574–964 ms, 9 routes |
+| E2E smoke | 35 tests / 4 specs | **40 tests / 4 specs, 40/40 passed** |
+| TS diagnostics with new options | — | 21 → **0** |
+
+No bundle improvement is claimed: the verified defects were correctness, retention and
+animation behavior, and the fixes were deliberately bundle-neutral.
+
+## 3. Verified findings (severity / impact)
+
+| # | Severity | Finding & evidence | Fix |
+|---|---|---|---|
+| 1 | P1, correctness/privacy | `JSON.parse()` result cast to `ResultManifest`; partial fields defaulted with `?? 0`/`?? {}`, so corrupt data rendered fake stats (`mask-archive.ts`). | Parse as `unknown`; full explicit guard; stable Russian errors without PII (`59dc3d9`). |
+| 2 | P1, correctness | Shorter needle listed first shadowed a longer one (`["abc","abcdef"]`, restored `["Иван","Иван Петров"]`); text split across neighbouring DOM text nodes never highlighted. Tests first: 11 pass / 4 fail (`bb43fb0`). | Earliest position wins, longest needle at that position wins regardless of key order; spans consecutive text nodes within one paragraph (`9959062`). |
+| 3 | P2, type safety | `strict: true` only; unsafe index/optional semantics. 21 diagnostics under two RC-level options (`9f5b710`). | Enabled `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`; zero suppressions (`e755973`). |
+| 4 | P2, jank | `html` theme transition declared while `disableTransitionOnChange` injects `transition:none` — dead/smooth contradiction. Support-link `gap`/`max-width` animated: **444 layout events / 63.92 ms** over 8 hover cycles (`02f2d58`). | Instant theme switching (dead CSS removed); only `background-color`/`opacity`/`transform` animate: **16 layout events / 3.12 ms** (`d471c66`). |
+| 5 | P2, memory/semantics | Demask placeholder count reopened a ZIP on every mode switch; uncancelled archive unpack could retain large Blobs after unmount/stale job. | Per-Blob `WeakMap` single-flight + bounded scan (`a9c00fd`); abort at every unpack boundary, `entries.clear()` on failure, no server `DELETE` on unmount (`78487f6`). |
+| 6 | P3, docs | Stale `5 ms` debounce comment (actual 120 ms) and missing documented overlap rule. | Comment fixed; rule documented in `docs/DOCX_SUPPORT.md` and `front/AGENTS.md`. |
+
+Not defects (verified, left unchanged): repeated occurrences, empty needles, literal
+regex metacharacters, non-BMP/combining Unicode, paragraph boundaries, reapplication
+after previous marks; `--breakpoint-sm/md: 0rem` overrides (compiled HeroUI CSS shows
+75 `min-width:0` rules and no HeroUI breakpoint rules); `.action-disabled` (measured
+`aria-disabled=true`, tabIndex 0, pointer and Enter both intercept 0 `/api/mask`
+requests, guarded by `canDemask()`); object-URL download (already revoked in `finally`).
+
+## 4. Implemented changes and design rationale
+
+- **Manifest validation** (`manifest-validation.ts`, ~200 lines, stdlib): validates
+  `schema_version` literal 1, operation/status enums, booleans, safe non-negative
+  integers, `output`/`statistics`/`coverage` nested objects and arrays, unknown-field
+  tolerance for compatibility. Errors: `manifest_malformed` / `_version_unsupported` /
+  `_invalid`. Generated OpenAPI DTOs stay compile-time only and untouched.
+- **Highlight resolution** (`docx-viewer.tsx`): one deterministic rule, longest match at
+  the earliest position, matching across consecutive text nodes but never across
+  paragraphs; each slice gets its own `<mark>` and prior marks are removed first.
+  Generation-private staging, debounce and stale rejection preserved.
+- **Strict TS**: real semantic fixes (`undefined` guards on regex captures,
+  `signal: signal ?? null`, props omitted rather than passed as `undefined`), no `as`,
+  `!`, `@ts-ignore` or `any`. Generated files untouched.
+- **Motion**: support-link `gap`/`max-width` snap; animating only compositor-friendly
+  properties; hero animations and reduced-motion cascade preserved.
+- **Placeholder/ZIP**: one decompression per Blob, 10,000-part / 64 MiB bounds derived
+  from the backend's hard part limit; abort-aware result reads with no partial results.
+
+## 5. Rejected alternatives (Phase 7 decision record)
+
+| Candidate | Decision | Evidence / current solution |
+|---|---|---|
+| Zod for manifests | Reject | No existing validation dep; ~1.6 MiB client route; contract small and fully enumerable — explicit guards suffice. |
+| `fflate` / `zip.js` | Reject (keep JSZip 3.10.2) | `fflate` 11.8 ms but synchronous + rewrite of every call site for ~20 ms synthetic gain; `zip.js` streaming **slower** (23.0 ms / 77.11 MiB peak vs JSZip 22.3 ms / 67.36 MiB). Reactivity/retention fixes address real waste. |
+| Separate backend result streams / no client unpack | Reject | Atomic flat ZIP with one fenced, attempt-scoped artifact and global `no-store`; splitting adds partial states, DB keys and manifest ordering risk. |
+| Web Worker for highlighting | Reject | Chromium first pass 8.6 ms, re-apply 5.8 ms (below 16 ms frame budget); warm 22.31→21.40 ms is within noise. Transfer cost would exceed benefit. |
+| RxJS / Zustand / Redux Toolkit / TanStack Query / Framer Motion / React Hook Form / virtualization / microfrontends | Reject | No measured problem the current React + HeroUI + browser model cannot solve. `docs/DOCX_SUPPORT.md` and this report keep the reasoning; no new runtime dependency. |
+| `noPropertyAccessFromIndexSignature` | Reject | 146 additional diagnostics (79 in manifest tests, 39 in guards) — unreviewable on deliberate record access. |
+| Timing-token consolidation | Defer | No visual regression harness; prior note deliberately deferred. |
+
+Dev-only tooling: `swagger-typescript-api@13.15.0` (already adopted earlier for
+compile-time HTTP DTOs, `--no-client`, TS 7 compatible, CI freshness) is unchanged.
+
+## 6. Validation (exact commands and outcomes)
+
+- `bun run --cwd front format:check` — all 98 files formatted, exit 0.
+- `bun run --cwd front lint:check` — no findings, exit 0.
+- `bun run --cwd front typecheck` — no type errors in 89 files, exit 0.
+- `bun run --cwd front test` — **287 pass / 0 fail**, 913 `expect()` calls, 31 files
+  (pre-existing HeroUI `act(...)` warnings only).
+- `bun test --coverage --coverage-reporter=lcov` + `bun scripts/check-coverage.mjs 65`
+  — **89.59%** line coverage (2237/2497), gate passed.
+- `bun run --cwd front build` — 9 routes, no warnings.
+- `bun run --cwd front gen:openapi --check` — fresh; generated files untouched.
+- `prek run --all-files` — all hooks passed at every merge.
+- Playwright via `local.playwright.config.ts`, `E2E_BASE_URL=http://127.0.0.1:5001`:
+  targeted preview/highlight/job/manifest specs (1/1, 4/4, 3/3), reduced-motion/theme/
+  support-link/disabled (6/6), and full smoke **40/40** in 41–48 s. Discovery guard:
+  40 tests in 4 specs, required specs present.
+- Backend checks (no backend behavior changed except none): `ruff check`,
+  `ruff format --check`, `ty check`, full pytest **543 passed / 4 skipped, 87.19%**.
+
+## 7. Phase 6/8 notes
+
+Deduplication: the manifest cast/zero-fallback duplication was removed in favour of one
+validated model; API DTOs remain generated and distinct from runtime validation. No
+two-line wrappers, generic hooks or all-purpose `utils.ts` were created; no shared
+cross-repository package. Tests were added for pure algorithms (highlight, manifest,
+placeholder bounds), component behavior (safe error UI, action boundaries), lifecycle
+(cancellation/unmount/stale jobs), plus E2E for keyboard, reduced motion, theme and
+DOCX flows. Performance artifacts (analyzer graph, CDP traces, synthetic ZIPs) are in
+OS temp/gitignored output, not committed.
+
+## 8. Remaining work / limitations
+
+- No committed large DOCX fixture: highlight and ZIP numbers use deterministic SYNTHETIC
+  DOM/archives; target-hardware browser profiling is OPEN.
+- Production-image CI stack smoke (:15001) was down; dev-stand smoke is green.
+- Visual regression for timing tokens and an axe scan were not added; automated scans
+  would not prove accessibility.
+- Backend has no pre-operation placeholder aggregate; a new endpoint would be a product
+  surface change and was not introduced.
+- RevoGrid/collab, 300/500-client presence, Keycloak OIDC browser CI and live migration
+  gates belong to ReportCollector and are tracked there.
+
+Cross-project comparison is in `ReportCollector/docs/FRONTEND-AUDIT.md` and the final
+response; both apps keep intentionally different DOM/workflow architectures.
