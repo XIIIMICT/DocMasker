@@ -137,16 +137,26 @@ weakened. Evidence is from local runs on 2026-11-27, not from GitHub CI.
 
 The local isolated CI-stack drill covered queue pressure, identical-job
 dedupe, cancellation, worker restart, PostgreSQL restart (after F-25 fix),
-Valkey flush and result download; see `docs/TESTING.md` §2. Remaining:
+Valkey flush and result download; see `docs/TESTING.md` §2. The DM-3 harness
+(`back/src/scripts/operational_drills.py`) then ran on a dedicated disposable
+PostgreSQL container on 2026-11-27: 13 drills passed covering the full
+crash-window matrix, handler-equivalent SIGTERM drain, simulated ENOSPC,
+1-slot pool exhaustion, expiry/missing/orphan byte audit, cross-job artifact
+isolation and 1/2/N synthetic DOCX batches (with wall/CPU/RSS/queue/pool
+measurements in `docs/PERFORMANCE.md`). A local-disposable backup/restore
+rehearsal also passed (rows, artifact checksums and a synthetic config digest);
+no private exception value was read. These are **local** passes, not target
+hardware.
 
-- full controlled crash-window matrix (staging / DB commit / processing / ZIP
-  creation / before result commit), SIGTERM-with-in-flight drill, disk full,
-  pool exhaustion, result expiry, 1/2/N concurrent large documents;
-- **backup/restore drill**: the PostgreSQL + artifacts + exception-config
-  procedure is documented (`docs/OPERATIONS.md` §3) but has not been executed
-  end-to-end; a consistency check for missing artifact objects should be run;
-- Clean-install → migration → prod-image build → Compose startup → e2e repeated
-  on the target machine (already green on this host).
+Remaining (all OPEN, see the target-host checklist in
+`docs/PRODUCTION_READINESS.md`):
+
+- real POSIX SIGTERM delivery, a real full filesystem and target-hardware
+  repetitions of the crash/pool/concurrency drills;
+- backup/restore on the authorized host with the real RO-mounted exception
+  config and named volumes; only the synthetic-config rehearsal exists locally;
+- Clean-install → migration → prod-image build → Compose health → e2e repeated
+  on the target machine (already green on this host, but not a gate discharge).
 
 ## Process
 
