@@ -138,6 +138,17 @@ requires and validates it — a missing/malformed/wrong
 version is a clear result error, never "0 entities". Semantic metadata no
 longer lives in `X-Masked-Count` / `X-Masked-Breakdown`; both were removed.
 
+Runtime validation lives in `front/src/shared/api/manifest-validation.ts` and
+walks the whole producer contract (schema version, operation/status enums, all
+nested objects and arrays, item types and non-negative safe-integer counts).
+`mask_file` must carry the three occurrence aggregates, `unmask_file` must carry
+`unused_keys`; known optional fields are checked when present and unknown extra
+fields are tolerated. Generated OpenAPI DTOs are compile-time only and do not
+cover this ZIP-internal file, so the guard is not a cast. Rejection is a stable
+`ManifestValidationError` (`docs/API.md` §`manifest.json`) with a fixed Russian
+detail and no PII. This closes the Phase 3.4 finding in
+`docs/FRONTEND-AUDIT-BASELINE.md` §5.
+
 ## Frontend preview isolation
 
 `front/src/shared/ui/docx-viewer.tsx` renders every Blob generation into its

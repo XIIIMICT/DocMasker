@@ -25,8 +25,8 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 | e2e (running stack required) | `bun run test:e2e --project=smoke` with `E2E_BASE_URL`                                  |
 
 `bun run format` can rewrite line breaks in untouched files — check `git status`
-and `git diff` afterwards. The current unit inventory (29 test files) and the
-Playwright `smoke` discovery guard live in `docs/TESTING.md` §1. The `smoke`
+and `git diff` afterwards. The current unit inventory and the Playwright `smoke`
+discovery guard live in `docs/TESTING.md` §1. The `smoke`
 project currently lists 35 tests in four spec files (`health`, `smoke`,
 `rerender-smoke`, `hover-smoke`) and needs a prepared stack; probe files are
 excluded. CI pipes `playwright test --project=smoke --list` into
@@ -91,7 +91,12 @@ repo. Verified gotchas:
 4. `.txt` is input text, read client-side and never posted to `/api/mask-file`;
    only `.docx` goes to the backend. The result label `N фрагментов` counts
    distinct values (`uniqueTotal`); `manifest.json` (with `unused_keys`) is the
-   single source of UI stats — never headers or placeholder counting. Tooltip
+   single source of UI stats — never headers or placeholder counting. External
+   manifest bytes are parsed as `unknown` and fully validated at runtime by
+   `shared/api/manifest-validation.ts` (`parseResultManifest`,
+   `ManifestValidationError` with a fixed Russian detail). Generated OpenAPI
+   DTOs are compile-time only and do not cover this ZIP-internal file — never
+   replace the guard with a `as ResultManifest` cast or `?? 0` defaults. Tooltip
    body: `shared/mask-stats.ts::statsBreakdown` (`unique (total с повторами)`
    per label, plus `Не применено N:` on demasking when `N != 0`). DOCX
    occurrence counts come from `placeholder-count.ts::countPlaceholdersInDocx`.

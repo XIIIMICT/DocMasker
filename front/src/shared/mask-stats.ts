@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import { createElement } from "react";
 
 import { LABEL_CATALOGUE } from "@/shared/api/labels.generated";
+import { ManifestValidationError, type ResultManifest } from "@/shared/api/manifest-validation";
 import { parseKeys, type MaskStatsPayload, type ParsedKeysDocument } from "@/shared/api/mask";
-import type { ResultManifest } from "@/shared/api/mask-archive";
 
 /**
  * Masking / demasking totals for the result-label tooltip.
@@ -105,10 +105,20 @@ export function statsFromAggregate(stats: MaskStatsPayload): MaskStats {
 /** Build stats from the versioned file manifest (§7.3 — no header parsing). */
 export function statsFromManifest(manifest: ResultManifest): MaskStats {
     const statistics = manifest.statistics;
+    // The parser (manifest-validation.ts) guarantees these for mask_file. Fail
+    // closed instead of displaying a fabricated "0 фрагментов" for partial data.
+    if (
+        statistics.total_occurrences === undefined ||
+        statistics.occurrences_by_label === undefined ||
+        statistics.unique_by_label === undefined
+    ) {
+        throw new ManifestValidationError("manifest_invalid");
+    }
     return {
-        total: statistics.total_occurrences ?? 0,
-        byLabel: statistics.occurrences_by_label ?? {},
-        uniqueByLabel: statistics.unique_by_label ?? {},
+        total: statistics.total_occurrences,
+        byLabel: statistics.occurrences_by_label,
+        uniqueByLabel: statistics.unique_by_label,
+        // Genuinely optional: unmask_file reports unused keys, mask_file does not.
         unused: statistics.unused_keys ?? [],
     };
 }

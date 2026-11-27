@@ -324,6 +324,26 @@ content-addressed cached artifact keeps its original `false` and is never
 mutated in place. This is identical on sync file routes and job results.
 See `docs/DOCX_SUPPORT.md`.
 
+The ZIP-internal manifest is **not** an HTTP DTO: the generated
+`front/src/shared/api/generated/openapi.d.ts` does not describe it, and a
+compile-time type assertion never validates bytes from a file/network. The
+frontend therefore parses it as `unknown` and fully validates every field against
+the exact producer contract in `front/src/shared/api/manifest-validation.ts`:
+`schema_version === 1`, `operation` equal to the expected one, `status ===
+"succeeded"`, both nested objects (`input`, `output`, `cache`) and the `statistics`
+/ `coverage` objects, every array and its item types, every enum value, and
+non-negative safe-integer counts (negative, fractional, `NaN`/`Infinity` and
+huge numbers are rejected). `mask_file` requires `total_occurrences`,
+`occurrences_by_label` and `unique_by_label`; `unmask_file` requires
+`unused_keys`. Known optional fields (`output.keys_name`,
+`coverage.processed`, and the opposite operation's statistics fields) are
+type-checked when present; unknown extra fields are tolerated for backward
+compatibility. Any failure throws `ManifestValidationError` with a stable
+machine code (`manifest_malformed`, `manifest_version_unsupported`,
+`manifest_invalid`) and a fixed Russian detail that echoes no input, value or
+filename — never a fabricated "0 entities" result. The partial-check defect
+recorded as Phase 3.4 in `docs/FRONTEND-AUDIT-BASELINE.md` §5 is fixed here.
+
 ## Durable jobs (`/api/jobs`, ADR-0002)
 
 The four sync endpoints **transparently return 202** when the input exceeds the
