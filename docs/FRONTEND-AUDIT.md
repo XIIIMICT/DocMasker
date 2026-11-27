@@ -66,8 +66,9 @@ requests, guarded by `canDemask()`); object-URL download (already revoked in `fi
 - **Strict TS**: real semantic fixes (`undefined` guards on regex captures,
   `signal: signal ?? null`, props omitted rather than passed as `undefined`), no `as`,
   `!`, `@ts-ignore` or `any`. Generated files untouched.
-- **Motion**: support-link `gap`/`max-width` snap; animating only compositor-friendly
-  properties; hero animations and reduced-motion cascade preserved.
+- **Motion**: support-link `gap`/`max-width` snapped and only compositor-friendly
+  properties animated; hero animations and reduced-motion cascade preserved. This
+  choice was reverted post-audit on user feedback — see §9.
 - **Placeholder/ZIP**: one decompression per Blob, 10,000-part / 64 MiB bounds derived
   from the backend's hard part limit; abort-aware result reads with no partial results.
 
@@ -130,3 +131,39 @@ OS temp/gitignored output, not committed.
 
 Cross-project comparison is in `ReportCollector/docs/FRONTEND-AUDIT.md` and the final
 response; both apps keep intentionally different DOM/workflow architectures.
+
+## 9. Post-audit decision (2026-11-28) — restore original support-pill timing
+
+- **User feedback (authoritative):** after the audit change the «Связаться с
+  разработчиком» pill expands "слишком быстро"; the maintainer wants the ORIGINAL
+  expansion timing back. This is a product decision, not a regression in the audit
+  measurements.
+- **Decision:** revert only the support-pill motion. All other audit fixes stay
+  (manifest guard, highlight ordering, strict TS, ZIP cancellation, placeholder
+  bounds, instant theme switching, reduced-motion zeroing). `docs/FRONTEND-AUDIT-BASELINE.md`
+  remains untouched as historical evidence of the audit itself.
+- **Restored exactly:** `.support-link` → `gap var(--app-motion-gap) cubic-bezier(0.22, 1, 0.36, 1), background-color var(--app-motion-fast) ease`; `.support-link__label` → `max-width var(--app-motion-expand) cubic-bezier(0.22, 1, 0.36, 1), opacity var(--app-motion-fast) ease`; tokens `--app-motion-fast: 140ms`, `--app-motion-gap: 180ms`, `--app-motion-expand: 220ms`. The added `transform: translateX(-0.25rem)` reveal and its hover/compact reset were removed. `prefers-reduced-motion: reduce` still zeroes all three tokens.
+- **Accepted tradeoff:** animating `gap`/`max-width` forces layout (the audit measured
+  444 Layout events / 63.9 ms over eight hover cycles). The maintainer accepts that
+  measured cost in exchange for the original feel; no composited shorthand, snap or
+  "performance-optimal" substitute was kept.
+- **Chromium verification (dev stand, `http://127.0.0.1:5001`):** computed link
+  `transitionProperty/Duration/TimingFunction` = `gap, background-color` /
+  `0.18s, 0.14s` / `cubic-bezier(0.22, 1, 0.36, 1), ease`; label =
+  `max-width, opacity` / `0.22s, 0.14s` / same easing. Live samples at ~70 ms:
+  gap 6.83 px, max-width 289 px, opacity 0.88; end state gap 7.2 px / max-width
+  320 px. `getAnimations()` reports `column-gap` 180 ms and `max-width` 220 ms.
+  Under reduced motion the tokens and both `transitionDuration` values are `0s`
+  and the end state is present on the first sample.
+- **Regression coverage:** `globals-conventions.test.ts` pins the restored
+  declarations/values and the absence of `translateX`; `smoke.spec.ts` asserts the
+  computed durations/easing and a frozen-at-80 ms intermediate width in real
+  Chromium, plus instant reduced-motion, hover/keyboard and compact-Tooltip end
+  states. No assertion was weakened.
+- **Validation:** `bun run --cwd front format:check` (98 files), `lint:check`,
+  `typecheck` (89 files), `test` (**287 pass / 0 fail**, 926 `expect()` calls,
+  31 files; pre-existing HeroUI `act(...)` warnings only) and `build` (9 routes)
+  green; `prek run --all-files` green. Playwright via `local.playwright.config.ts`
+  on the dev stand: targeted support-link/reduced-motion/keyboard/Tooltip **4/4**,
+  full `smoke` **41/41** (47.8 s), discovery guard 41 tests in 4 specs. No push,
+  no merge.

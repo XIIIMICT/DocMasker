@@ -30,6 +30,84 @@ async function focusByKeyboard(page: Page, locator: Locator, maxTabs = 20): Prom
     throw new Error(`control was not reached within ${maxTabs} Tab presses`);
 }
 
+test("ссылка поддержки раскрывается с исходной длительностью 180/220 мс", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".support-link")).toBeVisible();
+    const styles = await page.evaluate(() => {
+        const link = document.querySelector(".support-link");
+        const label = document.querySelector(".support-link__label");
+        if (!link || !label) throw new Error("support-link is missing");
+        const linkStyle = getComputedStyle(link);
+        const labelStyle = getComputedStyle(label);
+        return {
+            linkProperty: linkStyle.transitionProperty,
+            linkDuration: linkStyle.transitionDuration,
+            linkTiming: linkStyle.transitionTimingFunction,
+            labelProperty: labelStyle.transitionProperty,
+            labelDuration: labelStyle.transitionDuration,
+            labelTiming: labelStyle.transitionTimingFunction,
+            labelTransform: labelStyle.transform,
+        };
+    });
+    // Restored by maintainer decision 2026-11-28: gap expands over 180 ms and
+    // the label width over 220 ms, both with the original easing.
+    expect(styles.linkProperty).toBe("gap, background-color");
+    expect(styles.linkDuration).toBe("0.18s, 0.14s");
+    expect(styles.linkTiming).toBe("cubic-bezier(0.22, 1, 0.36, 1), ease");
+    expect(styles.labelProperty).toBe("max-width, opacity");
+    expect(styles.labelDuration).toBe("0.22s, 0.14s");
+    expect(styles.labelTiming).toBe("cubic-bezier(0.22, 1, 0.36, 1), ease");
+    expect(styles.labelTransform).toBe("none");
+
+    await page.locator(".support-link").hover();
+    const animating = await page.evaluate(() => {
+        const link = document.querySelector(".support-link");
+        const label = document.querySelector(".support-link__label");
+        if (!link || !label) throw new Error("support-link is missing");
+        const describe = (node: Element) =>
+            node.getAnimations().map((animation) => ({
+                property: (animation as CSSTransition).transitionProperty,
+                duration: animation.effect?.getTiming().duration ?? null,
+            }));
+        const running = { link: describe(link), label: describe(label) };
+        // Freeze the real Chromium transitions at 80 ms: an intermediate width
+        // is then deterministic instead of depending on a fragile sleep.
+        const active = [...link.getAnimations(), ...label.getAnimations()];
+        for (const animation of active) {
+            animation.pause();
+            animation.currentTime = 80;
+        }
+        const mid = {
+            gap: parseFloat(getComputedStyle(link).gap),
+            maxWidth: parseFloat(getComputedStyle(label).maxWidth),
+            opacity: parseFloat(getComputedStyle(label).opacity),
+        };
+        for (const animation of active) animation.play();
+        return { running, mid };
+    });
+    // Chromium reports the `gap` shorthand as column-gap/row-gap transitions.
+    expect(animating.running.link).toEqual(
+        expect.arrayContaining([
+            expect.objectContaining({ property: "column-gap", duration: 180 }),
+            expect.objectContaining({ property: "background-color", duration: 140 }),
+        ]),
+    );
+    expect(animating.running.label).toEqual(
+        expect.arrayContaining([
+            expect.objectContaining({ property: "max-width", duration: 220 }),
+            expect.objectContaining({ property: "opacity", duration: 140 }),
+        ]),
+    );
+    expect(animating.mid.gap).toBeGreaterThan(0);
+    expect(animating.mid.gap).toBeLessThan(7.2);
+    expect(animating.mid.maxWidth).toBeGreaterThan(0);
+    expect(animating.mid.maxWidth).toBeLessThan(320);
+    expect(animating.mid.opacity).toBeGreaterThan(0);
+    expect(animating.mid.opacity).toBeLessThan(1);
+    await expect(page.locator(".support-link__label")).toHaveCSS("max-width", "320px");
+    await expect(page.locator(".support-link")).toHaveCSS("gap", "7.2px");
+});
+
 test("reduced-motion убирает переходы приложения, сохраняя конечное состояние", async ({
     page,
 }) => {
@@ -44,28 +122,30 @@ test("reduced-motion убирает переходы приложения, со�
         const labelStyle = getComputedStyle(label);
         return {
             link: linkStyle.transitionDuration,
+            linkProperties: linkStyle.transitionProperty,
             linkAnimation: linkStyle.animationName,
             label: labelStyle.transitionDuration,
             labelProperties: labelStyle.transitionProperty,
+            labelTransform: labelStyle.transform,
             labelAnimation: labelStyle.animationName,
         };
     });
-    // App-owned paint/composite transitions only; all durations collapse to 0.
+    // The original gap/max-width transitions stay declared, but their tokens
+    // (and the decorative ones) all collapse to 0s under reduced motion.
     for (const value of [styles.link, styles.label]) {
         expect(value.split(",").every((part) => part.trim() === "0s")).toBe(true);
     }
-    expect(styles.labelProperties).toContain("transform");
-    expect(styles.labelProperties).toContain("opacity");
+    expect(styles.linkProperties).toBe("gap, background-color");
+    expect(styles.labelProperties).toBe("max-width, opacity");
+    expect(styles.labelTransform).toBe("none");
     expect(styles.linkAnimation).toBe("none");
     expect(styles.labelAnimation).toBe("none");
     // The control stays usable and reaches its hover end state instantly;
     // the keyboard end state is covered by the focus test below.
     await page.locator(".support-link").hover();
+    await expect(page.locator(".support-link")).toHaveCSS("gap", "7.2px");
+    await expect(page.locator(".support-link__label")).toHaveCSS("max-width", "320px");
     await expect(page.locator(".support-link__label")).toHaveCSS("opacity", "1");
-    await expect(page.locator(".support-link__label")).toHaveCSS(
-        "transform",
-        "matrix(1, 0, 0, 1, 0, 0)",
-    );
 });
 
 test("reduced-motion не отключает собственные правила HeroUI", async ({ page }) => {
@@ -136,11 +216,9 @@ test("ссылка поддержки доступна с клавиатуры �
     await expect(link).toHaveAttribute("aria-label", "Связаться с разработчиком");
     await expect(link).toHaveAttribute("href", /^mailto:/);
     await expect(link).toHaveCSS("outline-style", "solid");
+    await expect(page.locator(".support-link__label")).toHaveCSS("max-width", "320px");
     await expect(page.locator(".support-link__label")).toHaveCSS("opacity", "1");
-    await expect(page.locator(".support-link__label")).toHaveCSS(
-        "transform",
-        "matrix(1, 0, 0, 1, 0, 0)",
-    );
+    await expect(page.locator(".support-link__label")).toHaveCSS("transform", "none");
 });
 
 test("на узком экране подпись поддержки остаётся в Tooltip при фокусе", async ({ page }) => {
@@ -149,7 +227,9 @@ test("на узком экране подпись поддержки остаё�
     const link = page.locator(".support-link");
     await focusByKeyboard(page, link);
     await expect(page.getByRole("tooltip")).toContainText("Связаться с разработчиком");
+    await expect(page.locator(".support-link__label")).toHaveCSS("max-width", "0px");
     await expect(page.locator(".support-link__label")).toHaveCSS("opacity", "0");
+    await expect(page.locator(".support-link__label")).toHaveCSS("transform", "none");
 });
 
 test("визуально неактивная кнопка недоступна мышью, но фокусируется и защищена на границе операции", async ({
