@@ -157,7 +157,9 @@ describe("evaluateCoverage", () => {
         );
     });
 
-    it("keeps the fresh 77.38% baseline above the 65% CI floor", () => {
+    it("computes the percentage from synthetic LCOV totals — no live baseline is claimed", () => {
+        // Synthetic counts exercise the arithmetic and the 65% boundary; a
+        // repository coverage measurement belongs to the CI lcov gate.
         const totals = parseLcov(lcov([{ source: "src/a.ts", lf: 10000, lh: 7738 }]));
         const { percent, passed } = evaluateCoverage({ ...totals, threshold: 65 });
         expect(percent).toBeCloseTo(77.38, 2);

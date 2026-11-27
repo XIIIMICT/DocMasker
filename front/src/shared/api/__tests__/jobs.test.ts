@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, jest, spyOn } from "bun:test";
 
 import JSZip from "jszip";
 
@@ -159,21 +159,36 @@ describe("waitForJob", () => {
     });
 
     it("aborts cleanly during a polling delay", async () => {
-        const controller = new AbortController();
-        globalThis.fetch = (async () =>
-            jsonResponse({
-                job_id: ACCEPTED.job_id,
-                status: "running",
-                phase: "detection",
-                progress: 10,
-                attempt: 1,
-                error_code: null,
-                result_url: null,
-            })) as unknown as typeof fetch;
-        setTimeout(() => controller.abort(), 10);
-        await expect(waitForJob(ACCEPTED, controller.signal)).rejects.toBeInstanceOf(
-            JobFailedError,
-        );
+        jest.useFakeTimers();
+        const addSpy = spyOn(AbortSignal.prototype, "addEventListener");
+        try {
+            const controller = new AbortController();
+            globalThis.fetch = (async () =>
+                jsonResponse({
+                    job_id: ACCEPTED.job_id,
+                    status: "running",
+                    phase: "detection",
+                    progress: 10,
+                    attempt: 1,
+                    error_code: null,
+                    result_url: null,
+                })) as unknown as typeof fetch;
+            const pending = waitForJob(ACCEPTED, controller.signal);
+            // A real 10 ms sleep used to race the first poll: if the signal
+            // aborted before the backoff listener was armed, the test hung.
+            // Fake timers plus the listener handshake fix the ordering.
+            let spins = 0;
+            while (!addSpy.mock.calls.some((call) => call[0] === "abort")) {
+                if (++spins > 100) throw new Error("the poll delay never armed");
+                await Promise.resolve();
+            }
+            setTimeout(() => controller.abort(), 10);
+            jest.advanceTimersByTime(10);
+            await expect(pending).rejects.toBeInstanceOf(JobFailedError);
+        } finally {
+            addSpy.mockRestore();
+            jest.useRealTimers();
+        }
     });
 
     it("does not log or expose PII in errors", async () => {

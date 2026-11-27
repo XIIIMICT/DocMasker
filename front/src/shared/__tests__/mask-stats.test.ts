@@ -69,9 +69,7 @@ describe("countKeysValues", () => {
         expect(stats.uniqueByLabel).toEqual({ person: 2, organization: 1 });
         expect(stats.unused).toEqual([]);
     });
-});
 
-describe("countKeysValues — single-pass counting", () => {
     it("counts repeated placeholders and lists keys missing from the document", () => {
         const keys = "Физлица:\n  - ЗНАЧЕНИЕ-1\n  - ЗНАЧЕНИЕ-2\n  - ЗНАЧЕНИЕ-3";
         const stats = countKeysValues(

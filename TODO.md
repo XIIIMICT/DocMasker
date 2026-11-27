@@ -17,25 +17,39 @@ AGENTS/doc refresh with release verification. Per-phase evidence, test counts
 and before/after benchmarks: `docs/PRODUCTION_READINESS.md`,
 `docs/PERFORMANCE.md`.
 
-## Test-quality follow-ups (senior-qa audit, 2026-11-26)
+## Test-quality follow-ups (senior-qa audit, 2026-11-26) — CLOSED
 
-- **CI smoke discovery guard is weaker than documented.** The workflow's
-  `grep -q "smoke.spec.ts"` also matches `rerender-smoke.spec.ts` and
-  `hover-smoke.spec.ts`, so losing the main spec (24 of 36 tests) would still
-  pass. Acceptance: anchored filename match plus a minimum `--list` test count.
-- **Sleep-as-evidence waits.** `front/e2e/smoke.spec.ts:226-238` uses a 300 ms
-  sleep before asserting no request was sent, and `rerender-smoke.spec.ts:31`
-  sleeps 500 ms to prove "no re-render". Replace with deterministic route
-  interception / named debounce and a render counter. Nine magic-number sleeps
-  in `hover-smoke.spec.ts` can collapse to one named grace-period helper.
-- **Timing-dependent unit tests.** `jobs.test.ts:173` and
-  `docx-viewer-scheduling.test.ts:6` use real timers; switch to fake timers and
-  give `use-job-lifecycle.test.ts` `waitFor` calls explicit timeouts.
-- **Small cleanup:** extract the repeated raw CSS file-input selector, use
-  web-first `toHaveValue` instead of `expect.poll(inputValue())`, rename the
-  misleading "fresh baseline" coverage test, align
-  `local.playwright.config.ts` `testIgnore` with the CI config, and merge the
-  same-level duplicate assertions listed in `TEST-QUALITY-AUDIT.md`.
+All items below were implemented on `fix/dm-test-quality`; no assertion was
+weakened. Evidence is from local runs on 2026-11-27, not from GitHub CI.
+
+- **CI smoke discovery guard.** `grep -q "smoke.spec.ts"` was replaced by
+  `front/e2e/check-smoke-discovery.mjs`, called from `.github/workflows/ci.yaml`.
+  It requires the exact basenames, ≥20 tests in `smoke.spec.ts` and ≥34 in the
+  project (current listing: 35/4 specs). Negative proof: temporarily renaming
+  `smoke.spec.ts` made the guard exit 1 (`missing smoke spec: smoke.spec.ts`;
+  12 tests found) and the file was restored.
+- **Sleep-as-evidence.** The empty-keys test now intercepts `**/api/unmask`,
+  counts requests, uses a two-frame grace and one valid demask as a barrier,
+  then asserts exactly one request. The rerender test keeps a rendered-paragraph
+  node identity as the render counter and waits for the named debounce pass.
+  Eight hover grace sleeps use `waitForCloseGrace` (250 ms + margin); the 80 ms
+  before-grace re-entry sample is intentionally retained as the behaviour under
+  test.
+- **Unit timing.** `jobs.test.ts` and `docx-viewer-scheduling.test.ts` use
+  `jest.useFakeTimers()` with restore in `finally`/`afterEach`;
+  `use-job-lifecycle.test.ts` `waitFor` calls have a 2 s timeout and named
+  `onTimeout` errors.
+- **Cleanup.** File-input CSS is one shared selector; three `expect.poll` value
+  checks are web-first `toHaveValue`; the synthetic coverage test no longer
+  claims a live baseline; exact-equality/no-PII and duplicate-enumeration
+  assertions were collapsed without dropping any contract; the two initial-
+  render smoke tests were merged (36 → 35 tests). `local.playwright.config.ts`
+  now derives discovery from the committed config.
+- **Verified:** `bun run --cwd front format:check`, `lint:check`, `typecheck`,
+  `test` (233 pass / 0 fail; pre-existing HeroUI act warnings only) and `build`
+  green; `--list` 35 tests from both configs; guard positive/negative as above;
+  changed specs 2/2 runs at 34 passed each; full smoke 2/2 runs at 35 passed
+  each against the local stack on `:5001`.
 
 ## Deferred by maintainer decision
 

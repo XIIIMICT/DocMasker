@@ -25,12 +25,25 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 `bun run format` can rewrite line breaks in untouched files — check `git status`
 and `git diff` afterwards. The current unit inventory (29 test files) and the
 Playwright `smoke` discovery guard live in `docs/TESTING.md` §1. The `smoke`
-project currently lists 36 tests in four spec files (`health`, `smoke`,
-`rerender-smoke`, `hover-smoke`) and needs a prepared stack;
-`local.playwright.config.ts` is local-only, probe files are excluded, and CI
-requires all four filenames in `playwright test --project=smoke --list` so a
-rename cannot silently drop a suite. That listing needs no running stack:
-`bunx --no-install playwright test --project=smoke --list`.
+project currently lists 35 tests in four spec files (`health`, `smoke`,
+`rerender-smoke`, `hover-smoke`) and needs a prepared stack; probe files are
+excluded. CI pipes `playwright test --project=smoke --list` into
+`bun e2e/check-smoke-discovery.mjs`, which requires the exact four basenames,
+≥20 tests in the main spec and ≥34 overall — `smoke.spec.ts` can no longer be
+satisfied by the two other `*smoke.spec.ts` names. The listing needs no running
+stack:
+
+```sh
+bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
+bun e2e/check-smoke-discovery.mjs smoke-tests.txt
+```
+
+`local.playwright.config.ts` is the local-only Chrome-on-PATH helper; it
+derives discovery from the committed config and overrides only the launcher
+and reporter. Shared E2E helpers: `e2e/helpers/selectors.ts` (hidden file input)
+and `e2e/helpers/timing.ts` (two-frame gesture grace, close-grace helper).
+Unit timing tests use `jest.useFakeTimers()` from `bun:test` with `useRealTimers()`
+in `finally`/`afterEach`.
 
 ## HeroUI v3 — mandatory reference
 

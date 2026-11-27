@@ -20,8 +20,9 @@ describe("canDemask", () => {
     });
 
     test("empty keys are not valid keys, even with no keysError", () => {
+        // `valid.keysError` is already null; the second call used to repeat
+        // this exact expression. The hook test covers the operation boundary.
         expect(canDemask({ ...valid, hasKeys: false })).toBe(false);
-        expect(canDemask({ ...valid, hasKeys: false, keysError: null })).toBe(false);
     });
 
     test("malformed keys, missing input and busy state all block demasking", () => {

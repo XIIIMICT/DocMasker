@@ -62,23 +62,43 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
-Four spec files, 36 tests at the last `--list` run:
+Four spec files, 35 tests at the last `--list` run (24 → 23 in `smoke.spec.ts`
+after merging the two initial-render assertions into one test):
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
 `front/e2e/rerender-smoke.spec.ts`, `front/e2e/hover-smoke.spec.ts`.
 `front/playwright.config.ts` discovers them with
 `testMatch: /(?:health|smoke|mask)\.spec\.ts/` (`mask` is a future slot),
 `workers: 1`, Chromium, `E2E_BASE_URL` default `http://127.0.0.1:5001`;
 `*-probe*` and `probe/` files are excluded. CI's `production` job first runs
-`bunx --no-install playwright test --project=smoke --list` and fails if any of
-the four filenames is missing, so a rename or a broken `testMatch` cannot
-silently drop a suite (`.github/workflows/ci.yaml`). Locally, the same listing
-needs no running stack:
+`bunx --no-install playwright test --project=smoke --list` and passes the
+listing to `bun e2e/check-smoke-discovery.mjs smoke-tests.txt`. That guard
+requires the exact spec basenames (so `smoke.spec.ts` can no longer be
+satisfied by `rerender-smoke.spec.ts`), at least 20 tests in the main spec and
+at least 34 in the project; a broken `testMatch` or a rename cannot silently
+drop a suite (`.github/workflows/ci.yaml`). Locally, neither step needs a
+running stack:
 
 ```sh
-cd front && bunx --no-install playwright test --project=smoke --list
+cd front
+bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
+bun e2e/check-smoke-discovery.mjs smoke-tests.txt
 ```
 
-`front/local.playwright.config.ts` is the local-only Chrome-on-PATH helper.
+A negative proof temporarily renamed `smoke.spec.ts`: the guard exited 1 with
+`missing smoke spec: smoke.spec.ts` / `smoke project lists 12 tests, expected
+at least 34`, and the file was restored. `front/local.playwright.config.ts` is
+the local-only Chrome-on-PATH helper; it now derives `testDir`, `testIgnore`,
+project names and `testMatch` from the committed config and overrides only the
+launcher/reporter, so local and CI discovery cannot drift.
+
+Shared E2E helpers live under `front/e2e/helpers/`: `selectors.ts` holds the
+hidden file-input selector, and `timing.ts` holds the two-frame post-gesture
+grace plus the single named close-grace period (250 ms + margin). Sleep-as-
+evidence is gone: the empty-keys test counts requests on an intercepted
+`**/api/unmask` route and uses one valid demask as a synchronisation barrier;
+the rerender test observes node identity plus the named debounce pass; hover's
+explicitly shorter before-grace re-entry delay remains because that timing is
+the behaviour under test.
 Recorded run counts in `docs/WORKFLOW.md` and `docs/PRODUCTION_READINESS.md`
 are historical records; rely on `--list` for the current inventory.
 
@@ -188,10 +208,10 @@ E2E_BASE_URL=http://127.0.0.1:5001 \
 ```
 
 CI's `production` job instead uses the bundled Chromium on the isolated CI
-stack (front **15001**, back **18001**) and first verifies discovery of
+stack (front **15001**, back **18001**) and first verifies exact discovery of
 `health.spec.ts`, `smoke.spec.ts`, `rerender-smoke.spec.ts` and
-`hover-smoke.spec.ts`. The CI front service sets a synthetic `SUPPORT_MAIL`
-fixture: the header support link is rendered only when that runtime env var is
+`hover-smoke.spec.ts` plus the minimum test counts (§1). The CI front service
+sets a synthetic `SUPPORT_MAIL` fixture: the header support link is rendered only when that runtime env var is
 present, and the reduced-motion smoke test asserts that real control and its
 hover state. Never run smoke against an unprepared stack; never paste real PII
 into a live browser session.

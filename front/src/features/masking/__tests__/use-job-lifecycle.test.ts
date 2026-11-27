@@ -26,6 +26,8 @@ const AGGREGATE = {
     occurrences_by_label: { person: 1 },
     unique_by_label: { person: 1 },
 };
+/** Resume paths resolve through fetch/JSZip; bound them and name the expectation. */
+const RESUME_WAIT_TIMEOUT_MS = 2000;
 
 function jsonResponse(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
@@ -236,7 +238,10 @@ describe("useJobLifecycle — reload-resume", () => {
 
         expect(hook.result.current.drafts.state.activeJob).toEqual(ACCEPTED);
         expect(hook.result.current.drafts.state.busy).toBe(true);
-        await waitFor(() => expect(hook.result.current.drafts.state.result).toBe("[PERSON_1]"));
+        await waitFor(() => expect(hook.result.current.drafts.state.result).toBe("[PERSON_1]"), {
+            timeout: RESUME_WAIT_TIMEOUT_MS,
+            onTimeout: () => new Error("resumed mask job never produced its text result"),
+        });
 
         const state = hook.result.current.drafts.state;
         expect(state.keys).toContain("VALUE-A");
@@ -250,8 +255,12 @@ describe("useJobLifecycle — reload-resume", () => {
         mockSucceededJob({ "result.json": JSON.stringify({ text: "[PERSON_1]" }) });
         const { hook } = setup({ mode: "unmask", accepted: ACCEPTED });
 
-        await waitFor(() =>
-            expect(hook.result.current.drafts.stateByMode.unmask.restored).toBe("[PERSON_1]"),
+        await waitFor(
+            () => expect(hook.result.current.drafts.stateByMode.unmask.restored).toBe("[PERSON_1]"),
+            {
+                timeout: RESUME_WAIT_TIMEOUT_MS,
+                onTimeout: () => new Error("resumed unmask job never restored its text"),
+            },
         );
 
         const drafts = hook.result.current.drafts.stateByMode;
@@ -266,10 +275,15 @@ describe("useJobLifecycle — reload-resume", () => {
         mockSucceededJob({ "doc.docx": "bytes" });
         const { hook } = setup({ mode: "mask", accepted: ACCEPTED });
 
-        await waitFor(() =>
-            expect(hook.result.current.drafts.state.error).toBe(
-                "Задание завершено. Повторите операцию, чтобы скачать файл.",
-            ),
+        await waitFor(
+            () =>
+                expect(hook.result.current.drafts.state.error).toBe(
+                    "Задание завершено. Повторите операцию, чтобы скачать файл.",
+                ),
+            {
+                timeout: RESUME_WAIT_TIMEOUT_MS,
+                onTimeout: () => new Error("resumed file job without result.json never cleared"),
+            },
         );
         expect(hook.result.current.drafts.state.activeJob).toBeNull();
         expect(hook.result.current.drafts.state.busy).toBe(false);
@@ -279,11 +293,14 @@ describe("useJobLifecycle — reload-resume", () => {
     it("surfaces a failed job without PII", async () => {
         mockJobStatus("failed", "internal_error");
         const { hook } = setup({ mode: "mask", accepted: ACCEPTED });
-        await waitFor(() => expect(hook.result.current.drafts.state.error).toBeTruthy());
+        await waitFor(() => expect(hook.result.current.drafts.state.error).toBeTruthy(), {
+            timeout: RESUME_WAIT_TIMEOUT_MS,
+            onTimeout: () => new Error("failed resumed job never surfaced an error"),
+        });
+        // Exact equality above already excludes "VALUE-A"; no second assertion.
         expect(hook.result.current.drafts.state.error).toBe(
             "Не удалось обработать задание. Попробуйте ещё раз.",
         );
-        expect(hook.result.current.drafts.state.error).not.toContain("VALUE-A");
         expect(hook.result.current.drafts.state.activeJob).toBeNull();
         expect(window.sessionStorage.getItem(ACTIVE_JOB_KEY)).toBeNull();
     });
@@ -293,10 +310,15 @@ describe("useJobLifecycle — reload-resume", () => {
         const { hook } = setup({ mode: "unmask", accepted: ACCEPTED });
         // The job started in demasking mode, so the error belongs to that
         // draft even though the workflow currently displays the mask draft.
-        await waitFor(() =>
-            expect(hook.result.current.drafts.stateByMode.unmask.error).toBe(
-                "Срок хранения результата истёк.",
-            ),
+        await waitFor(
+            () =>
+                expect(hook.result.current.drafts.stateByMode.unmask.error).toBe(
+                    "Срок хранения результата истёк.",
+                ),
+            {
+                timeout: RESUME_WAIT_TIMEOUT_MS,
+                onTimeout: () => new Error("expired resumed job never surfaced its error"),
+            },
         );
         expect(hook.result.current.drafts.stateByMode.unmask.activeJob).toBeNull();
         expect(hook.result.current.drafts.stateByMode.unmask.busy).toBe(false);
