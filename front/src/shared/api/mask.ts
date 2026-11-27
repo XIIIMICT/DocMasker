@@ -1,3 +1,8 @@
+import type {
+    MaskResponse as GeneratedMaskResponse,
+    MaskStats,
+    UnmaskResponse as GeneratedUnmaskResponse,
+} from "@/shared/api/generated/openapi";
 import { JSON_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "@/shared/api/timeouts";
 import { getBackendInternalUrl } from "@/shared/config";
 import {
@@ -22,24 +27,12 @@ function passJsonHeaders(response: Response): Headers {
 
 export { KEYS_SECTION_TITLES, KEYS_TITLE_LABELS } from "@/shared/api/labels.generated";
 
+// HTTP DTOs are generated from app.openapi() (compile-time only, no runtime
+// validation). The aliases keep the established public names for callers.
 /** Aggregate counts the backend sends instead of raw entity values. */
-export interface MaskStatsPayload {
-    total: number;
-    occurrences_by_label: Record<string, number>;
-    unique_by_label: Record<string, number>;
-}
-
-export interface MaskResponse {
-    text: string;
-    /** Aggregate counts per label — the backend never sends raw entity values. */
-    stats: MaskStatsPayload;
-    /** Demasking keys as YAML (empty string when nothing was masked). */
-    keys: string;
-}
-
-export interface UnmaskResponse {
-    text: string;
-}
+export type MaskStatsPayload = MaskStats;
+export type MaskResponse = GeneratedMaskResponse;
+export type UnmaskResponse = GeneratedUnmaskResponse;
 
 // Keys parsing lives in one pure boundary; this module keeps the established
 // public helpers and lets callers hand over an already parsed document.

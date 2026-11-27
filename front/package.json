@@ -14,7 +14,8 @@
         "test": "bun test",
         "test:e2e": "playwright test",
         "typecheck": "bun check",
-        "gen:labels": "bun scripts/gen-labels.mjs"
+        "gen:labels": "bun scripts/gen-labels.mjs",
+        "gen:openapi": "bun scripts/gen-openapi.mjs"
     },
     "dependencies": {
         "@heroui/react": "^3.2.8",
@@ -41,6 +42,7 @@
         "happy-dom": "^21.0.4",
         "oxfmt": "^0.79.0",
         "oxlint": "^1.94.0",
+        "swagger-typescript-api": "13.15.0",
         "tailwindcss": "^4.3.5",
         "typescript": "^7.0.2"
     },

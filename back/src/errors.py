@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .app_logging import bind_request_id, log_error, log_event, log_warning
@@ -30,6 +31,33 @@ from .observability import route_template
 LOGGER = logging.getLogger("docmasker.errors")
 
 REQUEST_ID_HEADER = "X-Request-ID"
+
+
+class ApiErrorResponse(BaseModel):
+    """The one error envelope documented in OpenAPI; never carries submitted data."""
+
+    code: str = Field(description="Stable machine-readable error code.")
+    detail: str = Field(description="Russian user-facing detail; no PII, keys or local paths.")
+    request_id: str = Field(description="Opaque id, identical to the X-Request-ID header.")
+
+
+_REQUEST_ID_HEADER_SCHEMA: dict[str, Any] = {
+    "description": "Correlation id; matches `request_id` in the error body.",
+    "schema": {"type": "string"},
+}
+
+
+def error_responses(*statuses: int) -> dict[int, dict[str, Any]]:
+    """Reusable OpenAPI declarations for the single sanitized error envelope."""
+    return {
+        code: {
+            "model": ApiErrorResponse,
+            "description": "Sanitized error: stable code, Russian detail, opaque request id.",
+            "headers": {REQUEST_ID_HEADER: _REQUEST_ID_HEADER_SCHEMA},
+        }
+        for code in statuses
+    }
+
 
 #: Stable codes per HTTP status, used when a plain HTTPException is raised.
 _DEFAULT_CODES: dict[int, str] = {

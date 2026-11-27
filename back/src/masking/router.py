@@ -3,17 +3,19 @@
 import base64
 import json
 import re
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from src.config import get_settings
+from src.errors import error_responses
 from src.jobs.cache import build_cache_key, canonical_json, fingerprint_for
 from src.jobs.dependencies import result_cache
 from src.jobs.repository import JobQueueFullError
 from src.jobs.routing import count_docx_paragraphs, count_docx_paragraphs_path, enqueue, enqueue_from_path, needs_job
+from src.jobs.schemas import JobAccepted
 from src.masking.config import SCHEMA_VERSION, get_config
 from src.metrics import observe_upload
 from src.uploads import UploadTooLargeError, cleanup, stage_upload
@@ -39,6 +41,21 @@ if TYPE_CHECKING:
     from src.jobs.models import JobKind
 
 router = APIRouter(tags=["masking"])
+
+
+def _zip_response(description: str) -> dict[str, Any]:
+    """OpenAPI declaration for a flat result ZIP; no semantic X-* headers."""
+    return {
+        "description": description,
+        "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
+        "headers": {
+            "Content-Disposition": {
+                "description": "RFC 5987 attachment file name.",
+                "schema": {"type": "string"},
+            },
+            "Cache-Control": {"description": "Always no-store.", "schema": {"type": "string"}},
+        },
+    }
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -108,7 +125,11 @@ async def _admit_file(
         cleanup(staged)
 
 
-@router.get("/labels", response_model=LabelsResponse)
+@router.get(
+    "/labels",
+    response_model=LabelsResponse,
+    responses={200: {"description": "Canonical label catalogue in keys-section order."}},
+)
 async def labels_endpoint() -> LabelsResponse:
     """Return the single canonical label catalogue (read-only, runtime source)."""
     return LabelsResponse(
@@ -300,7 +321,15 @@ def _busy() -> HTTPException:
     return HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Сервер занят. Повторите позже.")
 
 
-@router.post("/mask", response_model=MaskResponse)
+@router.post(
+    "/mask",
+    response_model=MaskResponse,
+    responses={
+        200: {"description": "Masked text, aggregate stats and demasking keys (YAML)."},
+        202: {"model": JobAccepted, "description": "Oversized input accepted as a durable job."},
+        **error_responses(413, 422, 429),
+    },
+)
 async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONResponse:
     """Mask sensitive information in the given text."""
     if not request.text.strip():
@@ -335,7 +364,15 @@ async def mask_text_endpoint(request: MaskRequest) -> MaskResponse | JSONRespons
     return response
 
 
-@router.post("/mask-file")
+@router.post(
+    "/mask-file",
+    response_class=Response,
+    responses={
+        200: _zip_response("Flat ZIP: masked .docx, demasking keys .yaml and manifest.json."),
+        202: {"model": JobAccepted, "description": "Oversized upload accepted as a durable job."},
+        **error_responses(413, 415, 422, 429),
+    },
+)
 async def mask_file_endpoint(
     file: Annotated[UploadFile, File(description="DOCX file to mask")],
 ) -> Response:
@@ -386,7 +423,15 @@ async def mask_file_endpoint(
     return Response(content=archive, media_type=_ZIP_CONTENT_TYPE, headers=headers)
 
 
-@router.post("/unmask", response_model=UnmaskResponse)
+@router.post(
+    "/unmask",
+    response_model=UnmaskResponse,
+    responses={
+        200: {"description": "Restored text."},
+        202: {"model": JobAccepted, "description": "Oversized input accepted as a durable job."},
+        **error_responses(413, 422, 429),
+    },
+)
 async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse | JSONResponse:
     """Restore a masked text from its demasking keys."""
     if not request.text.strip():
@@ -433,7 +478,15 @@ async def unmask_text_endpoint(request: UnmaskRequest) -> UnmaskResponse | JSONR
     return response
 
 
-@router.post("/unmask-file")
+@router.post(
+    "/unmask-file",
+    response_class=Response,
+    responses={
+        200: _zip_response("Flat ZIP: restored .docx and manifest.json."),
+        202: {"model": JobAccepted, "description": "Oversized upload accepted as a durable job."},
+        **error_responses(413, 415, 422, 429),
+    },
+)
 async def unmask_file_endpoint(
     file: Annotated[UploadFile, File(description="Masked DOCX file to restore")],
     keys: Annotated[str, Form(description="Demasking keys as YAML")],

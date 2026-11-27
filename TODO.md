@@ -68,12 +68,42 @@ weakened. Evidence is from local runs on 2026-11-27, not from GitHub CI.
   consecutive targeted runs (15 tests each). Pre-existing HeroUI act warnings
   in unrelated component tests only.
 
+## OpenAPI → TypeScript declarations (finding 8, 2026-11-27) — CLOSED
+
+The earlier maintainer deferral (2026-11-24, «поместим в TODO») is superseded by
+an evidence-based decision: compile-time HTTP DTOs are generated from the live
+schema; runtime behavior is unchanged.
+
+- **Installed toolchain evidence:** TypeScript **7.0.2** in `front/bun.lock` and
+  `node_modules/typescript/package.json`; `bunx --no-install tsc --version`
+  reports 7.0.2. Node 26.13.1, Bun 1.4.4.
+- **Rejected — `openapi-typescript@7.13.0`:** peer `typescript: ^5.x`, so TS7
+  needs an unsafe override; on TS7 it also fails at runtime
+  (`ts.factory.createKeywordTypeNode` is undefined).
+- **Rejected — `@hey-api/openapi-ts@0.99.0`:** peer
+  `typescript: >=5.5.3 || >=6.0.0` (semver-compatible with 7.0.2) but it fails
+  at runtime on TS7 (`ts.SyntaxKind` is undefined). Both would need a second
+  TypeScript 5 toolchain solely for generation.
+- **Chosen — `swagger-typescript-api@13.15.0`:** no TypeScript peer, Node ≥20,
+  pinned **dev-only** in `front/package.json`/`bun.lock`. With
+  `--no-client --enum-style=union --type-only-imports` it emits only
+  `front/src/shared/api/generated/openapi.d.ts`: no HTTP client SDK and no new
+  runtime dependency. Two runs were byte-identical; the output compiles with
+  TypeScript 7 (`tsc --noEmit --strict`).
+- **Contract source:** `python -m src.openapi_export` (deterministic in-process
+  `app.openapi()` export). Regenerate: `bun run --cwd front gen:openapi`; CI gate:
+  `bun run --cwd front gen:openapi --check` (job `openapi-contract`). Negative
+  proof: tampering with the committed declaration made the check exit 1.
+- **Scope:** generated types are compile-time only and assert no runtime
+  validation. Not covered (still handwritten/other contracts): the ZIP-internal
+  `manifest.json`, keys YAML, `labels.yaml` → `labels.generated.ts`, Next.js
+  proxy routes, and the UI-only `JobResult`.
+- **Revisit only if** a generator exposes named DTOs with a TS7-compatible
+  compiler API and peer range without a second toolchain, or the HTTP contract
+  itself changes (then regenerate).
+
 ## Deferred by maintainer decision
 
-- **§8.2 — TypeScript types generated from live OpenAPI.** `openapi-typescript`
-  (or equivalent), export from the running FastAPI app in CI, commit
-  `front/src/shared/api/generated/schema.ts`, freshness gate, replace
-  handwritten DTOs. Decision (2026-11-24): «поместим в TODO».
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
   `X-Request-ID`, minimal `/ready` + `/metrics`, liveness/readiness split.
   Remaining from Brief §11/§14: structured JSON logs with `request_id` / job ID

@@ -15,7 +15,7 @@ const ACCEPTED = {
     status: "queued",
     status_url: "/api/jobs/12345678-1234-4234-8234-123456789abc",
     result_url: "/api/jobs/12345678-1234-4234-8234-123456789abc/result",
-};
+} as const;
 
 function jsonResponse(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {

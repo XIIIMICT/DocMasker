@@ -61,7 +61,7 @@ The browser only calls its own origin; Next proxies `/api/*` server-side.
   `back/pyproject.toml`. Write a docstring only for a non-obvious contract or the
   reason behind a decision; do not add trivial ones or mass-delete existing ones.
 - **No debug artifacts** (`debug_*`, probes, stray scripts) in commits.
-- **Tooling:** `rg` over `grep`, `uv` over bare Python, `bun` over node.
+- **Tooling:** `rg` over `grep`, `uv` over bare Python, `bun` over node. Use `gh` to inspect GitHub Actions runs and failed logs (`gh run list`, `gh run view --log-failed`) instead of inferring CI state from local checks. If `rg`, `uv`, `bun` or `gh` is unavailable, ask the maintainer to install it rather than substituting another tool or skipping the check.
 - **Ambiguous product/config/process decisions → ask the maintainer.** Only
   safe, reversible technical choices may proceed with documentation.
 - **Languages:** code comments/docstrings, commits and agent docs — English;

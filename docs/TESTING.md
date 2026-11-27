@@ -35,6 +35,7 @@ for a live stress drill.
 | Job API (202/status/result/cancel) | `test_jobs_api.py`, `test_jobs_routing.py` |
 | Valkey cache | `test_cache.py` (fake client offline; real Valkey via `TEST_VALKEY_URL`) |
 | Stable error contract / no PII leakage | `test_errors.py` |
+| OpenAPI contract (schema-only, no server/DB) | `test_openapi_contract.py` (also pins deterministic `app.openapi()` export) |
 | Readiness and coarse metrics | `test_readiness.py` |
 | Cross-field settings validation | `test_settings_validation.py` |
 | Isolated operational drills | `test_operational_drills.py`, `drill_support.py`, `src/scripts/operational_drills.py` (needs `TEST_DATABASE_URL`; optional `DOCMASKER_DRILL_PG_CONTAINER` for the disposable backup rehearsal) |
