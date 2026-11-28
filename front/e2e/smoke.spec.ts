@@ -19,6 +19,9 @@ test("смена темы мгновенная: CSS-переход html не и�
     const before = await read();
     expect(before.transition).toBe("0s");
     await page.getByRole("tab", { name: "Тёмная" }).click();
+    // next-themes updates <html> after the click; wait for the committed class
+    // before sampling computed styles, otherwise this is a timing flake.
+    await expect(page.locator("html")).toHaveClass(/dark/);
     const after = await read();
     expect(after.transition).toBe("0s");
     expect(after.className).toContain("dark");
