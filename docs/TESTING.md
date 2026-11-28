@@ -68,22 +68,32 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
-Four spec files, **55 tests** at the current `--list` run (43 in
-`smoke.spec.ts` — 29 existing plus 11 axe scans and 3 keyboard/perceivability
-walkthroughs — 10 hover, 1 rerender, 1 health):
+Seven spec files, **55 tests** at the current `--list` run: 16 in
+`smoke.spec.ts` (page/mode/layout and text mask+unmask), 4 in
+`smoke-file.spec.ts` (DOCX masking, placeholder highlighting, unused keys,
+stats parity), 3 in `smoke-job.spec.ts` (job submission, active-job cancel,
+result manifest), 20 in `smoke-a11y.spec.ts` (6 support-link/motion/focus,
+11 axe scans, 3 keyboard/perceivability), 10 hover, 1 rerender, 1 health:
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
-`front/e2e/rerender-smoke.spec.ts`, `front/e2e/hover-smoke.spec.ts`.
+`front/e2e/smoke-file.spec.ts`, `front/e2e/smoke-job.spec.ts`,
+`front/e2e/smoke-a11y.spec.ts`, `front/e2e/rerender-smoke.spec.ts`,
+`front/e2e/hover-smoke.spec.ts`. The split moved whole `test(...)` blocks with
+no assertion changes; shared constants (`MASK_DATA`, `DEMASK_DATA`, both DOCX
+fixtures) and `switchMode()` live in `front/e2e/_helpers.ts`, and the one
+helper used only by the a11y spec (`focusByKeyboard`) stays local to it.
 `front/playwright.config.ts` discovers them with
-`testMatch: /(?:health|smoke|mask)\.spec\.ts/` (`mask` is a future slot),
+`testMatch: /(?:health|mask|[a-zA-Z0-9_-]*smoke[a-zA-Z0-9_-]*)\.spec\.ts/`
+(`mask` is a future slot; the `smoke` alternative covers every `smoke-*` spec),
 `workers: 1`, Chromium, `E2E_BASE_URL` default `http://127.0.0.1:5001`;
 `*-probe*` and `probe/` files are excluded. CI's `production` job first runs
 `bunx --no-install playwright test --project=smoke --list` and passes the
 listing to `bun e2e/check-smoke-discovery.mjs smoke-tests.txt`. That guard
-requires the exact spec basenames (so `smoke.spec.ts` can no longer be
-satisfied by `rerender-smoke.spec.ts`), at least 20 tests in the main spec and
-at least 34 in the project; a broken `testMatch` or a rename cannot silently
-drop a suite (`.github/workflows/ci.yaml`). Locally, neither step needs a
-running stack:
+requires all seven exact spec basenames, at least 16 tests in the main spec,
+4 in the file spec, 3 in the job spec, 20 in the a11y spec and 55 in the
+project — the per-spec floors preserve the old 43-test main-suite coverage
+(16+4+3+20) individually, so a broken `testMatch` or a rename cannot silently
+drop a suite (`.github/workflows/ci.yaml`, mirrored by
+`.github/workflows/nightly.yaml`). Locally, neither step needs a running stack:
 
 ```sh
 cd front
@@ -91,21 +101,23 @@ bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
 bun e2e/check-smoke-discovery.mjs smoke-tests.txt
 ```
 
-A negative proof renamed the `smoke.spec.ts` entries in a **copy**
-of the listing (no committed spec was touched): the guard exited 1 with
-`missing smoke spec: smoke.spec.ts` / `smoke.spec.ts lists 0 tests, expected at
-least 20`. Removing those lines instead also produced `smoke project lists 12
-tests, expected at least 34`. The copies were deleted; the original listing is
-unchanged. `front/local.playwright.config.ts` is
+Historical negative proofs (recorded before the split, in **copies** of the
+listing — no committed spec was touched) renamed or removed the
+`smoke.spec.ts` entries and the guard exited 1. The current guard checks all
+seven basenames plus the 16/4/3/20 per-spec floors and the 55-total floor,
+so the same rename/removal drill still fails. `front/local.playwright.config.ts` is
 the local-only Chrome-on-PATH helper; it now derives `testDir`, `testIgnore`,
 project names and `testMatch` from the committed config and overrides only the
 launcher/reporter, so local and CI discovery cannot drift.
 
-Shared E2E helpers live under `front/e2e/helpers/`: `selectors.ts` holds the
-hidden file-input selector, `timing.ts` holds the two-frame post-gesture grace
-plus the single named close-grace period (250 ms + margin), and `a11y.ts`
-applies the explicit axe WCAG 2/2.1 A/AA ruleset and waits for settled UI (no
-sleep-as-evidence). The automated scans and the manual keyboard/focus outcomes
+Shared E2E helpers: `front/e2e/_helpers.ts` holds the data/keys textarea names,
+both DOCX fixtures and `switchMode()` (used by more than one spec);
+`front/e2e/helpers/` holds `selectors.ts` (hidden file input), `timing.ts`
+(two-frame post-gesture grace plus the single named close-grace period,
+250 ms + margin) and `a11y.ts` (explicit axe WCAG 2/2.1 A/AA ruleset and
+settled-UI wait, no sleep-as-evidence). `focusByKeyboard` stays local to
+`smoke-a11y.spec.ts` because only that spec uses it. The automated scans and
+the manual keyboard/focus outcomes
 have one canonical home in `docs/ACCESSIBILITY.md`; passing scans are not an
 accessibility claim. Screen-reader verification is OUT OF SCOPE by maintainer
 decision (2026-11-28); automated axe scans and manual keyboard/focus review are
@@ -132,7 +144,7 @@ current state"; contracts: `docs/FRONTEND-AUDIT.md`.
 | Stale fencing token cannot heartbeat / fail / cancel / succeed / publish | **Covered** | `test_jobs_worker.py::test_stale_token_cannot_publish_a_result`; `test_jobs_store.py::test_heartbeat_fails_without_ownership` |
 | Lease expiry increments attempts and fails at the configured maximum | **Covered** | `test_jobs_store.py::test_stale_lease_is_reclaimed`, `::test_retryable_failure_requeues_then_fails`; `test_jobs_worker.py::test_failed_job_is_retried_then_final` |
 | Queue full → stable 429, no staging artifacts | **Covered** | `test_jobs_store.py::test_queue_full_is_bounded`, `::test_queue_full_leaves_no_staging_row`, `test_jobs_api.py::test_queue_full_returns_429` |
-| Cancellation: queued immediate, running at checkpoint, no result/cache | **Covered** | `test_jobs_api.py::test_cancel_job`; `test_jobs_store.py::test_cancel_only_affects_active_jobs`, `::test_running_cancel_is_a_request_acknowledged_by_the_worker`; `test_jobs_worker.py::test_cancel_before_processing_publishes_nothing`, `::test_cancelled_job_never_populates_cache`; e2e `smoke.spec.ts` Cancel scenario |
+| Cancellation: queued immediate, running at checkpoint, no result/cache | **Covered** | `test_jobs_api.py::test_cancel_job`; `test_jobs_store.py::test_cancel_only_affects_active_jobs`, `::test_running_cancel_is_a_request_acknowledged_by_the_worker`; `test_jobs_worker.py::test_cancel_before_processing_publishes_nothing`, `::test_cancelled_job_never_populates_cache`; e2e `smoke-job.spec.ts` Cancel scenario |
 | TTL: result clock starts on completion; active jobs never expire; cleanup idempotent | **Covered** | `test_jobs_store.py::test_result_ttl_starts_on_completion`, `::test_active_jobs_are_never_swept`, `::test_ttl_sweep_removes_rows_and_artifacts`; `test_jobs_worker.py::test_sweep_removes_expired_jobs_and_artifacts` |
 | SIGTERM: stop claims, drain in-flight jobs, heartbeats continue | **Drilled (local)** | Controlled handler-equivalent drill (`test_operational_drills.py::test_sigterm_drains_without_stale_publication`): exactly one claim after the handler, in-flight DOCX job `succeeded` with a valid ZIP, the second job stayed `queued` with no result. Real POSIX signal delivery on the target host remains an operator gate |
 | Transient PostgreSQL outage must not kill the worker | **Covered** | `test_jobs_worker.py::test_worker_poll_survives_transient_db_error`, `::test_heartbeat_survives_transient_db_error`; live CI-stack database restart in Phase 8: `/ready` briefly 503 then ready, worker stayed up and the in-flight job succeeded |
@@ -148,7 +160,7 @@ current state"; contracts: `docs/FRONTEND-AUDIT.md`.
 | Cache TTL/memory/eviction bounded and observable; key names leak no PII | **Covered** | `test_cache.py::test_hit_miss_write_and_eviction`, `::test_key_does_not_leak_source_hash`; limits in `.env.example`; target-hardware memory pressure TODO |
 | Entity spans survive window boundaries; offsets stay absolute | **Covered** | `test_windowed.py::test_all_entity_types_survive_window_boundaries`, `::test_long_address_crossing_boundary_is_not_cut`, `::test_windowed_offsets_are_absolute`, `::test_dedupe_boundary_spans_is_deterministic` |
 | OOXML part coverage, namespace variants, >64 KiB markers, unsafe/embedded content | **Covered** | `test_ooxml.py::test_all_supported_parts_are_masked_and_restored`, `::test_default_namespace_is_processed_identically`, `::test_marker_after_64kib_is_still_found`, `::test_malformed_xml_is_rejected`, `::test_embedded_binary_object_is_rejected`; `test_docx_validation.py` |
-| Sync vs job manifest parity; frontend reads manifest, not headers | **Covered** | `test_ooxml.py::test_sync_and_job_manifest_parity`, `::test_manifest_validation_rejects_bad_schema`, `::test_successful_manifests_are_complete_with_empty_coverage_arrays`, `test_mask_file.py`; front `manifest-validation.test.ts` / `mask-archive.test.ts` completeness cases; e2e `smoke.spec.ts` manifest scenario |
+| Sync vs job manifest parity; frontend reads manifest, not headers | **Covered** | `test_ooxml.py::test_sync_and_job_manifest_parity`, `::test_manifest_validation_rejects_bad_schema`, `::test_successful_manifests_are_complete_with_empty_coverage_arrays`, `test_mask_file.py`; front `manifest-validation.test.ts` / `mask-archive.test.ts` completeness cases; e2e `smoke-job.spec.ts` manifest scenario |
 | Stable error envelope, no PII/path/traceback in errors or rows or keys | **Covered** | `test_errors.py::test_every_error_has_code_detail_request_id_and_header`, `::test_request_validation_error_does_not_echo_submitted_pii`; `test_jobs_store.py::test_no_pii_columns_in_schema`; `test_cache.py::test_key_does_not_leak_source_hash` |
 | Bounded route timeouts; streaming upload counts real bytes; results streamed | **Covered** | `timeouts.test.ts`, `mask.test.ts::proxy timeouts`; `test_uploads.py::test_stage_upload_counts_real_bytes_not_content_length`, `::test_stage_upload_rejects_oversized_stream_and_cleans_up`; `docs/API.md` §Proxy timeout policy |
 | `Cache-Control: no-store` on every `/api/*` response (PII JSON, ZIPs, typed errors) | **Covered** | `test_response_headers.py`, `test_jobs_api.py::test_result_serves_zip_with_no_store`; Next proxies forward both headers (`docs/API.md`, `back/AGENTS.md` §11) |
@@ -252,8 +264,9 @@ E2E_BASE_URL=http://127.0.0.1:5001 \
 
 CI's `production` job instead uses the bundled Chromium on the isolated CI
 stack (front **15001**, back **18001**) and first verifies exact discovery of
-`health.spec.ts`, `smoke.spec.ts`, `rerender-smoke.spec.ts` and
-`hover-smoke.spec.ts` plus the minimum test counts (§1). The CI front service
+`health.spec.ts`, `smoke.spec.ts`, `smoke-file.spec.ts`, `smoke-job.spec.ts`,
+`smoke-a11y.spec.ts`, `rerender-smoke.spec.ts` and `hover-smoke.spec.ts`
+plus the per-spec and total minimum test counts (§1). The CI front service
 sets a synthetic `SUPPORT_MAIL` fixture: the header support link is rendered only when that runtime env var is
 present. The smoke suite asserts that control's restored 180/220 ms expansion
 (computed durations/easing plus a deterministic intermediate width in Chromium),

@@ -5,7 +5,8 @@
  *
  * Exact spec basenames are read from the `[smoke] › file.spec.ts:line:col ›`
  * lines, so `smoke.spec.ts` can no longer be satisfied by
- * `rerender-smoke.spec.ts` or `hover-smoke.spec.ts`. A minimum test count also
+ * `rerender-smoke.spec.ts` or `hover-smoke.spec.ts`. Per-spec floor counts also
+ * stop the domain split (file/job/a11y) from dropping out, and the total floor
  * prevents a broken `testMatch` from quietly shrinking the project.
  */
 import { readFileSync } from "node:fs";
@@ -13,16 +14,25 @@ import { readFileSync } from "node:fs";
 const REQUIRED_SPECS = [
     "health.spec.ts",
     "smoke.spec.ts",
+    "smoke-file.spec.ts",
+    "smoke-job.spec.ts",
+    "smoke-a11y.spec.ts",
     "rerender-smoke.spec.ts",
     "hover-smoke.spec.ts",
 ];
-// 55 tests are listed on this branch (measured 2026-11-28 after C1/C2): 43
-// main smoke (including 11 axe scans and 3 keyboard walkthroughs), 10 hover,
-// 1 rerender, 1 health. The 34-total floor stops a whole smoke or
-// hover spec from dropping out; the 20-main floor stops smoke.spec.ts from
-// shrinking; the exact basenames above catch a rename of a smaller spec.
-const MIN_TOTAL_TESTS = 34;
-const MIN_MAIN_SPEC_TESTS = 20;
+// 55 tests are listed on this branch (measured 2026-11-28 after C1/C2 and the
+// domain split): 16 main smoke (page/mode/layout/text mask+unmask), 4 file,
+// 3 job, 20 a11y (6 support/motion/focus + 11 axe scans + 3 keyboard/C2),
+// 10 hover, 1 rerender, 1 health. The 55-total floor is unchanged by the split;
+// the per-spec floors below keep the moved tests guarded individually (16+4+3+20
+// = 43, the exact main-suite count before the split).
+const MIN_TOTAL_TESTS = 55;
+const MIN_MAIN_SPEC_TESTS = 16;
+const MIN_SPEC_TESTS = {
+    "smoke-file.spec.ts": 4,
+    "smoke-job.spec.ts": 3,
+    "smoke-a11y.spec.ts": 20,
+};
 // Match the `file.spec.ts:line:col` token itself rather than Playwright's
 // `›` separator: PowerShell redirects can mojibake that glyph on Windows.
 const TEST_LINE = /(?:^|\s)(\S+?\.spec\.ts):\d+:\d+(?:\s|$)/;
@@ -58,6 +68,12 @@ if (mainTests < MIN_MAIN_SPEC_TESTS) {
     problems.push(
         `smoke.spec.ts lists ${mainTests} tests, expected at least ${MIN_MAIN_SPEC_TESTS}`,
     );
+}
+for (const [spec, minimum] of Object.entries(MIN_SPEC_TESTS)) {
+    const listed = counts.get(spec) ?? 0;
+    if (listed < minimum) {
+        problems.push(`${spec} lists ${listed} tests, expected at least ${minimum}`);
+    }
 }
 if (total < MIN_TOTAL_TESTS) {
     problems.push(`smoke project lists ${total} tests, expected at least ${MIN_TOTAL_TESTS}`);
