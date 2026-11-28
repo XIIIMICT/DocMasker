@@ -54,7 +54,7 @@ carry placeholders, aggregates and hashes only.
 | PostgreSQL rows | Opaque artifact ids and a safe `error_code` only — no document text, keys, entity values, filenames or raw exception text | ADR-0003 §Schema; `back/src/jobs/schema.py`; `test_jobs_store.py::test_no_pii_columns_in_schema` |
 | Logs | The app logs exception **types**, not exception messages; startup logs a label count and a short config digest. Opaque ids/codes may appear in diagnostics, never input text | `back/src/errors.py`; `back/src/main.py`; `back/src/jobs/worker.py` |
 | `/metrics` | `dm_*` Prometheus exposition with bounded label vocabularies — no ids, keys, inputs, filenames or key names; the legacy JSON counters were removed | `back/src/main.py`; `docs/API.md` §`GET /metrics`; `test_metrics.py::test_backend_metrics_endpoint_is_prometheus_only`, `test_monitoring_contract.py` |
-| Valkey key names | HMAC-SHA256 over a canonical fingerprint; no raw source hashes or PII in the key string | `back/src/jobs/cache.py::build_cache_key`; `test_cache.py::test_key_does_not_leak_source_hash` |
+| Valkey key names | HMAC-SHA256 over a canonical fingerprint; no raw source hashes or PII in the key string | `back/src/jobs/cache/keys.py::build_cache_key`; `test_cache.py::test_key_does_not_leak_source_hash` |
 | Test data | Synthetic fixtures only; no real PII is committed | `test_ooxml.py` ("No real PII is used"), `back/config/masking/exceptions.example.yaml` ("Synthetic examples only") |
 
 Every `/api/*` response carries `Cache-Control: no-store` and `Pragma:
@@ -66,12 +66,17 @@ as sensitive operational data.
 
 ## 3. Cache and artifact security
 
+- **Cache module map.** `back/src/jobs/cache/` is a package with a stable
+  import facade: `keys.py` owns the fingerprint/key construction and entry
+  schema, `artifacts.py` owns the private spool and GC selection, `result.py`
+  owns the Valkey wrapper. All existing `src.jobs.cache` imports keep working;
+  the split changes no key, retention or metric semantics.
 - **Versioned HMAC keys.** Valkey keys have the shape
   `docmasker:result:v{CACHE_NAMESPACE_VERSION}:{operation}:{HMAC-SHA256}`, where
   the HMAC payload is a canonical JSON fingerprint of the operation, exact
   input/keys hashes, normalized output name, masking ruleset version, config
   digest, result-manifest version, keys-format version, DOCX-transformer version
-  and engine/entry/key-schema versions (`back/src/jobs/cache.py`, ADR-0003 §Phase 3
+  and engine/entry/key-schema versions (`back/src/jobs/cache/keys.py`, ADR-0003 §Phase 3
   implementation note). The canonical config snapshot digest is always in the
   payload: a manual `MASKING_CONFIG_DIGEST` can only add invalidation, never
   disable it. `CACHE_KEY_SECRET` must be stable across restarts
@@ -82,7 +87,7 @@ as sensitive operational data.
   entry (artifact id, content hash, size, content type, manifest version). Large
   ZIP/DOCX results stay in the private `cache/` spool on the `jobs-data` volume;
   hits are hash-verified and a missing/corrupt artifact becomes a miss plus
-  eviction, never a failed request (`back/src/jobs/cache.py`,
+  eviction, never a failed request (`back/src/jobs/cache/artifacts.py`,
   `test_cache.py::test_artifact_store_verifies_integrity`,
   `::test_corrupt_artifact_is_a_miss`, `::test_real_valkey_corrupt_entry_evicts`).
   A bounded, age-based worker GC collects only artifacts older than the
