@@ -7,16 +7,18 @@ component contracts stay in `front/AGENTS.md`; how to run the checks is in
 `docs/FRONTEND-AUDIT.md` §8 is a dated historical record and is intentionally
 left unchanged.
 
-**Final status (2026-11-28): DONE with screen-reader verification BLOCKED.**
-Landed in `3f4913e` (merged to `dev` as `13f562e`). The 11 axe scans and the
-keyboard/focus outcomes below are the landed evidence; they live in the `smoke`
-spec, whose current inventory is **55 tests / 4 specs** with full smoke **55/55**
-on `http://127.0.0.1:5001`. No screen reader was performed — see §4.
+**Final status (2026-11-28): DONE.** Screen-reader verification is OUT OF SCOPE
+by maintainer decision (2026-11-28); automated axe scans and manual
+keyboard/focus review are the agreed coverage. Do not claim a screen-reader
+audit. Landed in `3f4913e` (merged to `dev` as `13f562e`). The 11 axe scans and
+the keyboard/focus outcomes below are the landed evidence; they live in the
+`smoke` spec, whose current inventory is **55 tests / 4 specs** with full smoke
+**55/55** on `http://127.0.0.1:5001`. No screen reader was performed — see §4.
 
 **Claims discipline:** the scans below are a regression net for a subset of
-WCAG rules. Passing them does **not** mean the application is accessible. The
-screen-reader verification is **BLOCKED** (see §4), and no target-hardware
-assistive-technology testing was performed.
+WCAG rules. Passing them does **not** mean the application is accessible.
+Screen-reader verification is OUT OF SCOPE by maintainer decision (2026-11-28)
+(see §4); no target-hardware assistive-technology testing was performed.
 
 ## 1. Tooling decision (maintainer decision C1)
 
@@ -112,14 +114,15 @@ HeroUI/RAC keyboard semantics (roving tab index in tabs and menus, Escape
 dismissal) are used as supplied; no hand-built ARIA replaced them. Russian
 user-facing strings were preserved.
 
-## 4. What is NOT verified — BLOCKED
+## 4. Scope and what is NOT verified
 
-- **Screen-reader verification: BLOCKED.** No NVDA, JAWS, VoiceOver or other
-  screen reader is available in this environment, and no screen-reader audit
-  was performed. Names/descriptions/roles were checked structurally (unit
-  accessibility tests + automated scans + keyboard walkthrough), but actual
-  announcement order, live-region behaviour and reading experience remain an
-  **OPEN** human gate. Do not describe this work as a screen-reader audit.
+- **Screen-reader verification: OUT OF SCOPE.** Screen-reader verification is
+  OUT OF SCOPE by maintainer decision (2026-11-28); automated axe scans and
+  manual keyboard/focus review are the agreed coverage. Do not claim a
+  screen-reader audit. No screen reader was available in this environment and
+  none was performed. Names/descriptions/roles were checked structurally (unit
+  accessibility tests + automated scans + keyboard walkthrough), not through a
+  screen reader.
 - axe cannot assess point-of-view contrast, meaningful reading order, focus
   purpose, or whether an accessible name is useful to a person; the scans are
   not a substitute for the manual review above.

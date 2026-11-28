@@ -107,7 +107,9 @@ plus the single named close-grace period (250 ms + margin), and `a11y.ts`
 applies the explicit axe WCAG 2/2.1 A/AA ruleset and waits for settled UI (no
 sleep-as-evidence). The automated scans and the manual keyboard/focus outcomes
 have one canonical home in `docs/ACCESSIBILITY.md`; passing scans are not an
-accessibility claim and screen-reader verification is BLOCKED there.
+accessibility claim. Screen-reader verification is OUT OF SCOPE by maintainer
+decision (2026-11-28); automated axe scans and manual keyboard/focus review are
+the agreed coverage. Do not claim a screen-reader audit.
 
 Sleep-as-evidence is gone: the empty-keys test counts requests on an intercepted
 `**/api/unmask` route and uses one valid demask as a synchronisation barrier;

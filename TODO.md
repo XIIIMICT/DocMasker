@@ -37,12 +37,15 @@ evidence stays in the sections below; this is the compact final index.
   41 tests / 4 specs (29/10/1/1), guard positive exit 0 / negative exit 1;
   earlier 23/35/40 figures are dated. Superseded for the current inventory by
   C1's **55 tests / 4 specs** (43/10/1/1), guard pass, smoke 55/55 on `:5001`.
-- **C1/C2 accessibility — DONE, screen-reader BLOCKED.** `3f4913e` (merged
-  `13f562e`): dev-only `@axe-core/playwright@4.14.1`, 11 axe scans on WCAG 2/2.1
-  A/AA, source fixes (`aria-command-name`, `nested-interactive`,
-  `aria-valid-attr-value`, `color-contrast`) plus keyboard/focus walkthroughs.
-  No screen reader was available or used; automated scans are not an
-  accessibility audit. Canonical record: `docs/ACCESSIBILITY.md`.
+- **C1/C2 accessibility — DONE.** `3f4913e` (merged `13f562e`): dev-only
+  `@axe-core/playwright@4.14.1`, 11 axe scans on WCAG 2/2.1 A/AA, source fixes
+  (`aria-command-name`, `nested-interactive`, `aria-valid-attr-value`,
+  `color-contrast`) plus keyboard/focus walkthroughs. Screen-reader
+  verification is OUT OF SCOPE by maintainer decision (2026-11-28); automated
+  axe scans and manual keyboard/focus review are the agreed coverage. Do not
+  claim a screen-reader audit. No screen reader was available or used;
+  automated scans are not an accessibility audit. Canonical record:
+  `docs/ACCESSIBILITY.md`.
 
 **Cross-project comparison (ReportCollector vs DocMasker, verified 2026-11-28).**
 Shared: Next 16.4.6 / React 19.3.1 / HeroUI 3.2.8 / Tailwind 4.3.5 / TS 7.0.2,
@@ -52,8 +55,10 @@ React Compiler, Turbopack `next analyze`, generated OpenAPI compile-only DTOs
 typecheck/test scripts. Intentional domain differences: DM's DOCX preview/ZIP
 and masking workflow vs RC's RevoGrid/collab; no cross-repository package. This
 round added **dev-only axe in both apps and no runtime dependency** — no
-framework, state or animation library was added. Explicitly deferred/blocked:
-A3 (maintainer deferral), screen-reader audits in both repos, RC's 175
+framework, state or animation library was added. Screen-reader verification is
+OUT OF SCOPE by maintainer decision (2026-11-28); automated axe scans and
+manual keyboard/focus review are the agreed coverage. Do not claim a
+screen-reader audit. Explicitly deferred: A3 (maintainer deferral), RC's 175
 react-perf debt, target-host drills, off-host backup copies, live migrations.
 
 ## Completed (index only)
@@ -558,7 +563,7 @@ which would break monitoring).
   HeroUI `act(...)` warnings only); discovery positive exit 0 and negative exit
   1 re-run against the final tree. No push, no merge.
 
-## Accessibility C1/C2 (2026-11-28) — CLOSED (screen reader BLOCKED) (3f4913e / 13f562e)
+## Accessibility C1/C2 (2026-11-28) — CLOSED (screen reader OUT OF SCOPE) (3f4913e / 13f562e)
 
 - Dev-only `@axe-core/playwright@4.14.1` added with `bun add --dev` (Bun updated
   `bun.lock`); no runtime dep. Explicit axe tags `wcag2a`, `wcag2aa`, `wcag21a`,
@@ -574,9 +579,11 @@ which would break monitoring).
   unselected tabs; explicit `:focus-visible` outline where the installed
   HeroUI/Tailwind ring variables produced no visible ring in Chromium.
 - Manual keyboard/focus walkthroughs are recorded in the single canonical home
-  `docs/ACCESSIBILITY.md`, including **screen-reader verification = BLOCKED** —
-  no screen reader exists in this environment and none was claimed. Automated
-  scans are not an accessibility audit.
+  `docs/ACCESSIBILITY.md`. Screen-reader verification is OUT OF SCOPE by
+  maintainer decision (2026-11-28); automated axe scans and manual
+  keyboard/focus review are the agreed coverage. Do not claim a screen-reader
+  audit. No screen reader exists in this environment and none was used;
+  automated scans are not an accessibility audit.
 - **Verified:** front format/lint/typecheck/unit/coverage/build,
   `gen:openapi --check`, discovery + guard (55 tests / 4 specs), targeted axe +
   keyboard **14/14**, full smoke **55/55** on `http://127.0.0.1:5001` via
