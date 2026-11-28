@@ -79,6 +79,18 @@ describe("unpackMaskArchive", () => {
         });
         await expect(unpackMaskArchive(archive)).rejects.toThrow("Неподдерживаемая версия");
     });
+
+    it("rejects an incomplete manifest without publishing a bundle", async () => {
+        const incomplete = manifest("mask_file").replace('"complete":true', '"complete":false');
+        const archive = await makeArchive({
+            "доклад (замаскированный).docx": "docx-bytes",
+            "доклад (ключи демаскировки).yaml": "Физлица:\n  - Иван Петров",
+            "manifest.json": incomplete,
+        });
+        await expect(unpackMaskArchive(archive)).rejects.toThrow(
+            "Некорректный отчёт о результате.",
+        );
+    });
 });
 
 describe("unpackRestoreArchive", () => {
@@ -104,5 +116,19 @@ describe("unpackRestoreArchive", () => {
             "manifest.json": "{ not json",
         });
         await expect(unpackRestoreArchive(broken)).rejects.toThrow("Отчёт о результате повреждён.");
+    });
+
+    it("rejects a manifest that claims complete but lists a rejected part", async () => {
+        const contradictory = manifest("unmask_file").replace(
+            '"rejected_parts":[]',
+            '"rejected_parts":["word/embeddings/oleObject1.bin"]',
+        );
+        const archive = await makeArchive({
+            "доклад (демаскированный).docx": "docx-bytes",
+            "manifest.json": contradictory,
+        });
+        await expect(unpackRestoreArchive(archive)).rejects.toThrow(
+            "Некорректный отчёт о результате.",
+        );
     });
 });

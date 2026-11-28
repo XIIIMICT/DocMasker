@@ -118,8 +118,10 @@ TypeScript indexing"). Durable coding rules:
    `shared/api/manifest-validation.ts` (`parseResultManifest`,
    `ManifestValidationError` with a fixed Russian detail). Generated OpenAPI
    DTOs are compile-time only and do not cover this ZIP-internal file — never
-   replace the guard with a `as ResultManifest` cast or `?? 0` defaults. Tooltip
-   body: `shared/mask-stats.ts::statsBreakdown` (`unique (total с повторами)`
+   replace the guard with a `as ResultManifest` cast or `?? 0` defaults. Only
+   `complete === true` with empty `coverage.unprocessed_text_parts` and
+   `coverage.rejected_parts` is accepted; unknown extra fields stay tolerated.
+   Tooltip body: `shared/mask-stats.ts::statsBreakdown` (`unique (total с повторами)`
    per label, plus `Не применено N:` on demasking when `N != 0`). DOCX
    occurrence counts come from `placeholder-count.ts::countPlaceholdersInDocx`:
    a pre-operation scan of the **uploaded masked file** (the demasking input),

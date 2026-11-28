@@ -16,7 +16,8 @@ export interface ResultManifest {
     schema_version: 1;
     operation: ManifestOperation;
     status: "succeeded";
-    complete: boolean;
+    /** Literal `true`: an incomplete result is never accepted as a download. */
+    complete: true;
     masking_ruleset_version: number;
     exception_config_digest: string;
     input: { sha256: string; size_bytes: number };
@@ -83,6 +84,12 @@ function stringValue(value: unknown): string {
 function flag(value: unknown): boolean {
     if (typeof value !== "boolean") invalid();
     return value;
+}
+
+/** A delivered result must be complete: false, null and non-booleans fail closed. */
+function completedFlag(value: unknown): true {
+    if (value !== true) invalid();
+    return true;
 }
 
 /** Non-negative, exactly representable integer — rejects negatives, NaN, Infinity and huge values. */
@@ -152,20 +159,27 @@ function parseProcessed(
     });
 }
 
-function parseCoverage(value: unknown): ResultManifest["coverage"] {
+function parseCoverage(value: unknown, complete: true): ResultManifest["coverage"] {
     const raw = record(value);
+    const unprocessed = stringArray(raw.unprocessed_text_parts);
+    const rejected = stringArray(raw.rejected_parts);
+    // The backend never delivers a succeeded result with inspected scope missing:
+    // a contradiction between the flag and either coverage array fails closed.
+    if (complete && (unprocessed.length > 0 || rejected.length > 0)) invalid();
     return {
         processed_parts: stringArray(raw.processed_parts),
         ...(raw.processed === undefined ? {} : { processed: parseProcessed(raw.processed) }),
-        unprocessed_text_parts: stringArray(raw.unprocessed_text_parts),
-        rejected_parts: stringArray(raw.rejected_parts),
+        unprocessed_text_parts: unprocessed,
+        rejected_parts: rejected,
         raster_image_ocr: stringValue(raw.raster_image_ocr),
     };
 }
 
 /**
  * Parse and fully validate external manifest bytes for the expected operation.
- * Every failure throws `ManifestValidationError` with a stable safe detail.
+ * `complete` must be exactly true and both coverage exception arrays empty;
+ * unknown extra fields stay tolerated. Every failure throws
+ * `ManifestValidationError` with a stable safe detail.
  */
 export function parseResultManifest(text: string, operation: ManifestOperation): ResultManifest {
     let parsed: unknown;
@@ -181,6 +195,7 @@ export function parseResultManifest(text: string, operation: ManifestOperation):
     if (raw.operation !== operation || raw.status !== "succeeded") {
         throw new ManifestValidationError("manifest_invalid");
     }
+    const complete = completedFlag(raw.complete);
     const input = record(raw.input);
     const output = record(raw.output);
     const cache = record(raw.cache);
@@ -188,7 +203,7 @@ export function parseResultManifest(text: string, operation: ManifestOperation):
         schema_version: MANIFEST_SCHEMA_VERSION,
         operation,
         status: "succeeded",
-        complete: flag(raw.complete),
+        complete,
         masking_ruleset_version: count(raw.masking_ruleset_version),
         exception_config_digest: stringValue(raw.exception_config_digest),
         input: { sha256: stringValue(input.sha256), size_bytes: count(input.size_bytes) },
@@ -197,7 +212,7 @@ export function parseResultManifest(text: string, operation: ManifestOperation):
             ...(output.keys_name === undefined ? {} : { keys_name: stringValue(output.keys_name) }),
         },
         statistics: parseStatistics(raw.statistics, operation),
-        coverage: parseCoverage(raw.coverage),
+        coverage: parseCoverage(raw.coverage, complete),
         cache: { hit: flag(cache.hit), namespace_version: count(cache.namespace_version) },
     };
 }

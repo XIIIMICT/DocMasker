@@ -442,6 +442,42 @@ which would break monitoring).
   smoke runs and passed on rerun and in isolation; no assertion was weakened.
   No push or merge.
 
+## Strict result-manifest completeness (A2, 2026-11-28) — CLOSED
+
+- Proven gap: `parseResultManifest` only checked that `complete` was a boolean,
+  so a ZIP manifest with `status: "succeeded"` and `complete: false` (or a
+  non-empty coverage exception array) was accepted and could be shown as a
+  complete downloadable result. The producer fails closed on such content
+  before publishing an archive, so no legitimate result changes.
+- Exact rule for both `mask_file` and `unmask_file`: `complete` must be exactly
+  `true` — missing, `null`, `false` or a non-boolean is rejected regardless of
+  the coverage arrays — and both `coverage.unprocessed_text_parts` and
+  `coverage.rejected_parts` must be empty (a contradiction with `complete:
+  true` is rejected). `ResultManifest.complete` is now the literal type `true`.
+  Unknown extra fields remain tolerated at every level, and the existing
+  `ManifestValidationError` codes and fixed Russian detail are unchanged.
+- Backend parity checked, semantics unchanged: `build_mask_manifest` /
+  `build_unmask_manifest` derive `complete` from those two arrays, while
+  `transform_package` / `transform_package_to_file` reject unsupported content
+  before any archive is published. One contract test was added for both
+  operations: `test_ooxml.py::test_successful_manifests_are_complete_with_empty_coverage_arrays`.
+- Frontend unit cases cover both operations for `complete: false`, missing /
+  null / non-boolean, each contradictory array, each array with `complete:
+  false`, empty arrays with `true`, unknown extras and a PII/filename/key-free
+  fixed error; archive-unpack tests prove no bundle escapes on an incomplete or
+  contradictory manifest. A3 stays **DEFERRED** by maintainer decision and A4
+  (fresh discovery measurements) is a separate task.
+- **Verified:** backend `ruff check`, `ruff format --check` (99 files), `ty
+  check --python-platform linux`, full `pytest -q --cov=src --cov-branch
+  --cov-fail-under=80` with the disposable PostgreSQL/Valkey stand — **544
+  passed / 4 skipped, 87.19% branch coverage**; front `format:check` (99
+  files), `lint:check`, `typecheck` (90 files), `test` (**313 pass / 0 fail**,
+  1068 `expect()` calls, 31 files; pre-existing HeroUI `act(...)` warnings
+  only), coverage gate **90.03%** (2412/2679), `build` (9 routes),
+  `gen:openapi --check`, `prek run --all-files`, discovery guard **41 tests /
+  4 specs**, targeted manifest Playwright **1/1** and full `smoke` **41/41**
+  (46.6 s) on `http://127.0.0.1:5001`. No push, no merge.
+
 ## Deferred by maintainer decision
 
 - **A3 — runtime validation of job data at untrusted boundaries — DEFERRED by
