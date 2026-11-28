@@ -183,6 +183,15 @@ database is contacted.
   procedure, the `POSTGRES_SCHEMA` value or a PostgreSQL major upgrade, and
   before a maintenance window that depends on a rollback.
 
+The separate isolated operational drill suite (`back/tests/test_operational_drills.py`,
+driven by `src.scripts.operational_drills`) keeps its harness in the
+`back/tests/drill_support/` package: `helpers.py` holds the shared doubles, SQL
+probes and integrity checks, `scenarios.py` holds the crash/resource scenarios,
+and `__init__.py` re-exports every name so `from drill_support import <name>`
+keeps working. Its `backup_restore_rehearsal` scenario is the disposable
+pg_dump/artifact/restore consistency check; it runs only when
+`DOCMASKER_DRILL_PG_CONTAINER` names a `dm-drill-*` container.
+
 ## Off-host copy (OPEN by default)
 
 `BACKUP_OFFHOST_TARGET` is optional. It must be a whitespace-separated command
