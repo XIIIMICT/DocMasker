@@ -3,11 +3,11 @@
 Reproducible measurements live in `back/benchmarks/` (see its `README.md`);
 this document owns the interpretation, the resource limits and the remaining
 hotspots. Run the probes **before and after** any performance-touching change
-and record the numbers here or in `docs/PRODUCTION_READINESS.md`.
+and record the numbers here.
 
 All benchmark inputs are synthetic Russian texts with PII-shaped patterns (no
-real data, no network). Baseline recorded 2026-11-22 on Windows / Docker
-Desktop 29.8.2, container `python:3.15-alpine`, CPython 3.15.2.
+real data, no network). The baseline was recorded on Windows / Docker Desktop
+29.8.2, container `python:3.15-alpine`, CPython 3.15.2.
 
 ## Reproduce
 
@@ -24,7 +24,7 @@ uv run --directory back python -m benchmarks.server_probes
 Or against the production image (see `back/benchmarks/README.md` for the exact
 `docker run` command).
 
-## Recorded baseline (stage 1, before the fixes)
+## Baseline (pre-fix reference)
 
 ### Text — `benchmarks.text_mask` (container)
 
@@ -50,7 +50,7 @@ per-paragraph cost dominates:
 | 5,000 paragraphs | 77 KB | 55 | **115 s** | 997 ms | 193 MB |
 | 200 paragraphs + 200×2 nested table | 41 KB | 57 | 10.5 s | 152 ms | 202 MB |
 
-### Server probes (stage-1 context, now fixed)
+### Server probes (baseline context, now fixed)
 
 - `/api/mask` with 36 KB text: 5.4 s wall; concurrent `/health` p95 jumped
   from 2–3 ms to **5,353 ms** — the async endpoint blocked the event loop with
@@ -59,12 +59,12 @@ per-paragraph cost dominates:
   1.4 MB @ 5,000 — header-based metadata does not scale and leaks PII (F-05).
 - Garbage / non-DOCX ZIP uploads → HTTP 500; no size limits (F-04).
 
-## What was fixed (stages 2–4)
+## Fixes applied to those baseline paths
 
 | Finding | Fix | Status |
 |---|---|---|
 | F-01 event loop blocked | `masking/executor.py::run_cpu` offloads natasha/python-docx/ZIP to a bounded `ThreadPoolExecutor` (`JOBS_CONCURRENCY * 2` slots, semaphore per event loop, overflow → 429); `/health` stays responsive | done |
-| F-02 detect() super-linear on large texts | **Phase 7 fixed algorithmically**: bounded overlapping windows with absolute offsets and boundary dedupe (`masking/windowed.py`), candidate-limited `AddrExtractor` (address markers only), DOCX prefilter and thread-local masker. 360 KB: 211.7 s / ~10 GB → 28.3 s / 144 MB; DOCX 5,000 paragraphs: 115 s → 7.4 s (before/after above) | done |
+| F-02 detect() super-linear on large texts | **Fixed algorithmically**: bounded overlapping windows with absolute offsets and boundary dedupe (`masking/windowed.py`), candidate-limited `AddrExtractor` (address markers only), DOCX prefilter and thread-local masker. 360 KB: 211.7 s / ~10 GB → 28.3 s / 144 MB; DOCX 5,000 paragraphs: 115 s → 7.4 s (before/after above) | done |
 | F-03 DOCX cross-paragraph dedupe undercount | dedupe removed; 5,000 identical occurrences report 5,000 | done |
 | F-04 upload validation | `docx_validation.py`: OPC/ZIP structure, entry count, uncompressed size, compression ratio, encryption → 413/415 with Russian details; text/keys char limits | done |
 | F-05 unused keys in header | restore ZIP manifest `{"unused_keys": [...]}` in the body | done |
@@ -95,16 +95,16 @@ tracks re-measurement.
 | `JOBS_POLL_SECONDS` | 1 | worker poll interval |
 | `JOBS_TTL_SECONDS` | 3600 | result expiry / sweep |
 
-The sync thresholds come from the stage-1 measurements; the job defaults (32 /
-4 / 45) were re-anchored by the 2026-11-27 RSS/latency measurements below and
-are deliberately conservative. They keep small inputs on the synchronous path
+The sync thresholds come from the baseline measurements; the job defaults (32 /
+4 / 45) were re-anchored by the RSS/latency measurements below and are
+deliberately conservative. They keep small inputs on the synchronous path
 and move large ones to the worker; capacity remains hard-bounded
 (ADR-0002). `front/src/instrumentation.ts` sets `headersTimeout: 60_000` /
 `bodyTimeout: 600_000`; `shared/api/proxy.ts` uses `AbortSignal.timeout` — 15 s
 for JSON/job polling, 10 min for the synchronous file endpoints. Long work
 never depends on a held-open connection.
 
-### Phase 7 — after (2026-11-24, host toolchain)
+### Current detection and DOCX throughput (host toolchain)
 
 `benchmarks/profile_detection.py --size N` (one process per size, so peak RSS
 reflects the real `detect()` pipeline; raw extractor diagnostics moved behind
@@ -120,7 +120,7 @@ The ~4.6–7.5× speedup and flat ~144 MB RSS come from these changes:
 1. `masking/windowed.py` splits long text into overlapping structural windows
    (8 KB min / 4096 chars / 512 overlap), re-bases spans to absolute offsets,
    never cuts through a token and deduplicates boundary spans deterministically
-   (§9.1). `checkpoint` runs between windows. DM-5 adds a 16,384-char hard
+   (`back/src/masking/AGENTS.md`). `checkpoint` runs between windows. DM-5 adds a 16,384-char hard
    ceiling: when no boundary fits in a chunk, that window extends forward to the
    next whitespace but no further; an even longer unbroken run fails with a 422
    instead of being cut. The common case adds no extra window.
@@ -153,8 +153,8 @@ dedupe undercount; the wall-time comparison is still valid (same input shapes).
 
 ## Remaining hotspots (deferred, see `TODO.md`)
 
-- **F-02** — **closed in Phase 7** (windowing + candidate-limited
-  `AddrExtractor` + prefilter); see the before/after table above.
+- **F-02** — **closed** (windowing + candidate-limited `AddrExtractor` +
+  prefilter); see the before/after table above.
 - **F-07** obsolete: Phase 5 replaced python-docx DOM traversal with the OPC
   transformer; the remaining part-level DOM cost is documented in
   `docs/DOCX_SUPPORT.md`.
@@ -169,7 +169,7 @@ dedupe undercount; the wall-time comparison is still valid (same input shapes).
   needs an ADR; PostgreSQL coordinates workers but the artifact spool is
   single-host by decision (ADR-0003).
 
-## P2.11 bounded-memory DOCX path (2026-11-26)
+## Bounded-memory DOCX path
 
 File jobs now use `transform_package_to_file()`: the OPC inventory materialises
 only parts that will be transformed, unchanged media/binary entries are copied
@@ -201,9 +201,9 @@ serially written result ZIP, and the browser's full-result Blob + JSZip
 unpacking (`front/src/shared/api/jobs.ts`) — client-side streaming is not
 claimed. Sync routes remain bounded by `SYNC_MAX_DOCX_BYTES`.
 
-## DM-4 one-pass output construction (2026-11-26)
+## DM-4 one-pass output construction
 
-### Re-verified finding
+### Finding
 
 `masking/service.py::mask_text` rebuilt the whole result once per detected
 entity (`masked = masked[:start] + marker + masked[end:]`), so output
@@ -259,9 +259,9 @@ runtime improvement is claimed** from this change alone; the measured win is
 the removal of the quadratic rewrite, which previously dominated for dense,
 PII-heavy inputs.
 
-## DM-3 bounded OPC inventory (2026-11-26)
+## DM-3 bounded OPC inventory
 
-### Re-verified mismatch
+### Finding
 
 `build_inventory()` used to call `archive.read()` for **every processable part**
 and store the bytes on each `_Part`, while `docs/DOCX_SUPPORT.md` and
@@ -304,8 +304,8 @@ browser's full-result Blob and JSZip unpacking remain the client-side bound.
 ## Capacity facts worth keeping
 
 - natasha's `MorphVocab` + extractors cost ~110–170 MB of in-memory dictionary
-  per instance and are not proven thread-safe. Since Phase 7 `get_masker()`
-  returns **one masker per thread** (`threading.local()`), not one process-wide
+  per instance and are not proven thread-safe. `get_masker()` returns **one
+  masker per thread** (`threading.local()`), not one process-wide
   `@cache` instance; the sync CPU pool and worker use their own. Keep
   `JOBS_CONCURRENCY` conservative and measure peak RSS when changing it.
   Never construct a `RuleBasedMasker` per request.
@@ -313,7 +313,7 @@ browser's full-result Blob and JSZip unpacking remain the client-side bound.
   5,000-paragraph document is ~2 min of CPU — exactly the case the job path
   exists for.
 
-## Concurrency and queue budget (2026-11-27, P1-4)
+## Concurrency and queue budget
 
 **Method (MEASURED).** Fresh process per concurrency value, synthetic disposable
 DOCX (`drill_support.build_docx(40, …)`) with fabricated PII-shaped marker text,
@@ -338,10 +338,8 @@ so wall/latency are conservative under contention.
 The process peak is essentially **flat (~431–433 MB) from 1 to 8 threads**: the
 natasha thread-local maskers share the same resident dictionary pages on this
 host, so "Δ RSS/worker" is a conservative *allocation* of one process's RSS,
-not the incremental cost of adding a worker. The audit's `~110 MB/thread` remains
-an **UNVERIFIED ESTIMATE**; the earlier proxy deltas
-(`84.4 / 120.1 / 166.0 / 199.2 MB` at 2/4/6/8 in
-`docs/REMEDIATION-PHASE0-RESEARCH.md`) are warm-masker probes, not full worker RSS.
+not the incremental cost of adding a worker. The `~110 MB/thread` figure remains
+an **UNVERIFIED ESTIMATE**; warm-masker proxy deltas are not full worker RSS.
 
 **Arithmetic.** Container `mem_limit` is absent from every Compose file —
 **UNMEASURED**. Budget assumption (documented, not measured): **1 GiB** per
@@ -360,7 +358,7 @@ come from these same numbers. This is a **hard bound** (`JOBS_MAX_ACTIVE` >
 `JOBS_CONCURRENCY` is enforced at startup) with no server-side retry; a
 released slot is immediately reusable (`test_jobs_api.py::test_admission_boundary_rejects_then_admits_after_release`).
 
-### Sustained soak at `JOBS_CONCURRENCY=4` (2026-11-27)
+### Sustained soak at `JOBS_CONCURRENCY=4`
 
 **MEASURED.** Same disposable PostgreSQL stand and cache double as the table
 above; a single long-lived harness process (outside the repo,
@@ -384,10 +382,6 @@ production data or network was involved.
 | Change, last 10 min vs 5–15 min | +612.9 MB (+4.2%) |
 | RSS at t≈1798 s | 15,244.5 MB |
 
-An earlier 1800 s attempt lost only its *summary* to a harness bug after the
-load loop (its raw trace at `…dm_bp_soak_c4.jsonl` covers ~1776 s and shows the
-same plateau); the numbers above come from the completed rerun.
-
 **Interpretation.** Working set jumps from ~108 MB to ~15 GB within the first
 3 minutes, then oscillates between ~10.4 and ~17.0 GB with no monotonic climb;
 the late-10-minute mean is 4.2% above the 5–15-minute mean. These are **whole
@@ -401,7 +395,7 @@ be excluded from a working-set proxy. Target-host Linux RSS soak remains an
 **OPEN** operator gate (`docs/PRODUCTION_READINESS.md`, `TODO.md`). A later
 default increase would need measured *container* RSS, not this proxy.
 
-### Admission/backpressure drill (2026-11-27)
+### Admission/backpressure drill
 
 **MEASURED.** A Granian backend on a disposable database/spool
 (`JOBS_MAX_ACTIVE=5`, `JOBS_CONCURRENCY=4`) accepted five distinct `202`
@@ -413,7 +407,7 @@ No server-side retry or silent drop occurred. `promtool check rules` reported
 run (no staging stand); both new alerts remain PROVISIONAL. Full method and
 limits: `docs/OPERATIONS.md` §8.
 
-## Isolated concurrency drill (2026-11-27, DM-3)
+## Isolated concurrency drill (DM-3)
 
 Repeatable harness: `uv run --directory back python -m src.scripts.operational_drills
 --database-url <disposable-url> --report back/benchmarks/operational-drill-results.json`
@@ -445,7 +439,7 @@ multiple workers) remain an OPEN operator gate in
 - A `.txt` never reaches the backend: the front reads it into the input text
   client-side, so text-mode limits are pure `MAX_TEXT_CHARS` / threshold math.
 
-## Frontend bounded placeholder scan (2026-11-28, SYNTHETIC / MEASURED)
+## Frontend bounded placeholder scan (SYNTHETIC / MEASURED)
 
 **Re-verified defect.** The old `scanPlaceholdersInDocx` called
 `entry.async("string")` and compared `xml.length` only afterwards. On a

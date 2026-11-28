@@ -27,8 +27,8 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 `bun run format` can rewrite line breaks in untouched files — check `git status`
 and `git diff` afterwards. The current unit inventory and the Playwright `smoke`
 discovery guard live in `docs/TESTING.md` §1. The `smoke`
-project currently lists 55 tests (measured 2026-11-28 after C1/C2) in four spec
-files (`health`, `smoke`, `rerender-smoke`, `hover-smoke`) and needs a prepared
+project currently lists 55 tests in four spec files
+(`health`, `smoke`, `rerender-smoke`, `hover-smoke`) and needs a prepared
 stack; probe files are excluded. CI pipes `playwright test --project=smoke --list` into
 `bun e2e/check-smoke-discovery.mjs`, which requires the exact four basenames,
 ≥20 tests in the main spec and ≥34 overall — `smoke.spec.ts` can no longer be
@@ -184,8 +184,9 @@ TypeScript indexing"). Durable coding rules:
    with `background-color`/`opacity` at `--app-motion-fast: 140ms`. Do not
    reintroduce the snap or the `translateX` reveal — the measured layout cost is
    explicitly accepted. Reduced motion still zeroes all three tokens to `0ms`;
-   the compact Tooltip and hover/focus/keyboard end states stay intact. Evidence
-   and computed Chromium values: `docs/FRONTEND-AUDIT.md` §9.
+   the compact Tooltip and hover/focus/keyboard end states stay intact. Current
+   values and decision record: `docs/FRONTEND-AUDIT.md` §"Current frontend
+   contracts" and `docs/ARCHITECTURE.md`.
 10. Accessibility scans use `@axe-core/playwright` **dev-only** with the explicit
     tags `wcag2a`/`wcag2aa`/`wcag21a`/`wcag21aa` (no rule disabling), run from
     the `smoke` spec via `e2e/helpers/a11y.ts` after animations settle. React

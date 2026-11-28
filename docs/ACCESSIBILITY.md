@@ -3,14 +3,13 @@
 This is the **single canonical home** for DocMasker's accessibility strategy,
 the automated axe coverage and the manual keyboard/focus review. Static
 component contracts stay in `front/AGENTS.md`; how to run the checks is in
-`docs/TESTING.md`; the earlier "axe was not added" line in
-`docs/FRONTEND-AUDIT.md` §8 is a dated historical record and is intentionally
-left unchanged.
+`docs/TESTING.md`; scope and deferrals are summarised in
+`docs/FRONTEND-AUDIT.md` §"Remaining limitations and deferrals".
 
-**Final status (2026-11-28): DONE.** Screen-reader verification is OUT OF SCOPE
+**Current status: DONE.** Screen-reader verification is OUT OF SCOPE
 by maintainer decision (2026-11-28); automated axe scans and manual
 keyboard/focus review are the agreed coverage. Do not claim a screen-reader
-audit. Landed in `3f4913e` (merged to `dev` as `13f562e`). The 11 axe scans and
+audit. The 11 axe scans and
 the keyboard/focus outcomes below are the landed evidence; they live in the
 `smoke` spec, whose current inventory is **55 tests / 4 specs** with full smoke
 **55/55** on `http://127.0.0.1:5001`. No screen reader was performed — see §4.

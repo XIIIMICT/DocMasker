@@ -21,7 +21,7 @@ become durable jobs.
 | Frontend | `front/AGENTS.md` | `docs/ARCHITECTURE.md` (front), `docs/API.md` |
 | Compose, infra, CI | `infra/AGENTS.md` | `docs/WORKFLOW.md`, `docs/OPERATIONS.md`, `docs/SECURITY.md` |
 | Tests / quality | per-area guides | `docs/TESTING.md`, `docs/WORKFLOW.md` |
-| Decisions / status | `docs/adr/` | `docs/PRODUCTION_READINESS.md`, `TODO.md` |
+| Decisions / status / gates | `docs/adr/` | `docs/PRODUCTION_READINESS.md` (OPEN operator gates), `TODO.md` |
 
 Stack: `back/` FastAPI on Granian (Python 3.15, **uv**) + a separate worker;
 `front/` Next.js 16 / React 19 / HeroUI v3 / Tailwind 4 (**bun**). Ports: front

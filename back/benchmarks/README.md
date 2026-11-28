@@ -1,7 +1,7 @@
-# Baseline benchmarks (production-readiness stage 1, 2026-11-22)
+# Baseline benchmarks
 
 Reproducible probes for the masking pipeline. Run them before and after any
-performance-touching change; record the numbers in `docs/PRODUCTION_READINESS.md`.
+performance-touching change; record the numbers in `docs/PERFORMANCE.md`.
 
 All inputs are synthetic Russian texts with PII-shaped patterns (no real data,
 no network). The generators live in `benchmarks/synthetic.py`.
@@ -42,7 +42,7 @@ docker build --target prod -t dm-back:baseline ./back
 docker run --rm -v "$(pwd)/benchmarks:/benchmarks:ro" -e PYTHONPATH=/app dm-back:baseline python /benchmarks/text_mask.py
 ```
 
-## Recorded P2.11 bounded-memory run (2026-11-26, host Windows)
+## Recorded bounded-memory run (host Windows)
 
 `python -m benchmarks.bounded_memory` generates synthetic DOCX packages and
 runs `transform_package_to_file`. Raw output: `benchmarks/bounded-memory-results.json`.

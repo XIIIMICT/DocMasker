@@ -68,7 +68,7 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
-Four spec files, **55 tests** at the 2026-11-28 `--list` run after C1/C2 (43 in
+Four spec files, **55 tests** at the current `--list` run (43 in
 `smoke.spec.ts` — 29 existing plus 11 axe scans and 3 keyboard/perceivability
 walkthroughs — 10 hover, 1 rerender, 1 health):
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
@@ -91,7 +91,7 @@ bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
 bun e2e/check-smoke-discovery.mjs smoke-tests.txt
 ```
 
-A negative proof (2026-11-28) renamed the `smoke.spec.ts` entries in a **copy**
+A negative proof renamed the `smoke.spec.ts` entries in a **copy**
 of the listing (no committed spec was touched): the guard exited 1 with
 `missing smoke spec: smoke.spec.ts` / `smoke.spec.ts lists 0 tests, expected at
 least 20`. Removing those lines instead also produced `smoke project lists 12
@@ -116,20 +116,17 @@ Sleep-as-evidence is gone: the empty-keys test counts requests on an intercepted
 the rerender test observes node identity plus the named debounce pass; hover's
 explicitly shorter before-grace re-entry delay remains because that timing is
 the behaviour under test.
-Recorded run counts in `docs/WORKFLOW.md` and `docs/PRODUCTION_READINESS.md`
-are historical records (the 41 there is the pre-C1 measurement); rely on
-`--list` for the current inventory. Follow-up final evidence: A1 `4158221`
-(merged `4ed0b39`), A2 `ca61d5e` (merged `d7d2b6a`), A4 `82de28f`
-(merged `761e6e2`), C1/C2 `3f4913e` (merged `13f562e`); A3 is **DEFERRED** by
-maintainer decision. Full status is in root `TODO.md` §"Follow-up remediation
-2026-11-28 — FINAL".
+Older 23/35/40/41 counts are dated records in git; rely on `--list` for the
+current inventory. A1, A2, A4 and C1/C2 are implemented, A3 is **DEFERRED** by
+maintainer decision. Current status: root `TODO.md` §"Follow-up remediation —
+current state"; contracts: `docs/FRONTEND-AUDIT.md`.
 
 ## 2. Required failure scenarios (Brief §14, condensed)
 
 | Scenario | Status | Evidence / gap |
 |---|---|---|
 | Migration from an empty DB | **Covered** | CI `back` job runs `alembic upgrade head`; isolated prod stack migrates before smoke (`.github/workflows/ci.yaml`) |
-| Previous-schema / live-data migration | **Recorded** | Baseline had 0 rows; approved quiesce/reset instead of a data migration (`docs/IMPLEMENTATION_BASELINE.md`, ADR-0003). No live-data migration drill |
+| Previous-schema / live-data migration | **Recorded** | The pre-migration SQLite `jobs` table had 0 rows; the approved path was quiesce/reset, not a data migration (ADR-0003 §Migration notes; history in git). No live-data migration drill |
 | Two workers claim without duplicate live ownership; `SKIP LOCKED` | **Covered** | `test_jobs_store.py::test_concurrent_claims_never_share_a_lease`, `::test_claim_is_exclusive_and_bounded`, `::test_staging_is_not_claimable` |
 | Heartbeat survives a blocking operation beyond the lease | **Covered** | `test_jobs_worker.py::test_heartbeat_keeps_a_long_operation_owned` (sleeps >2 lease intervals), `::test_lease_loss_stops_execution` |
 | Stale fencing token cannot heartbeat / fail / cancel / succeed / publish | **Covered** | `test_jobs_worker.py::test_stale_token_cannot_publish_a_result`; `test_jobs_store.py::test_heartbeat_fails_without_ownership` |
@@ -154,13 +151,13 @@ maintainer decision. Full status is in root `TODO.md` §"Follow-up remediation
 | Sync vs job manifest parity; frontend reads manifest, not headers | **Covered** | `test_ooxml.py::test_sync_and_job_manifest_parity`, `::test_manifest_validation_rejects_bad_schema`, `::test_successful_manifests_are_complete_with_empty_coverage_arrays`, `test_mask_file.py`; front `manifest-validation.test.ts` / `mask-archive.test.ts` completeness cases; e2e `smoke.spec.ts` manifest scenario |
 | Stable error envelope, no PII/path/traceback in errors or rows or keys | **Covered** | `test_errors.py::test_every_error_has_code_detail_request_id_and_header`, `::test_request_validation_error_does_not_echo_submitted_pii`; `test_jobs_store.py::test_no_pii_columns_in_schema`; `test_cache.py::test_key_does_not_leak_source_hash` |
 | Bounded route timeouts; streaming upload counts real bytes; results streamed | **Covered** | `timeouts.test.ts`, `mask.test.ts::proxy timeouts`; `test_uploads.py::test_stage_upload_counts_real_bytes_not_content_length`, `::test_stage_upload_rejects_oversized_stream_and_cleans_up`; `docs/API.md` §Proxy timeout policy |
-| `Cache-Control: no-store` on result; verify remaining document/key responses | **Partial** | `test_jobs_api.py::test_result_serves_zip_with_no_store`; other responses still a `TODO.md` stage-6 item |
-| OpenAPI → generated TS types with CI freshness | **TODO (deferred)** | Maintainer decision 2026-11-24; handwritten DTOs remain (`TODO.md`, `docs/API.md`) |
+| `Cache-Control: no-store` on every `/api/*` response (PII JSON, ZIPs, typed errors) | **Covered** | `test_response_headers.py`, `test_jobs_api.py::test_result_serves_zip_with_no_store`; Next proxies forward both headers (`docs/API.md`, `back/AGENTS.md` §11) |
+| OpenAPI → generated TS types with CI freshness | **Covered** | `python -m src.openapi_export` + pinned dev-only generator; `gen:openapi --check` in CI (`docs/API.md` §"OpenAPI contract") |
 | Restore procedure for PostgreSQL + artifacts + config | **Drilled (local)** | Disposable `pg_dump`/artifact-copy/`pg_restore` rehearsal in `test_backup_restore_rehearsal`: 2 rows restored identically, 2 artifact SHA-256s identical, synthetic exception-config digest unchanged; no private exception file read. Target-host rehearsal with the real RO-mounted config remains **OPEN** (`docs/PRODUCTION_READINESS.md`) |
 | Liveness/readiness documented and exercised | **Partial** | `/health` used by Compose healthchecks and `health.spec.ts`; `/ready` implemented and unit-tested (`test_readiness.py`) but not wired into Compose/CI (deferred stage 6) |
 | Operations runbooks for worker/DB/cache/storage failures | **Covered** | `docs/OPERATIONS.md` §6 |
 | Target-hardware stress: queue pressure, worker/DB/Valkey restart, disk full, result expiry, cancellation, N concurrent large documents | **Drilled (local), target host OPEN** | Phase 8 isolated CI-stack drill covered 3 concurrent jobs, dedupe, cancel, worker/DB restarts, Valkey flush and result download. The DM-3 drill adds simulated ENOSPC, expiry/byte audit (2 rows swept; 1 missing artifact counted; 1 orphan reported and retained), and 1/2/N synthetic DOCX batches with wall/CPU/RSS/queue-wait/pool-wait recorded in `back/benchmarks/operational-drill-results.json` and `docs/PERFORMANCE.md`. No throughput target is asserted. Target hardware, a real disk-full filesystem and POSIX SIGTERM remain operator gates |
-| Precision/recall corpus, TLS-bypass replacement, container hardening, branch protection | **TODO / deferred** | `TODO.md`; branch protection is a GitHub-side setting (`docs/WORKFLOW.md`) |
+| Precision/recall corpus, TLS-bypass replacement, container hardening, branch protection | **TODO / deferred** | `TODO.md` §"Deferred by maintainer decision" and §"Blocked / external"; branch protection is a GitHub-side setting (`docs/WORKFLOW.md`) |
 
 ## 3. Commands
 
@@ -223,7 +220,7 @@ docker rm -f dm-drill-pg-YYYYMMDD
 The conductor applies Alembic, creates a temporary `JOBS_DIR`, runs only
 `tests/test_operational_drills.py` and writes JSON evidence (no credentials,
 no input text). Omit `--pg-container` to skip the backup rehearsal and record
-it as an OPEN gate instead. The 2026-11-27 run produced **13 passed**; the full
+it as an OPEN gate instead. The local run produced **13 passed**; the full
 suite with `TEST_DATABASE_URL` set to that disposable DB produced **504 passed,
 4 skipped, 86.80% branch coverage**.
 
@@ -296,8 +293,8 @@ docker compose -f infra/compose.ci.yaml down --volumes --remove-orphans
 `infra/compose.ci.yaml` never loads the developer's `.env` or volumes; the
 `--volumes` teardown is safe **only** for that isolated CI stack — never run it
 against the dev/prod data stand. The prod image is built once and shared by
-`back` and `worker` (private `jobs-data` volume). Historical results of this
-full matrix are recorded in `docs/PRODUCTION_READINESS.md` and `TODO.md`;
-repeat the commands above for the current branch rather than inheriting a
-recorded pass. CI branch protection / `CI required` remains a GitHub-side
-setting and cannot be asserted from the repository.
+`back` and `worker` (private `jobs-data` volume). OPEN gates for repeating this
+on the authorized host are in `docs/PRODUCTION_READINESS.md`; local drill
+evidence is in §2 above. Never inherit a recorded pass. CI branch protection /
+`CI required` remains a GitHub-side setting and cannot be asserted from the
+repository.
