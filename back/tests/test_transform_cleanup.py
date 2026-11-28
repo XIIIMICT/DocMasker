@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from docx import Document as DocxDocument
 from httpx2 import ASGITransport, AsyncClient
-from test_ooxml import _build_package
+from ooxml_fixtures import _build_package
 
 from src.jobs.operations import execute
 from src.jobs.storage import ArtifactStore
