@@ -175,18 +175,55 @@ product/API surface. Both alternatives were rejected; the client scan stays.
 `front/src/shared/api/placeholder-count.ts` therefore keeps the established
 raw-XML semantics (every non-directory `.xml` part except
 `[Content_Types].xml`, `/\[([A-Z]+)_\d+\]/g`, labels lowercased — no inference
-from filenames, headers, YAML text or placeholder uniqueness). It is hardened
-instead: `scanPlaceholdersInDocx` decompresses parts **sequentially** (one part
-resident at a time, concurrency 1) and bounds both the entry count (10,000, the
-backend hard limit) and the cumulative decompressed XML bytes (64 MiB); a
-`.xml`-named entry without XML markup is skipped rather than regex-scanned.
-Exceeding a bound fails closed through the workflow's existing Russian
-result-pane error — never a fabricated `0`. `countPlaceholdersInDocx` memoises
-the promise per Blob in a `WeakMap`, so a mode switch or re-selection does not
-decompress the same file again; the lazy JSZip loader was already single-flight.
-The remaining overlap with the `docx-preview` render is the deferred §4.5
-finding in `TODO.md` (it needs a render-complete callback, not a DOM heuristic).
-Edge cases are pinned in `front/src/shared/api/__tests__/placeholder-count.test.ts`.
+from filenames, headers, YAML text or placeholder uniqueness). The scan now
+uses a **narrow read-only ZIP walker** (`front/src/shared/api/bounded-zip-scan.ts`)
+and the browser-native `DecompressionStream("deflate-raw")`. JSZip 3.10.2 is
+**not** used on this path any more; it stays for result-archive unpacking only.
+
+The exact guarantees (all failures surface through the workflow's existing
+Russian result-pane error, never a fabricated `0`):
+
+1. `blob.size` is checked against `maxSourceBytes` (**25 MiB**, the default
+   `UPLOAD_MAX_MB` from `back/src/config.py` / `.env.example`, pinned by a drift
+   test) **before** `blob.arrayBuffer()`. No metadata read or inflate happens
+   on an oversized file.
+2. The end-of-central-directory and central directory are parsed once. More
+   than `maxParts` (**10,000**, the backend hard limit) entries, ZIP64 markers,
+   encryption flags, unsupported compression methods, or declared per-entry /
+   aggregate XML sizes above `maxXmlBytes` (**64 MiB**) fail closed **before any
+   part is inflated**. Declared sizes are untrusted: this is defence in depth,
+   **not** proof of a decompression bound.
+3. Each eligible XML part is inflated incrementally, one part at a time.
+   **Actual decompressed bytes** are counted per output chunk against the
+   cumulative 64 MiB ceiling; a chunk that would cross it is discarded without
+   decoding, so **no byte past the ceiling is decoded or retained**. The
+   platform may inflate up to one further output chunk before termination
+   (observed ≤ 64 KiB in local Bun/Chromium probes; not a spec guarantee) — that
+   chunk is never processed. A `.xml`-named entry without XML markup is skipped
+   at its first non-whitespace character.
+4. Text is decoded with `TextDecoder("utf-8", { stream: true })`, so multi-byte
+   characters split between chunks are correct. Marker matching uses a carry
+   capped at **512 characters** and counts a match only when it finishes in the
+   new chunk; repeated, adjacent and chunk-spanning markers are therefore
+   counted exactly once with the original whole-string regex meaning.
+5. Parts are processed sequentially; at most one compressed view and one
+   decompressed chunk are live. No decompressed string or byte array is kept
+   between parts — only the per-label counts and the bounded carry.
+6. `countPlaceholdersInDocx` memoises one promise per Blob in a `WeakMap`, so a
+   mode switch or re-selection never scans twice, and concurrent callers share
+   one scan. Genuine inflate/ZIP errors propagate as errors. Stale results are
+   already rejected by the `active` flag in `use-masker-workflow.ts`; this path
+   adds no second generation mechanism.
+
+This frontend pass is a **usability/resource layer, not a security boundary**.
+The backend remains authoritative (`docx_validation.py`: streamed upload bytes,
+entry count, uncompressed package size, compression ratio, encryption, hostile
+names — §`Rejection` above and `docs/API.md`). Alternative readers, bundle cost
+and before/after measurements are in `docs/PERFORMANCE.md` §"Frontend bounded
+placeholder scan". The remaining overlap with the `docx-preview` render is the
+deferred §4.5 finding in `TODO.md` (it needs a render-complete callback, not a
+DOM heuristic). Edge cases are pinned in
+`front/src/shared/api/__tests__/placeholder-count.test.ts`.
 
 **Known scope boundary.** The scan deliberately keeps its established scope:
 it counts marker-shaped tokens in every XML part (including copy-safe parts
@@ -262,7 +299,7 @@ statistics/coverage, the entry names are the download filenames, and the
 | `manifest.json` text → validated `ResultManifest` | the bundle | text released after `parseResultManifest`; object lives with the bundle (`mask-archive.ts:41–43`, `mask-helpers.ts:39–55`) |
 | Preview DOM (detached staging → surface) | committed nodes + highlight timers | cleared on switch/unmount/success/failure (`docx-viewer.tsx:125–141`, `157–220`); rendered nodes do not retain the source Blob |
 | Download object URL (`result-download.ts:4–24`) | the anchor until `click()` hands off | anchor removed immediately, URL revoked on the next macrotask in `finally`; the browser reads the same Blob, so no copy is made |
-| Demask input scan (`placeholder-count.ts:33–81`) | selected `File`, one XML part at a time | promise cached per Blob in a `WeakMap`; released when the Blob is collected (separate pre-operation path, not a result archive) |
+| Demask input scan (`placeholder-count.ts` + `bounded-zip-scan.ts`) | selected `File`, one compressed view + one decompressed chunk at a time | promise cached per Blob in a `WeakMap`; released when the Blob is collected (separate pre-operation path, not a result archive; native streaming inflate, no JSZip on this path) |
 
 Abort semantics (durable): `waitForJob` checks the signal before the result
 fetch, after the fetch, after `blob()`, after `loadAsync()` and before/after

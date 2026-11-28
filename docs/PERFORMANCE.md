@@ -444,3 +444,54 @@ multiple workers) remain an OPEN operator gate in
 `docs/PRODUCTION_READINESS.md`.
 - A `.txt` never reaches the backend: the front reads it into the input text
   client-side, so text-mode limits are pure `MAX_TEXT_CHARS` / threshold math.
+
+## Frontend bounded placeholder scan (2026-11-28, SYNTHETIC / MEASURED)
+
+**Re-verified defect.** The old `scanPlaceholdersInDocx` called
+`entry.async("string")` and compared `xml.length` only afterwards. On a
+synthetic one-part archive with **61,260,000 decompressed bytes** compressed to
+165,593 B, the 1 MiB ceiling was reached only after the **whole** 61,260,000
+UTF-16 code units had been materialised in the browser (instrumented, MEASURED).
+
+**Method.** Windows 11 / Bun 1.4.4, deterministic JSZip-generated fixtures
+(`DEFLATE` and `STORE`), 5 runs per cell for the regular fixture, best-of-style
+medians plus ranges. Wall time is `performance.now()` around the scan; the peak
+proxy is `heapUsed + arrayBuffers` after `Bun.gc(true)`. No production data, no
+network, no commit of fixtures or harnesses (kept in OS temp). These are
+**SYNTHETIC local** numbers, not target-hardware browser profiling.
+
+| Scenario (SYNTHETIC) | Before wall median [min..max] | After wall median [min..max] | Before peak Δ [min..max] | After peak Δ [min..max] |
+|---|---:|---:|---:|---:|
+| 200 XML parts × 50,000 chars (63,212 B ZIP) | 109.6 ms [105.5..133.9] | 96.6 ms [93.8..102.2] | 6.31 MiB [6.20..8.23] | 7.34 MiB [7.19..7.59] |
+
+Counts are identical (`person: 303000`, `phone: 303000`). **No speed or memory
+improvement is claimed** for ordinary documents: the after peak is slightly
+higher because the native stream queues compressed views. The change buys a
+hard bound, not throughput.
+
+| Bomb probe (1 MiB ceiling) | Before | After |
+|---|---:|---:|
+| Honest declared size, raw part 61,260,000 B | 61,260,000 units materialised, 153.3 ms, then rejected | metadata rejects before inflate, 2.0 ms, 0 bytes decoded |
+| Understated declared size (10 B), same part | full inflate then JSZip `uncompressed data size mismatch`, 125.7 ms | incremental stop after **991,506 decoded bytes**, 5.2 ms |
+
+The 991,506 figure is the sum of chunks accepted before the next chunk would
+cross 1,048,576; the crossing chunk was pulled from the stream but never
+decoded or retained. Unit tests pin this with deterministic 8-byte chunks:
+exactly 1,000 bytes reach the decoder, and the 1,008th byte is discarded.
+
+**Reader alternatives (decision: no new runtime dependency).** Local tarball
+probes outside the repo, same 4 MiB highly compressible synthetic XML:
+
+| Reader | Bundle cost (MEASURED) | Max output chunk observed (SYNTHETIC) | Decision |
+|---|---:|---:|---|
+| Native `DecompressionStream("deflate-raw")` | **0 B** | 48,246 B (64 KiB ceiling in a second probe) | Chosen; supported since Chrome 103 / Firefox 113 / Safari 16.4 (STATIC, MDN/Can I use) |
+| `fflate@0.8.3` `Inflate` stream | 33,044 B minified UMD / 90,922 B unminified ESM (docs quote ~3–5 KiB min for inflate/ZIP parts) | 48,246 B | Rejected: no tighter bound, new dependency and a second ZIP path |
+| `@zip.js/zip.js@2.25.0` `BlobReader` + `Writer` | 210,285 B minified entry | 262,144 B | Rejected: 4× larger overshoot and larger bundle; historical unpack probe also slower |
+
+JSZip 3.10.2's public `index.d.ts` exposes only `async(type, onUpdate?)`,
+`nodeStream(type?, onUpdate?)` and `{percent, currentFile}` metadata; its
+`internalStream()` and `DataLengthProbe("uncompressedSize")` are private
+implementation details (STATIC, read from installed `node_modules`). The
+`onUpdate` percentage is not a decompressed-byte counter, so JSZip cannot stop
+mid-inflate through its documented API. JSZip stays for result-archive
+unpacking (`docs/DOCX_SUPPORT.md` §"Result-archive unpacking").

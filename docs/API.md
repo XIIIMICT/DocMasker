@@ -121,6 +121,15 @@ routes and `POST /api/jobs` alike, before cache lookup or job staging. Output
 ZIP entry names are flat and built from a shared sanitised filename stem. The
 frontend is **not** a trust boundary — the backend enforces everything.
 
+The optional pre-operation placeholder count has no HTTP endpoint or DTO. Its
+client-only ceilings are `PLACEHOLDER_SCAN_LIMITS` in
+`front/src/shared/api/placeholder-count.ts`: 25 MiB **compressed** input (the
+default `UPLOAD_MAX_MB`, checked before reading the Blob), 10,000 entries and
+64 MiB cumulative decompressed XML (enforced incrementally during inflate by
+`bounded-zip-scan.ts`). These are usability limits pinned to the backend
+defaults by a front-end drift test, not alternative validation; a deployment
+that changes `UPLOAD_MAX_MB` must revisit them.
+
 ## `GET /health`
 
 Liveness probe used by the Docker healthcheck. `{"status": "ok"}`, always 200 —

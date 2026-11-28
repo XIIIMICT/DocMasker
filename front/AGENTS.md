@@ -127,7 +127,16 @@ TypeScript indexing"). Durable coding rules:
    stays the distinct-key count from the parsed keys; the scan only supplies
    total occurrences. The backend has no equivalent unmask aggregate (it records
    placeholder presence only), so this scan is not a result statistic — see
-   `docs/DOCX_SUPPORT.md` §"Demasking input placeholder count".
+   `docs/DOCX_SUPPORT.md` §"Demasking input placeholder count". The scan uses
+   `shared/api/bounded-zip-scan.ts` with native
+   `DecompressionStream("deflate-raw")`, **not** JSZip: `blob.size` is checked
+   against 25 MiB (`maxSourceBytes`, the backend `UPLOAD_MAX_MB` default) before
+   `arrayBuffer()`; entry count and declared XML sizes are preflighted but are
+   untrusted; actual decompressed bytes are counted during inflate and stop the
+   scan at 64 MiB, with UTF-8 stream decoding and a 512-char marker carry. JSZip
+   3.10.2 remains only for result-archive unpacking (invariant 8). Backend
+   validation stays authoritative; stale results are rejected by the existing
+   `active` flag, not by a second generation mechanism.
 5. Keys are validated on both sides: `validateKeysYaml` in
    `shared/api/mask.ts` runs on **every keystroke**; the backend authority is
    `back/src/masking/mapping.py::validate_keys_yaml` (422 with Russian `detail`).

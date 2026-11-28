@@ -1,25 +1,37 @@
-import { loadJsZip } from "@/shared/api/lazy-zip";
+import {
+    scanBoundedDocxPlaceholders,
+    type ScanHooks,
+    type ScanLimits,
+} from "@/shared/api/bounded-zip-scan";
 
 /**
  * Bounds for the pre-operation scan of an uploaded, masked DOCX.
  *
- * `maxParts` matches the backend's DOCX entry limit; `maxXmlBytes` is a tighter
- * client-side ceiling than the backend's uncompressed-package limit because this
- * pass only feeds a tooltip. Both limits fail closed — the workflow surfaces the
- * existing Russian result-pane error instead of a fabricated count.
+ * `maxParts` matches the backend's 10,000-entry limit. `maxXmlBytes` is a
+ * tighter client-side ceiling than the backend's 10× upload uncompressed
+ * ceiling, because this pass only feeds a tooltip. `maxSourceBytes` mirrors the
+ * default `UPLOAD_MAX_MB` (25) from `back/src/config.py` / `.env.example` and is
+ * checked BEFORE the compressed Blob is read into an ArrayBuffer. A drift guard
+ * in `placeholder-count.test.ts` pins both backend defaults.
+ *
+ * These are usability/resource limits, not a security boundary; the backend
+ * validates every package authoritatively (docs/API.md). Both client limits
+ * fail closed — the workflow surfaces the existing Russian result-pane error
+ * instead of a fabricated count.
  */
 export const PLACEHOLDER_SCAN_LIMITS = {
     maxParts: 10_000,
     maxXmlBytes: 64 * 1024 * 1024,
+    maxSourceBytes: 25 * 1024 * 1024,
 } as const;
 
-export interface PlaceholderScanLimits {
-    readonly maxParts: number;
-    readonly maxXmlBytes: number;
+export interface PlaceholderScanLimits extends ScanLimits {
+    readonly maxSourceBytes?: number;
 }
 
-const CONTENT_TYPES_ENTRY = "[Content_Types].xml";
-const PLACEHOLDER = /\[([A-Z]+)_\d+\]/g;
+export type { ScanHooks as PlaceholderScanHooks };
+
+const SOURCE_TOO_LARGE = "Файл слишком большой для подсчёта фрагментов.";
 
 /**
  * The count describes the uploaded document and is needed *before* the unmask
@@ -27,8 +39,8 @@ const PLACEHOLDER = /\[([A-Z]+)_\d+\]/g;
  * aggregates only for masking, and records only placeholder *presence* while
  * unmasking, so a post-operation manifest cannot replace this scan. Cache the
  * promise per Blob: switching modes or re-selecting the same file must not
- * decompress it a second time. A rejected scan is cached for the same reason
- * the JSZip loader caches a failed chunk.
+ * scan it a second time. A rejected scan is cached for the same reason the
+ * JSZip loader caches a failed chunk.
  */
 const scans = new WeakMap<Blob, Promise<Record<string, number>>>();
 
@@ -42,41 +54,24 @@ export function countPlaceholdersInDocx(blob: Blob): Promise<Record<string, numb
 }
 
 /**
- * One sequential ZIP pass: parts are decompressed one at a time and released
- * before the next one, so peak memory is one XML part plus the archive. The
- * limits are injectable only so the bounds can be tested without a 64 MiB
- * fixture; production callers use the exported defaults.
+ * Compressed-size preflight, then one sequential bounded pass. The ZIP is
+ * walked by `bounded-zip-scan` (native streaming inflate) instead of JSZip:
+ * JSZip's public API offers no incremental decompressed-byte count, so it
+ * cannot enforce the ceiling before materialising an entry. JSZip 3.10.2 stays
+ * for result-archive unpacking only (docs/DOCX_SUPPORT.md).
+ *
+ * `hooks` are a test seam for deterministic chunk boundaries and byte
+ * instrumentation; production callers pass none.
  */
 export async function scanPlaceholdersInDocx(
     blob: Blob,
     limits: PlaceholderScanLimits = PLACEHOLDER_SCAN_LIMITS,
+    hooks: ScanHooks = {},
 ): Promise<Record<string, number>> {
-    const JSZip = await loadJsZip();
-    const archive = await JSZip.loadAsync(await blob.arrayBuffer());
-    const entries = Object.values(archive.files);
-    if (entries.length > limits.maxParts) {
-        throw new Error("Документ содержит слишком много внутренних частей.");
+    const sourceLimit = limits.maxSourceBytes ?? PLACEHOLDER_SCAN_LIMITS.maxSourceBytes;
+    if (blob.size > sourceLimit) {
+        throw new Error(SOURCE_TOO_LARGE);
     }
-    const counts: Record<string, number> = {};
-    let scannedBytes = 0;
-    for (const entry of entries) {
-        if (entry.dir) continue;
-        const name = entry.name;
-        if (!name.toLowerCase().endsWith(".xml") || name === CONTENT_TYPES_ENTRY) continue;
-        const xml = await entry.async("string");
-        // A supported XML part starts with markup; never regex-scan a binary
-        // payload that merely carries an `.xml` name.
-        if (!xml.trimStart().startsWith("<")) continue;
-        scannedBytes += xml.length;
-        if (scannedBytes > limits.maxXmlBytes) {
-            throw new Error("Документ слишком большой для подсчёта фрагментов.");
-        }
-        for (const match of xml.matchAll(PLACEHOLDER)) {
-            const label = match[1];
-            if (label === undefined) continue;
-            const key = label.toLowerCase();
-            counts[key] = (counts[key] ?? 0) + 1;
-        }
-    }
-    return counts;
+    const buffer = await blob.arrayBuffer();
+    return scanBoundedDocxPlaceholders(new Uint8Array(buffer), limits, hooks);
 }
