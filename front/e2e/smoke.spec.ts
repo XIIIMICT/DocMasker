@@ -1000,7 +1000,7 @@ test.describe("axe WCAG 2/2.1 A/AA scans", () => {
 
 // ---------------------------------------------------------------------------
 // C2: Playwright keyboard/focus walkthroughs. Outcomes and the explicit
-// screen-reader BLOCKED note are recorded in `docs/ACCESSIBILITY.md`.
+// screen-reader scope decision are recorded in `docs/ACCESSIBILITY.md`.
 // ---------------------------------------------------------------------------
 
 test("клавиатура: логичный порядок фокуса, видимый индикатор и выход из страницы", async ({
