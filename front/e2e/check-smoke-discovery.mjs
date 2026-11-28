@@ -16,8 +16,10 @@ const REQUIRED_SPECS = [
     "rerender-smoke.spec.ts",
     "hover-smoke.spec.ts",
 ];
-// 40 tests are listed on this branch: 28 main smoke, 10 hover, 1 rerender,
-// 1 health. Leave one test of slack; dropping any whole spec falls below it.
+// 41 tests are listed on this branch (measured 2026-11-28): 29 main smoke,
+// 10 hover, 1 rerender, 1 health. The 34-total floor stops a whole smoke or
+// hover spec from dropping out; the 20-main floor stops smoke.spec.ts from
+// shrinking; the exact basenames above catch a rename of a smaller spec.
 const MIN_TOTAL_TESTS = 34;
 const MIN_MAIN_SPEC_TESTS = 20;
 // Match the `file.spec.ts:line:col` token itself rather than Playwright's

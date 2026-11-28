@@ -25,9 +25,9 @@ weakened. Evidence is from local runs on 2026-11-27, not from GitHub CI.
 - **CI smoke discovery guard.** `grep -q "smoke.spec.ts"` was replaced by
   `front/e2e/check-smoke-discovery.mjs`, called from `.github/workflows/ci.yaml`.
   It requires the exact basenames, ≥20 tests in `smoke.spec.ts` and ≥34 in the
-  project (current listing: 35/4 specs). Negative proof: temporarily renaming
-  `smoke.spec.ts` made the guard exit 1 (`missing smoke spec: smoke.spec.ts`;
-  12 tests found) and the file was restored.
+  project (listing at that time, 2026-11-27: 35/4 specs). Negative proof:
+  temporarily renaming `smoke.spec.ts` made the guard exit 1 (`missing smoke
+  spec: smoke.spec.ts`; 12 tests found) and the file was restored.
 - **Sleep-as-evidence.** The empty-keys test now intercepts `**/api/unmask`,
   counts requests, uses a two-frame grace and one valid demask as a barrier,
   then asserts exactly one request. The rerender test keeps a rendered-paragraph
@@ -477,6 +477,34 @@ which would break monitoring).
   `gen:openapi --check`, `prek run --all-files`, discovery guard **41 tests /
   4 specs**, targeted manifest Playwright **1/1** and full `smoke` **41/41**
   (46.6 s) on `http://127.0.0.1:5001`. No push, no merge.
+
+## Smoke discovery / docs reconciliation (A4, 2026-11-28) — CLOSED
+
+- Re-ran the configured discovery command from `front/` on
+  `docs/smoke-count-reconciliation` at `d7d2b6a` (Bun 1.4.4 / Node 26.13.1),
+  writing the listing to a temp path outside the repository:
+  `bunx --no-install playwright test --project=smoke --list > <temp>/smoke-tests.txt`
+  → exit 0, `Total: 41 tests in 4 files` (`smoke.spec.ts` 29,
+  `hover-smoke.spec.ts` 10, `rerender-smoke.spec.ts` 1, `health.spec.ts` 1);
+  `bun e2e/check-smoke-discovery.mjs <temp>/smoke-tests.txt` → exit 0,
+  `Smoke discovery guard: 41 tests across 4 specs; required specs present.`
+- Negative proof on a **copy** of the listing (no committed spec touched):
+  renaming the `smoke.spec.ts` entries gave exit 1 (`missing smoke spec:
+  smoke.spec.ts`, `smoke.spec.ts lists 0 tests, expected at least 20`); deleting
+  those lines instead added `smoke project lists 12 tests, expected at least
+  34`. The copies were deleted and the original listing stayed at 41.
+- Current-state docs/comments (`front/AGENTS.md`, `docs/WORKFLOW.md`,
+  `docs/TESTING.md`, `docs/FRONTEND-AUDIT.md` §10 and the guard comment) now use
+  41/4; the earlier 23/35/40 values remain as dated historical evidence.
+  `testMatch`, the four required basenames and the guard floors (20 main / 34
+  total) agree; no threshold, config, spec or application code was changed.
+  A3 remains **DEFERRED**; no push, no merge.
+- **Verified (after the edits):** `prek run --all-files` exit 0 (back
+  ruff/ty/lock, front oxfmt/oxlint/bun test/bun check/bun lock, workspace
+  hooks); front `format:check` (99 files), `lint:check`, `typecheck` (90 files),
+  `test` (**313 pass / 0 fail**, 1068 `expect()` calls, 31 files; pre-existing
+  HeroUI `act(...)` warnings only); discovery positive exit 0 and negative exit
+  1 re-run against the final tree. No push, no merge.
 
 ## Deferred by maintainer decision
 

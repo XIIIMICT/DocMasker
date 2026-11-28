@@ -27,9 +27,9 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 `bun run format` can rewrite line breaks in untouched files — check `git status`
 and `git diff` afterwards. The current unit inventory and the Playwright `smoke`
 discovery guard live in `docs/TESTING.md` §1. The `smoke`
-project currently lists 41 tests in four spec files (`health`, `smoke`,
-`rerender-smoke`, `hover-smoke`) and needs a prepared stack; probe files are
-excluded. CI pipes `playwright test --project=smoke --list` into
+project currently lists 41 tests (measured 2026-11-28) in four spec files
+(`health`, `smoke`, `rerender-smoke`, `hover-smoke`) and needs a prepared stack;
+probe files are excluded. CI pipes `playwright test --project=smoke --list` into
 `bun e2e/check-smoke-discovery.mjs`, which requires the exact four basenames,
 ≥20 tests in the main spec and ≥34 overall — `smoke.spec.ts` can no longer be
 satisfied by the two other `*smoke.spec.ts` names. The listing needs no running
