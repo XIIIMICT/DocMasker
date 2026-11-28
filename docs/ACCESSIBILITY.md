@@ -7,6 +7,12 @@ component contracts stay in `front/AGENTS.md`; how to run the checks is in
 `docs/FRONTEND-AUDIT.md` §8 is a dated historical record and is intentionally
 left unchanged.
 
+**Final status (2026-11-28): DONE with screen-reader verification BLOCKED.**
+Landed in `3f4913e` (merged to `dev` as `13f562e`). The 11 axe scans and the
+keyboard/focus outcomes below are the landed evidence; they live in the `smoke`
+spec, whose current inventory is **55 tests / 4 specs** with full smoke **55/55**
+on `http://127.0.0.1:5001`. No screen reader was performed — see §4.
+
 **Claims discipline:** the scans below are a regression net for a subset of
 WCAG rules. Passing them does **not** mean the application is accessible. The
 screen-reader verification is **BLOCKED** (see §4), and no target-hardware

@@ -115,7 +115,12 @@ the rerender test observes node identity plus the named debounce pass; hover's
 explicitly shorter before-grace re-entry delay remains because that timing is
 the behaviour under test.
 Recorded run counts in `docs/WORKFLOW.md` and `docs/PRODUCTION_READINESS.md`
-are historical records; rely on `--list` for the current inventory.
+are historical records (the 41 there is the pre-C1 measurement); rely on
+`--list` for the current inventory. Follow-up final evidence: A1 `4158221`
+(merged `4ed0b39`), A2 `ca61d5e` (merged `d7d2b6a`), A4 `82de28f`
+(merged `761e6e2`), C1/C2 `3f4913e` (merged `13f562e`); A3 is **DEFERRED** by
+maintainer decision. Full status is in root `TODO.md` §"Follow-up remediation
+2026-11-28 — FINAL".
 
 ## 2. Required failure scenarios (Brief §14, condensed)
 

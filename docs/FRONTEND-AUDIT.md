@@ -181,14 +181,15 @@ response; both apps keep intentionally different DOM/workflow architectures.
   31 files; pre-existing HeroUI `act(...)` warnings only) and `build` (9 routes)
   green; `prek run --all-files` green. Playwright via `local.playwright.config.ts`
   on the dev stand: targeted support-link/reduced-motion/keyboard/Tooltip **4/4**,
-  full `smoke` **41/41** (47.8 s), discovery guard 41 tests in 4 specs. No push,
+  full `smoke` **41/41** (47.8 s), discovery guard 41 tests in 4 specs — a pre-C1
+  measurement; the current inventory is 55 tests in 4 specs (§10). No push,
   no merge.
 
-## 10. Smoke discovery reconciliation (current state, 2026-11-28)
+## 10. Smoke discovery reconciliation and current inventory (2026-11-28)
 
-Re-measured on `docs/smoke-count-reconciliation` at `d7d2b6a` with Bun 1.4.4 /
-Node 26.13.1. From `front/`, with the listing written to a temp path outside
-the repository:
+Re-measured on `docs/smoke-count-reconciliation` at `82de28f` (merged `761e6e2`)
+with Bun 1.4.4 / Node 26.13.1 — the **pre-C1** inventory. From `front/`, with the
+listing written to a temp path outside the repository:
 
 ```sh
 bunx --no-install playwright test --project=smoke --list > <temp>/smoke-tests.txt
@@ -212,3 +213,33 @@ bun e2e/check-smoke-discovery.mjs <temp>/smoke-tests.txt
 - Re-checked after the doc/comment edits: `prek run --all-files` exit 0, front
   `format:check` (99 files) / `lint:check` / `typecheck` (90 files) / `test`
   (313 pass / 0 fail) green, discovery positive exit 0 and negative exit 1.
+
+### Current state — after C1/C2 (`3f4913e`, merged `13f562e`)
+
+- `bunx --no-install playwright test --project=smoke --list` now reports **55
+  tests in 4 files**: `smoke.spec.ts` 43 (29 existing + 11 axe scans + 3
+  keyboard/perceivability walkthroughs), `hover-smoke.spec.ts` 10,
+  `rerender-smoke.spec.ts` 1, `health.spec.ts` 1; the discovery guard exits 0.
+  The 41/4 figures above are dated pre-C1 evidence; `testMatch`, the four
+  required basenames and the 20/34 floors are unchanged.
+- Full smoke **55/55** on `http://127.0.0.1:5001` via `local.playwright.config.ts`.
+  These are regression-net counts, not an accessibility claim — the
+  screen-reader gate is BLOCKED in `docs/ACCESSIBILITY.md` §4.
+
+## 11. Follow-up remediation — final status (2026-11-28)
+
+Final state of the five items tracked in root `TODO.md`; each was merged into
+`dev` with `--no-ff` and nothing was pushed.
+
+| Item | Status | Final evidence |
+|---|---|---|
+| A1 bounded placeholder scan | DONE | `4158221` (merged `4ed0b39`). Narrow native `DecompressionStream("deflate-raw")` walker in `shared/api/bounded-zip-scan.ts`; no runtime dep (native 0 B vs `fflate` 33 KB / `zip.js` 210 KB). Incremental inflate counts decoded bytes against the 64 MiB ceiling; ZIP metadata preflight is defence in depth, **not** a hard bound. Understated-metadata bomb test stopped at 991,506 decoded bytes vs 61 MB materialised before. 304 unit pass, E2E 41/41 then; no speed/memory gain claimed for ordinary documents. |
+| A2 strict result manifest | DONE | `ca61d5e` (merged `d7d2b6a`). `complete === true` plus empty coverage arrays for both operations, unknown extras tolerated; backend parity test only, no producer semantics change. 313 unit pass, E2E 41/41. |
+| A3 job/sessionStorage runtime validation | **DEFERRED by maintainer decision** | Not implemented. Independent boundary-hardening work with its own protocol/UX decisions; revisit after A1/A2/C1 on its own branch with tests for malformed fields, tampered `sessionStorage`, invalid URLs and no unexpected fetch. No runtime validation of job payloads was added. |
+| A4 discovery reconciliation | DONE | `82de28f` (merged `761e6e2`). Fresh 41/4 measurement (29/10/1/1), guard positive exit 0 / negative exit 1; older 23/35/40 figures are dated. Superseded for current state by C1's 55/4 (above). |
+| C1/C2 accessibility | **DONE, screen-reader BLOCKED** | `3f4913e` (merged `13f562e`). Dev-only `@axe-core/playwright@4.14.1`, 11 axe scans on WCAG 2/2.1 A/AA, source fixes (`aria-command-name`, `nested-interactive`, `aria-valid-attr-value`, `color-contrast`) plus keyboard/focus walkthroughs. No screen reader was available or used; a green scan is not an accessibility audit. Current 55/4, smoke 55/55. |
+
+§8's "an axe scan was not added" is the 2026-11-27 audit-time record; C1/C2
+supersedes it. The cross-project (ReportCollector) comparison and the explicit
+deferral/blocked list are in root `TODO.md` §"Follow-up remediation
+2026-11-28 — FINAL".
