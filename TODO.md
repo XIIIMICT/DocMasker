@@ -4,7 +4,57 @@ Living list of **genuinely deferred** work. Completed phases and evidence live
 in `docs/PRODUCTION_READINESS.md`; durable decisions in `docs/adr/`. The
 implementation brief was reviewed and removed after folding its remaining items
 into this file. Legend: `todo` · `deferred` (maintainer decision) ·
-`blocked` (external step).
+`blocked` (external step). Follow-up final status is indexed in
+§"Follow-up remediation 2026-11-28 — FINAL" below.
+
+## Follow-up remediation 2026-11-28 — FINAL
+
+Final status of the DocMasker frontend follow-ups (audit 2026-11-27). Each landed
+item was merged into `dev` with `--no-ff`; nothing was pushed. Dated per-item
+evidence stays in the sections below; this is the compact final index.
+
+- **A1 bounded placeholder scan — DONE.** `4158221` (merged `4ed0b39`): narrow
+  native `DecompressionStream("deflate-raw")` walker
+  (`front/src/shared/api/bounded-zip-scan.ts`), no runtime dependency — native
+  **0 B**, `fflate` **33 KB** and `zip.js` **210 KB** rejected with measured
+  bundle costs. The hard bound is **incremental inflate** against the 64 MiB
+  production ceiling; ZIP metadata preflight is defence in depth, **not** a
+  bound. Bomb test with understated metadata stopped at **991,506 decoded
+  bytes** vs 61 MB materialised before. 304 unit pass, E2E 41/41 at the time;
+  no speed/memory improvement is claimed for ordinary documents.
+- **A2 strict result manifest — DONE.** `ca61d5e` (merged `d7d2b6a`): `complete
+  === true` and empty coverage arrays for both operations, unknown extras still
+  tolerated; backend parity test only, no producer semantics change. 313 unit
+  pass, E2E 41/41.
+- **A3 job/sessionStorage runtime validation — DEFERRED by maintainer decision.**
+  Not implemented and not claimed: job/stored-payload fields and status/result
+  URL allowlisting are **not** runtime-validated. Reason: an independent
+  boundary-hardening change with its own protocol/UX decisions, not to be folded
+  into a resource-bound fix. Revisit after A1/A2/C1 on its own task branch with
+  tests for malformed fields, tampered `sessionStorage`, invalid URLs and no
+  unexpected fetch.
+- **A4 discovery reconciliation — DONE.** `82de28f` (merged `761e6e2`): fresh
+  41 tests / 4 specs (29/10/1/1), guard positive exit 0 / negative exit 1;
+  earlier 23/35/40 figures are dated. Superseded for the current inventory by
+  C1's **55 tests / 4 specs** (43/10/1/1), guard pass, smoke 55/55 on `:5001`.
+- **C1/C2 accessibility — DONE, screen-reader BLOCKED.** `3f4913e` (merged
+  `13f562e`): dev-only `@axe-core/playwright@4.14.1`, 11 axe scans on WCAG 2/2.1
+  A/AA, source fixes (`aria-command-name`, `nested-interactive`,
+  `aria-valid-attr-value`, `color-contrast`) plus keyboard/focus walkthroughs.
+  No screen reader was available or used; automated scans are not an
+  accessibility audit. Canonical record: `docs/ACCESSIBILITY.md`.
+
+**Cross-project comparison (ReportCollector vs DocMasker, verified 2026-11-28).**
+Shared: Next 16.4.6 / React 19.3.1 / HeroUI 3.2.8 / Tailwind 4.3.5 / TS 7.0.2,
+React Compiler, Turbopack `next analyze`, generated OpenAPI compile-only DTOs
+(dev-only `swagger-typescript-api@13.15.0`), dev-only
+`@axe-core/playwright@4.14.1`, smoke discovery guards, identical lint/format/
+typecheck/test scripts. Intentional domain differences: DM's DOCX preview/ZIP
+and masking workflow vs RC's RevoGrid/collab; no cross-repository package. This
+round added **dev-only axe in both apps and no runtime dependency** — no
+framework, state or animation library was added. Explicitly deferred/blocked:
+A3 (maintainer deferral), screen-reader audits in both repos, RC's 175
+react-perf debt, target-host drills, off-host backup copies, live migrations.
 
 ## Completed (index only)
 
@@ -418,7 +468,7 @@ which would break monitoring).
   `local.playwright.config.ts`; discovery guard 41 tests in 4 specs. No push,
   no merge.
 
-## Bounded DOCX placeholder scan (A1, 2026-11-28) — CLOSED
+## Bounded DOCX placeholder scan (A1, 2026-11-28) — CLOSED (4158221 / 4ed0b39)
 
 - The pre-operation demask tooltip scan no longer materialises an XML entry
   before checking its size. `bounded-zip-scan.ts` walks the ZIP central
@@ -442,7 +492,7 @@ which would break monitoring).
   smoke runs and passed on rerun and in isolation; no assertion was weakened.
   No push or merge.
 
-## Strict result-manifest completeness (A2, 2026-11-28) — CLOSED
+## Strict result-manifest completeness (A2, 2026-11-28) — CLOSED (ca61d5e / d7d2b6a)
 
 - Proven gap: `parseResultManifest` only checked that `complete` was a boolean,
   so a ZIP manifest with `status: "succeeded"` and `complete: false` (or a
@@ -478,7 +528,7 @@ which would break monitoring).
   4 specs**, targeted manifest Playwright **1/1** and full `smoke` **41/41**
   (46.6 s) on `http://127.0.0.1:5001`. No push, no merge.
 
-## Smoke discovery / docs reconciliation (A4, 2026-11-28) — CLOSED
+## Smoke discovery / docs reconciliation (A4, 2026-11-28) — CLOSED (82de28f / 761e6e2)
 
 - Re-ran the configured discovery command from `front/` on
   `docs/smoke-count-reconciliation` at `d7d2b6a` (Bun 1.4.4 / Node 26.13.1),
@@ -493,9 +543,11 @@ which would break monitoring).
   smoke.spec.ts`, `smoke.spec.ts lists 0 tests, expected at least 20`); deleting
   those lines instead added `smoke project lists 12 tests, expected at least
   34`. The copies were deleted and the original listing stayed at 41.
-- Current-state docs/comments (`front/AGENTS.md`, `docs/WORKFLOW.md`,
-  `docs/TESTING.md`, `docs/FRONTEND-AUDIT.md` §10 and the guard comment) now use
-  41/4; the earlier 23/35/40 values remain as dated historical evidence.
+- At A4 time the current-state docs/comments (`front/AGENTS.md`,
+  `docs/WORKFLOW.md`, `docs/TESTING.md`, `docs/FRONTEND-AUDIT.md` §10 and the
+  guard comment) used 41/4; the earlier 23/35/40 values remain as dated
+  historical evidence. C1/C2 later raised the live inventory to **55/4**, which
+  is now the current state (§FINAL above).
   `testMatch`, the four required basenames and the guard floors (20 main / 34
   total) agree; no threshold, config, spec or application code was changed.
   A3 remains **DEFERRED**; no push, no merge.
@@ -506,7 +558,7 @@ which would break monitoring).
   HeroUI `act(...)` warnings only); discovery positive exit 0 and negative exit
   1 re-run against the final tree. No push, no merge.
 
-## Accessibility C1/C2 (2026-11-28) — CLOSED (screen reader BLOCKED)
+## Accessibility C1/C2 (2026-11-28) — CLOSED (screen reader BLOCKED) (3f4913e / 13f562e)
 
 - Dev-only `@axe-core/playwright@4.14.1` added with `bun add --dev` (Bun updated
   `bun.lock`); no runtime dep. Explicit axe tags `wcag2a`, `wcag2aa`, `wcag21a`,
@@ -542,7 +594,9 @@ which would break monitoring).
   and green; A3 still stays **DEFERRED** by maintainer decision and would need
   its own task branch with tests for malformed fields, tampered
   `sessionStorage`, invalid URLs and no unexpected fetch. No A3 guard or URL
-  allowlist was added on `fix/bounded-placeholder-scan`.
+  allowlist was added on `fix/bounded-placeholder-scan`; job payloads and stored
+  `sessionStorage` values are consumed as-is and are **not** runtime-validated
+  (no such claim appears in these docs).
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
   `X-Request-ID`, minimal `/ready` + `/metrics`, liveness/readiness split.
   Remaining from Brief §11/§14: structured JSON logs with `request_id` / job ID
