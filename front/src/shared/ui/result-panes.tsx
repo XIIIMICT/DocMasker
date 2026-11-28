@@ -52,12 +52,12 @@ export function MaskResultPane({
 }) {
     return (
         <>
-            <div className="editor-pane__label">
-                <Tabs
-                    className="result-tabs"
-                    selectedKey={resultTab}
-                    onSelectionChange={(key) => onResultTabChange(String(key))}
-                >
+            <Tabs
+                className="pane-tabs result-tabs"
+                selectedKey={resultTab}
+                onSelectionChange={(key) => onResultTabChange(String(key))}
+            >
+                <div className="editor-pane__label">
                     <Tabs.ListContainer>
                         <Tabs.List aria-label="Результат маскировки">
                             <Tabs.Tab id="result">
@@ -70,31 +70,54 @@ export function MaskResultPane({
                             </Tabs.Tab>
                         </Tabs.List>
                     </Tabs.ListContainer>
-                </Tabs>
-                {stats !== null && error === null && stats.total > 0 ? (
-                    <Tooltip delay={150}>
-                        <Tooltip.Trigger className="editor-pane__stats">
-                            {totalText(stats)}
-                        </Tooltip.Trigger>
-                        <Tooltip.Content showArrow placement="bottom">
-                            <Tooltip.Arrow />
-                            <span className="stats-breakdown">{statsBreakdown(stats)}</span>
-                        </Tooltip.Content>
-                    </Tooltip>
-                ) : null}
-            </div>
-            <ResultBody
-                error={error}
-                resultTab={resultTab}
-                keys={keys}
-                maskedNothing={maskedNothing}
-                showResultPreview={showResultPreview}
-                maskedFile={maskedFile}
-                inFileMode={inFileMode}
-                result={result}
-                resultTextRef={resultTextRef}
-                maskedDocRef={maskedDocRef}
-            />
+                    {stats !== null && error === null && stats.total > 0 ? (
+                        <Tooltip delay={150}>
+                            <Tooltip.Trigger className="editor-pane__stats">
+                                {totalText(stats)}
+                            </Tooltip.Trigger>
+                            <Tooltip.Content showArrow placement="bottom">
+                                <Tooltip.Arrow />
+                                <span className="stats-breakdown">{statsBreakdown(stats)}</span>
+                            </Tooltip.Content>
+                        </Tooltip>
+                    ) : null}
+                </div>
+                <Tabs.Panel id="result" className="pane-tabs__panel">
+                    <ResultBody
+                        error={error}
+                        resultTab="result"
+                        keys={keys}
+                        maskedNothing={maskedNothing}
+                        showResultPreview={showResultPreview}
+                        maskedFile={maskedFile}
+                        inFileMode={inFileMode}
+                        result={result}
+                        resultTextRef={resultTextRef}
+                        maskedDocRef={maskedDocRef}
+                    />
+                </Tabs.Panel>
+                <Tabs.Panel id="keys" className="pane-tabs__panel">
+                    {error !== null ? (
+                        <TextArea
+                            id={MASK_ERROR_ID}
+                            aria-label="Ошибка"
+                            aria-invalid
+                            className="result-area--error"
+                            value={`Ошибка: ${error}`}
+                            readOnly
+                            rows={12}
+                        />
+                    ) : (
+                        <TextArea
+                            aria-label="Ключи демаскировки"
+                            className="result-area--keys"
+                            value={keys}
+                            readOnly
+                            rows={12}
+                        />
+                    )}
+                </Tabs.Panel>
+            </Tabs>
             <div className="editor-pane__actions">
                 <ButtonGroup fullWidth>
                     <Button

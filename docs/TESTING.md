@@ -68,9 +68,9 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
-Four spec files, 41 tests at the 2026-11-28 `--list` run (29 in `smoke.spec.ts`
-after adding the restored-timing case alongside the theme/support-link/
-reduced-motion and disabled-action cases, 10 hover, 1 rerender, 1 health):
+Four spec files, **55 tests** at the 2026-11-28 `--list` run after C1/C2 (43 in
+`smoke.spec.ts` — 29 existing plus 11 axe scans and 3 keyboard/perceivability
+walkthroughs — 10 hover, 1 rerender, 1 health):
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
 `front/e2e/rerender-smoke.spec.ts`, `front/e2e/hover-smoke.spec.ts`.
 `front/playwright.config.ts` discovers them with
@@ -102,9 +102,14 @@ project names and `testMatch` from the committed config and overrides only the
 launcher/reporter, so local and CI discovery cannot drift.
 
 Shared E2E helpers live under `front/e2e/helpers/`: `selectors.ts` holds the
-hidden file-input selector, and `timing.ts` holds the two-frame post-gesture
-grace plus the single named close-grace period (250 ms + margin). Sleep-as-
-evidence is gone: the empty-keys test counts requests on an intercepted
+hidden file-input selector, `timing.ts` holds the two-frame post-gesture grace
+plus the single named close-grace period (250 ms + margin), and `a11y.ts`
+applies the explicit axe WCAG 2/2.1 A/AA ruleset and waits for settled UI (no
+sleep-as-evidence). The automated scans and the manual keyboard/focus outcomes
+have one canonical home in `docs/ACCESSIBILITY.md`; passing scans are not an
+accessibility claim and screen-reader verification is BLOCKED there.
+
+Sleep-as-evidence is gone: the empty-keys test counts requests on an intercepted
 `**/api/unmask` route and uses one valid demask as a synchronisation barrier;
 the rerender test observes node identity plus the named debounce pass; hover's
 explicitly shorter before-grace re-entry delay remains because that timing is

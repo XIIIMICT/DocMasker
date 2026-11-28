@@ -23,11 +23,11 @@
 .default,
 [data-theme="light"],
 [data-theme="default"] {
-    --accent: oklch(51.12% 0.0965 174.82);
+    --accent: oklch(38% 0.0965 174.82);
     --accent-foreground: oklch(99.11% 0 0);
     --background: oklch(97.02% 0 174.82);
     --border: oklch(90% 0 174.82);
-    --danger: oklch(65.32% 0.2328 16.26);
+    --danger: oklch(48% 0.18 16);
     --danger-foreground: oklch(99.11% 0 0);
     --default: oklch(94% 0 174.82);
     --default-foreground: oklch(21.03% 0.0059 174.82);
@@ -37,7 +37,8 @@
     --field-placeholder: oklch(55.17% 0 174.82);
     --focus: oklch(51.12% 0.0965 174.82);
     --foreground: oklch(21.03% 0 174.82);
-    --muted: oklch(55.17% 0 174.82);
+    /* 50% keeps secondary text at >=4.5:1 on every light surface used here. */
+    --muted: oklch(50% 0 174.82);
     --overlay: oklch(100% 0 174.82);
     --overlay-foreground: oklch(21.03% 0 174.82);
     --scrollbar: oklch(87.1% 0 174.82);
@@ -75,11 +76,13 @@
 .dark,
 [data-theme="dark"] {
     color-scheme: dark;
-    --accent: oklch(51.12% 0.0965 174.82);
+    --accent: oklch(38% 0.0965 174.82);
     --accent-foreground: oklch(99.11% 0 0);
     --background: oklch(12% 0 174.82);
     --border: oklch(28% 0 174.82);
-    --danger: oklch(59.4% 0.1967 15.15);
+    /* Dark-theme accent buttons still carry near-white text: keep the fill dark
+       enough for 4.5:1 instead of inheriting the light-theme accent lightness. */
+    --danger: oklch(52% 0.1967 15.15);
     --danger-foreground: oklch(99.11% 0 0);
     --default: oklch(27.4% 0 174.82);
     --default-foreground: oklch(99.11% 0 0);
@@ -505,6 +508,42 @@
 /* Keep each tab on a single line. */
 .result-tabs .tabs__tab {
     white-space: nowrap;
+}
+
+/* React Aria needs the tabpanel as a real target of the selected tab's
+   `aria-controls`. The panes own their body, so the Tabs root now wraps both
+   the label row and that body; these two rules preserve the old flex geometry
+   (label / body / actions) without changing any pane's visible markup. */
+.pane-tabs {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.pane-tabs__panel {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+}
+
+/* HeroUI paints unselected/disabled tabs with its own muted utility and halves
+   their opacity, which drops «Ключи демаскировки» below 4.5:1. Keep the visual
+   hierarchy through the (now darker) muted token instead of transparency. */
+.pane-tabs .tabs__tab:not([data-selected="true"]) {
+    color: var(--muted);
+    opacity: 1;
+}
+
+/* HeroUI's focus ring relies on Tailwind ring custom properties that are not
+   initialised for every control in this build; check with Chromium showed no
+   visible ring on buttons, tabs or text areas. An explicit focus-visible
+   outline is a native indicator and stays off for pointer activation. */
+:where(button, a[href], textarea, [role="tab"], [role="menuitemradio"]):focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
 }
 
 /* "Nothing was masked" notice, shown muted so it does not read as an error. */

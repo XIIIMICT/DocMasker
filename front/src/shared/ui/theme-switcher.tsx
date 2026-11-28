@@ -53,7 +53,16 @@ export function ThemeSwitcher() {
                 {THEME_OPTIONS.map((option) => (
                     <Tabs.Tab aria-label={option.label} id={option.id} key={option.id}>
                         <Tooltip delay={150}>
-                            <Tooltip.Trigger className="theme-tabs__icon">
+                            {/* The trigger is a decorative icon wrapper inside the
+                                tab: presenting it as a second focusable button
+                                nests interactive controls and leaves an unnamed
+                                `role=button` in the accessibility tree. The tab
+                                itself carries the Russian accessible name. */}
+                            <Tooltip.Trigger
+                                className="theme-tabs__icon"
+                                role="presentation"
+                                tabIndex={-1}
+                            >
                                 <option.Icon aria-hidden />
                             </Tooltip.Trigger>
                             <Tooltip.Content showArrow placement="bottom">
@@ -65,6 +74,16 @@ export function ThemeSwitcher() {
                     </Tabs.Tab>
                 ))}
             </Tabs.List>
+            {/* React Aria gives every selected tab an `aria-controls` reference to
+                its tabpanel. A theme preference has no visible panel content, but
+                the reference still needs a real target. Panel ids are static: the
+                collection caches them on first render, so a dynamic id would go
+                stale on theme change. Only the selected panel mounts. */}
+            {THEME_OPTIONS.map((option) => (
+                <Tabs.Panel key={option.id} id={option.id} hidden>
+                    {null}
+                </Tabs.Panel>
+            ))}
         </Tabs>
     );
 }
