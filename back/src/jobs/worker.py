@@ -16,10 +16,7 @@ is best-effort: it never affects job execution or fencing.
 
 import contextlib
 import logging
-import os
-import shutil
 import signal
-import tempfile
 import threading
 import time
 import uuid
@@ -33,7 +30,6 @@ from src.app_logging import configure_application_logging, log_error, log_event,
 from src.config import Settings, get_settings
 from src.masking.archives import mark_cache_hit_file, write_archive_to_path
 from src.metrics import (
-    inc_lease_expired,
     inc_lease_renew_failure,
     mark_worker_heartbeat,
     observe_job_duration,
@@ -43,18 +39,19 @@ from src.metrics import (
     observe_job_succeeded,
     safe_error_code,
     safe_kind,
-    set_artifact_disk_free,
     set_job_running,
 )
 
 from . import dependencies
 from .dependencies import artifact_store, job_repository
+from .heartbeat import Heartbeat
+from .maintenance import WorkerMaintenanceMixin, _temp_result_path
 from .metrics import start_metrics_server, stop_metrics_server
-from .models import Claim, Job, JobKind, JobPhase
+from .models import Claim, JobKind, JobPhase
 from .operations import JobExecutionError, execute
 from .readiness import ArtifactStorageError, check_artifact_storage
 from .repository import OWNERSHIP_LOST, JobRepository
-from .storage import ArtifactStore, cleanup_artifacts
+from .storage import ArtifactStore
 
 LOGGER = logging.getLogger("docmasker.worker")
 
@@ -111,71 +108,7 @@ def classify(error: Exception) -> ErrorClass:
     return ErrorClass("internal_error", retryable=True)
 
 
-class Heartbeat:
-    """Independent lease renewal on a lightweight thread (§3.6)."""
-
-    def __init__(self, repo: JobRepository, job_id: str, claim: Claim, settings: Settings) -> None:
-        self._repo = repo
-        self._job_id = job_id
-        self._claim = claim
-        self._interval = max(0.1, settings.jobs_lease_seconds / 3)
-        self._lease_seconds = settings.jobs_lease_seconds
-        self._stop = threading.Event()
-        self._lost = threading.Event()
-        self._thread = threading.Thread(target=self._run, name=f"dm-heartbeat-{job_id[:8]}", daemon=True)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def lost(self) -> bool:
-        return self._lost.is_set()
-
-    def mark_lost(self) -> None:
-        self._lost.set()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=self._interval * 2 + 1)
-
-    def _run(self) -> None:
-        # Renew immediately: a slow first claim must not start with a stale lease.
-        # A transient DB outage must not silently kill the heartbeat thread —
-        # retry on the same interval; fencing will reject a stale worker.
-        while not self._stop.is_set():
-            try:
-                ok = self._repo.renew_lease(
-                    self._job_id,
-                    lease_seconds=self._lease_seconds,
-                    claim=self._claim,
-                )
-            except Exception as error:  # noqa: BLE001 - log only the exception type
-                inc_lease_renew_failure()
-                log_warning(
-                    LOGGER,
-                    "lease_renew_failed",
-                    "Lease renewal failed.",
-                    job_id=self._job_id,
-                    operation="heartbeat",
-                    error_type=type(error).__name__,
-                )
-                ok = True  # a transient DB failure is not proof of lost ownership
-            if not ok:
-                inc_lease_expired()
-                log_warning(
-                    LOGGER,
-                    "lease_expired",
-                    "Lease renewal rejected.",
-                    job_id=self._job_id,
-                    operation="heartbeat",
-                    outcome="error",
-                )
-                self._lost.set()
-                return
-            mark_worker_heartbeat()
-            self._stop.wait(self._interval)
-
-
-class Worker:
+class Worker(WorkerMaintenanceMixin):
     """Poll → claim → execute (fenced) → publish → sweep, with graceful drain."""
 
     def __init__(self, settings: Settings, repo: JobRepository, store: ArtifactStore) -> None:
@@ -410,132 +343,6 @@ class Worker:
             # Failed rows keep metadata for diagnostics, but never input/keys.
             self._store.delete(job_id)
 
-    def _refresh_runtime_metrics(self) -> None:
-        """Queue depth and free artifact space; never fatal on a DB/disk outage."""
-        try:
-            self._repo.count_active()
-        except Exception as error:  # noqa: BLE001 - log only the exception type
-            log_warning(
-                LOGGER,
-                "queue_sample_failed",
-                "Queue sample unavailable.",
-                operation="sampler",
-                error_type=type(error).__name__,
-            )
-        try:
-            usage = shutil.disk_usage(self._settings.jobs_dir)
-        except OSError as error:
-            log_warning(
-                LOGGER,
-                "artifact_disk_sample_failed",
-                "Artifact disk sample unavailable.",
-                operation="sampler",
-                error_type=type(error).__name__,
-            )
-        else:
-            set_artifact_disk_free(usage.free)
-
-    def sweep(self) -> None:
-        """Recover abandoned work, then remove eligible terminal artifacts (§3.9)."""
-        # P0.2: crash recovery is part of worker maintenance, not an unused
-        # repository helper. Both methods atomically claim only stale rows.
-        abandoned = self._repo.recover_abandoned_staging()
-        cancelled = self._repo.recover_expired_cancelling()
-        recovered = [*abandoned, *cancelled]
-        if recovered:
-            confirmed = []
-            for job_id in recovered:
-                try:
-                    job = self._repo.get(job_id)
-                except Exception as error:  # noqa: BLE001 - row may have been removed by GC
-                    log_warning(
-                        LOGGER,
-                        "recovery_row_missing",
-                        "Recovered job row disappeared before cleanup.",
-                        operation="gc",
-                        error_type=type(error).__name__,
-                    )
-                    continue
-                if job.status in ("failed", "cancelled"):
-                    confirmed.append(job)
-            if confirmed:
-                cleanup_artifacts(self._store, confirmed)
-                log_event(
-                    LOGGER,
-                    "abandoned_jobs_recovered",
-                    "Abandoned staging/cancelling jobs recovered.",
-                    operation="gc",
-                    outcome="ok",
-                    recovered=len(confirmed),
-                )
-        self._repo.expire_queued(queue_wait_seconds=self._settings.jobs_ttl_seconds)
-        self._repo.mark_terminal_retention(retention_seconds=self._settings.jobs_ttl_seconds)
-        expired = self._repo.expired_jobs(time.time())
-        if expired:
-            cleanup_artifacts(self._store, expired)
-            self._repo.remove_expired([job.id for job in expired])
-            log_event(
-                LOGGER,
-                "expired_jobs_swept",
-                "Expired jobs swept.",
-                operation="gc",
-                outcome="ok",
-            )
-        self._refresh_runtime_metrics()
-
-    def _sweep_safe(self) -> None:
-        """GC must never kill the worker on a transient DB outage (§3.9)."""
-        try:
-            self.sweep()
-        except Exception as error:  # noqa: BLE001 - log only the exception type
-            log_warning(
-                LOGGER,
-                "worker_sweep_failed",
-                "Worker sweep failed.",
-                operation="gc",
-                error_type=type(error).__name__,
-            )
-
-    def _cache_gc_safe(self) -> None:
-        """Periodic cache-artifact GC; outages are harmless no-ops."""
-        try:
-            report = dependencies.result_cache().gc()
-            if report.deleted:
-                log_event(
-                    LOGGER,
-                    "cache_artifacts_collected",
-                    "Stale cache artifacts collected.",
-                    operation="gc",
-                    outcome="ok",
-                    deleted=report.deleted,
-                )
-        except Exception as error:  # noqa: BLE001 - log only the exception type
-            log_warning(
-                LOGGER,
-                "worker_cache_gc_failed",
-                "Cache artifact GC failed.",
-                operation="gc",
-                error_type=type(error).__name__,
-            )
-
-    def _claim_safe(self) -> tuple[Job, Claim] | None:
-        """One poll attempt; transient PostgreSQL errors become an empty poll."""
-        try:
-            return self._repo.claim_with_owner(
-                lease_seconds=self._settings.jobs_lease_seconds,
-                concurrency=self._settings.jobs_concurrency,
-                worker_id=self._worker_id,
-            )
-        except Exception as error:  # noqa: BLE001 - never log DB messages or PII
-            log_warning(
-                LOGGER,
-                "worker_claim_failed",
-                "Worker claim failed.",
-                operation="poll",
-                error_type=type(error).__name__,
-            )
-            return None
-
     def run(self) -> None:
         """Poll loop until SIGTERM; bounded by JOBS_CONCURRENCY."""
         # Startup gate: an unwritable or full spool cannot publish any result,
@@ -591,26 +398,6 @@ class Worker:
         self._sweep_safe()
         self._cache_gc_safe()
         log_event(LOGGER, "worker_stopped", "Worker stopped.", worker_id=self._worker_id, operation="poll")
-
-
-def _temp_result_path(root: Path) -> Path:
-    """Create a free path inside the private spool for a streamed result ZIP."""
-    handle, name = tempfile.mkstemp(prefix=".dm-result-", suffix=".zip", dir=str(root))
-    os.close(handle)
-    Path(name).unlink()
-    return Path(name)
-
-
-def _zip_entries(entries: dict[str, Any]) -> bytes:
-    """Bundle every result artifact into one flat ZIP (never nested archives)."""
-    import io
-    import zipfile
-
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, payload in entries.items():
-            archive.writestr(name, payload)
-    return buffer.getvalue()
 
 
 def main() -> None:
