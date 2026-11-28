@@ -68,7 +68,8 @@ contracts and durable specs live in `docs/` — link, do not duplicate:
 
 ## Required tests
 
-`test_rule_based.py`, `test_address_prefilter.py`, `test_keys_v2.py`, `test_config.py`, `test_docx.py`, `test_ooxml.py`,
+`test_rule_based.py` (detector corpus), `test_span_merge.py` (span-merge policy, prefilter agreement, boundaries),
+`test_address_prefilter.py`, `test_keys_v2.py`, `test_config.py`, `test_docx.py`, `test_ooxml.py`,
 `test_windowed.py`, `test_mask_file.py`, `test_unmask.py` (plus `test_mask.py`,
 `test_mapping.py`, `test_labels_api.py`, `test_docx_validation.py`). Offline/deterministic,
 `filterwarnings=error`, ≥80% branch coverage in CI. Synthetic OPC fixtures, mask→keys→unmask
