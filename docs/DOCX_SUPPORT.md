@@ -7,9 +7,19 @@ files (QName/URI, never hardcoded prefixes), parses selected XML parts with
 text-node slices. Only modified ZIP entries are re-serialized; **all other
 entries are copied byte-for-byte**. `python-docx` is no longer used for masking.
 
+The implementation is split into three modules with a one-way dependency graph:
+`ooxml/inventory.py` owns the namespace URI constants, disposition registry,
+metadata-only OPC inventory and coverage; `ooxml/containers.py` owns the text
+references, logical containers and back-to-front rewrite; `ooxml/package.py`
+owns `EntityStats`, the single-pass part transform and both package APIs. The
+inventory imports neither containers nor the transform, containers imports
+neither the inventory nor the transform, and `package.py` re-exports every name
+previously defined there — existing imports from `ooxml/package.py` (including
+monkeypatched globals such as `_read_part` and `_transform_part`) keep working.
+
 ## Bounded inventory and single-pass transform
 
-`build_inventory()` now returns **metadata only** — part names, content types,
+`ooxml/inventory.py::build_inventory()` returns **metadata only** — part names, content types,
 relationship type/mode, category, disposition and `CoverageReport`. It never
 retains a processable part's decompressed XML. The transform keeps the input
 `ZipFile` open and calls `_read_part()` immediately before parsing each part;
