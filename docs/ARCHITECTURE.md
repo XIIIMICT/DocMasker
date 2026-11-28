@@ -78,28 +78,16 @@ bugfix support until ~2028-10); the backend targets it explicitly.
 | oxlint / oxfmt | `^1.94.0` / `^0.79.0` | 1.94.0 / 0.79.0 | — | — |
 | @playwright/test | `^1.65.1` | 1.65.1 | — | — |
 
-### Known configuration mismatches (as of 2026-11-22)
+### Current deployment exceptions
 
-1. **TLS verification is bypassed for dependency installs — maintainer decision.**
-   `back/Dockerfile` deps stage runs `uv sync --allow-insecure-host pypi.org
-   --allow-insecure-host files.pythonhosted.org`; `front/Dockerfile` base stage
-   sets `NODE_TLS_REJECT_UNAUTHORIZED=0` (build/dev stages only — the Node
-   production runtime does not inherit it); the host `justfile` exports
-   `UV_SYSTEM_CERTS=1` and `NODE_OPTIONS=--use-system-ca`. Accepted as the
-   corporate-proxy workaround (mirrors ReportCollector, where the same setup
-   works for uv and bun). The `node` prod runtime verifies TLS normally. If a
-   corporate CA becomes available, replace the bypasses with
-   `NODE_EXTRA_CA_CERTS` / system trust store.
-2. **Git/CI topology diverges from the workflow docs.** Origin currently holds
-   only `feat/demasking`; `main`/`dev` exist locally. CI push/PR triggers fire
-   only for `main`/`dev`, so pushes to other branches run no CI. The job named
-   `CI required` is not a required check by itself — branch rulesets live in
-   GitHub repository settings and cannot be verified from the repo.
-
-Resolved (kept for the record): the frontend prod container now runs as the
-unprivileged `node` user, and compose prod publishes the backend port to
-loopback only (`127.0.0.1:$BACKEND_PORT`), so the API is no longer reachable
-from the network directly.
+Build-time TLS verification is bypassed by maintainer decision (corporate proxy
+workaround, mirroring ReportCollector); the production runtime verifies TLS
+normally. Exact flags and the replacement path for a trusted corporate CA are
+in `docs/SECURITY.md` §6. The frontend prod image runs as the unprivileged
+`node` user and compose publishes the backend on loopback only
+(`127.0.0.1:$BACKEND_PORT`). CI push/PR triggers fire only for `main`/`dev`;
+branch rulesets and the required check `CI required` are GitHub-side settings
+(`docs/WORKFLOW.md`, `TODO.md` §"Blocked / external").
 
 ## Environment variables (root `.env`, single source)
 

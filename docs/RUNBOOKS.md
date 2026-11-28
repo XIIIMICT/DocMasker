@@ -1,4 +1,4 @@
-# Runbook — PostgreSQL backup and restore (P1-8)
+# Runbook — PostgreSQL backup and restore
 
 Canonical home for the backup contract, restore procedure, drill cadence,
 off-host configuration, monitoring contract and alert response. Inventory and
@@ -13,13 +13,10 @@ point — see «Artifact consistency» below.
 
 ## Decision and evidence
 
-- Phase 0 fact: local and CI PostgreSQL are `postgres:18-alpine`; the authoritative
-  job state lives on the named volume `dm-postgres-data`
-  (`infra/compose.db.yaml`). Before this change there was **no** backup
-  container, cron, script or job — only the manual `pg_dump` + artifact-copy
-  procedure in `docs/OPERATIONS.md` — and no declared RPO/RTO
-  (`docs/REMEDIATION-PHASE0-RESEARCH.md` §6; `TODO.md`). The target-host
-  rehearsal remains OPEN.
+- Local and CI PostgreSQL are `postgres:18-alpine`; the authoritative job state
+  lives on the named volume `dm-postgres-data` (`infra/compose.db.yaml`). The
+  artifact spool is a separate recovery point. RPO/RTO below are assumptions,
+  not accepted SLOs; the target-host rehearsal remains OPEN.
 - **Chosen: `pg_dump -Fc` custom-format sidecar (`dm-pgbackup` in
   `infra/backup/`), not WAL-G / pgBackRest.** WAL-based tools need server-side
   `archive_mode` / `archive_command` and a separate repository; the external
@@ -125,7 +122,9 @@ recovery point is required. Valkey needs no backup (disposable cache index).
    `POSTGRES_HOST`), start the stack (`just prod` / `just dev`) and verify
    `GET /health`, `GET /ready` and one round-trip job. Run `just migrate` only
    if the dump predates the current Alembic head; applied migrations are
-   immutable (`docs/WORKFLOW.md`).
+   immutable (`docs/WORKFLOW.md`). Alembic owns `alembic_version` — never edit
+   or delete it; a dump older than head is advanced by migrating, not by
+   rewriting the version row.
 
 Never restore over the live database in place: restore to a new database,
 verify, then switch the connection.

@@ -5,7 +5,7 @@
   document is kept as the record of the 2026-11-23 decisions; SQLite-specific
   statements below are historical.
 - Stage: production-readiness stage 4 (findings F-01, F-02, F-07, F-08 / request §6)
-- Related: ADR-0001 (profiles), `docs/PRODUCTION_READINESS.md` baseline
+- Related: ADR-0001 (profiles); the original readiness baseline is in git history
 
 ## Context
 
@@ -159,4 +159,4 @@ transformer; job throttle values are estimates until re-benchmarked.
 - Synchronous bounded-executor test: over-limit concurrent masks → 429/503.
 - Proxy streaming tests + bounded timeout assertions; e2e smoke on a live
   CI-compose stack including the worker service.
-- `back/benchmarks/` re-run: record after-numbers in `PRODUCTION_READINESS.md`.
+- `back/benchmarks/` re-run: record after-numbers in `docs/PERFORMANCE.md`.

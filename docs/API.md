@@ -356,8 +356,8 @@ type-checked when present; unknown extra fields are tolerated for backward
 compatibility. Any failure throws `ManifestValidationError` with a stable
 machine code (`manifest_malformed`, `manifest_version_unsupported`,
 `manifest_invalid`) and a fixed Russian detail that echoes no input, value or
-filename — never a fabricated "0 entities" result. The partial-check defect
-recorded as Phase 3.4 in `docs/FRONTEND-AUDIT-BASELINE.md` §5 is fixed here.
+filename — never a fabricated "0 entities" result. The earlier partial-check
+defect is fixed here; its change history is in git.
 
 ## Durable jobs (`/api/jobs`, ADR-0002)
 

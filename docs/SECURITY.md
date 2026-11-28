@@ -11,7 +11,7 @@ procedures (backup, probes, runbooks) live in `docs/OPERATIONS.md`.
 
 - **No authentication, authorization, tenants, SSO, user accounts or
   user-level quotas are implemented.** This is an explicit maintainer decision
-  (Implementation Brief §0.11 and §11; `TODO.md`, "Blocked / external — Auth"). The service is
+  (`TODO.md` §"Blocked / external", auth bullet). The service is
   intended for a trusted, private deployment only. Do not describe it as
   authenticated, multi-tenant or safe to expose to the public Internet.
 - **The reverse proxy / network perimeter is the trust boundary.** A concrete
@@ -57,12 +57,12 @@ carry placeholders, aggregates and hashes only.
 | Valkey key names | HMAC-SHA256 over a canonical fingerprint; no raw source hashes or PII in the key string | `back/src/jobs/cache.py::build_cache_key`; `test_cache.py::test_key_does_not_leak_source_hash` |
 | Test data | Synthetic fixtures only; no real PII is committed | `test_ooxml.py` ("No real PII is used"), `back/config/masking/exceptions.example.yaml` ("Synthetic examples only") |
 
-Result responses use `Cache-Control: no-store` (explicitly verified for
-`/api/jobs/{id}/result` by `test_jobs_api.py::test_result_serves_zip_with_no_store`);
-extending `no-store` to every document/keys response is still a `TODO.md`
-stage-6 item. Structured JSON logs with request/job/worker correlation and log
-rotation/retention are also deferred there — the current plain-text logs must
-still be treated as sensitive operational data.
+Every `/api/*` response carries `Cache-Control: no-store` and `Pragma:
+no-cache` (PII JSON, ZIPs, errors); the Next proxies forward both headers
+(`docs/API.md`, `back/AGENTS.md` §11). Structured JSON logs with
+request/job/worker correlation plus log rotation/retention are still deferred
+(`TODO.md` §"Old stage 6 (deferred)") — current plain-text logs must be treated
+as sensitive operational data.
 
 ## 3. Cache and artifact security
 
@@ -113,7 +113,7 @@ still be treated as sensitive operational data.
 ## 4. Input threat assumptions and limits
 
 All uploaded content is hostile; the frontend is explicitly **not** a trust
-boundary (`docs/API.md`, `docs/PRODUCTION_READINESS.md` F-04). The backend
+boundary (`docs/API.md`, `docs/DOCX_SUPPORT.md` §"Rejection"). The backend
 enforces every limit.
 
 - **DOCX uploads are OPC/ZIP packages, never trusted by extension.**
@@ -175,7 +175,7 @@ enforces every limit.
 ## 6. Known build-time TLS bypasses (accepted, not silently assumed safe)
 
 Both bypasses are kept **by maintainer decision**, mirroring ReportCollector
-(`docs/PRODUCTION_READINESS.md` F-06, `TODO.md`, `infra/AGENTS.md`):
+(`TODO.md` §"Blocked / external", `infra/AGENTS.md`):
 
 - `back/Dockerfile` installs dependencies with
   `uv sync --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org`.
@@ -198,8 +198,7 @@ From `TODO.md`, "Old stage 6 (deferred)" and `docs/OPERATIONS.md` (do not claim 
   `pids_limit`, resource limits), removal of the loopback backend port when a
   proxy exists;
 - structured PII-safe logs with request/job/worker correlation, log rotation
-  and retention; full metrics (latency, queue depth, lease losses, retries);
+  and retention (the metrics themselves are implemented — `docs/OPERATIONS.md` §4);
 - wiring `/ready` into Compose/CI healthchecks and a front readiness route;
-- extending `Cache-Control: no-store` to all document/keys responses;
 - branch protection / required check `CI required` — a **GitHub-side setting**,
   never claim it is enabled from the repository (`docs/WORKFLOW.md`).

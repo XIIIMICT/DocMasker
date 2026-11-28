@@ -59,8 +59,8 @@ area trees above. Tests: `back/tests/` (see `docs/TESTING.md`).
    `JOBS_CONCURRENCY=4`, `JOBS_MAX_ACTIVE=32`, `JOBS_RETRY_AFTER_SECONDS=45`
    are measurement-derived (`docs/PERFORMANCE.md`); `test_settings_validation.py`
    pins them. Never relax them.
-7. **`MASK_LABELS` fails startup**; profile APIs/fields were removed in Phase
-   4. `GET /api/labels` is the single canonical catalogue. `/ready` checks
+7. **`MASK_LABELS` fails startup**; profile APIs/fields were removed.
+   `GET /api/labels` is the single canonical catalogue. `/ready` checks
    PostgreSQL; `/metrics` exposes only the `dm_*` Prometheus exposition (the
    legacy JSON answer was removed without a compatibility window).
 8. **§8.2 (OpenAPI → TS types) is implemented.** `app.openapi()` is exported

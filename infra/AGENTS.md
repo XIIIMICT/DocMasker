@@ -85,7 +85,7 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   `DOCX_TRANSFORMER_VERSION`.
   Production startup fails clearly when credentials are missing (`:?` in
   compose). Valkey stays private to the internal network.
-- Phase 4 config: `MASKING_CONFIG_DIR=/app/config/masking` (default in the
+- Masking config: `MASKING_CONFIG_DIR=/app/config/masking` (default in the
   image), `MASKING_CONFIG_DIGEST=auto` (computed from the loaded snapshot).
   `back/config/masking/` is copied into the image **except** the private
   `exceptions.yaml` (`back/.dockerignore`); compose mounts
@@ -104,7 +104,7 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
 ## Health & lifecycle
 
 - Backend `GET /health` is a simple liveness probe (`{"status":"ok"}`, no
-  model to load); front `/api/health` is a Next route. Phase 6 added
+  model to load); front `/api/health` is a Next route. The backend also has
   `GET /ready` (PostgreSQL check, 503 when down) and `GET /metrics` (the `dm_*`
   Prometheus scrape without PII; the legacy JSON answer was removed) on the backend — but **wiring them into compose/CI
   healthchecks and a front readiness route is still part of the deferred

@@ -68,7 +68,7 @@ target (`ALLOW_LOCAL_DB=1` for local/disposable stands).
 
 ### e2e (Playwright)
 
-The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (**41 tests in 4 files**, measured 2026-11-28, including the `rerender-smoke.spec.ts` regression and the job Cancel control — the `smoke` project's `testMatch` regex is unanchored, and CI asserts all four spec files are discovered): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
+The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (**55 tests in 4 files** at the current `--list` run, including the `rerender-smoke.spec.ts` regression, axe scans and the job Cancel control — the `smoke` project's `testMatch` regex is unanchored, and CI asserts all four spec files are discovered): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
 
 ### Live UI checks (browser)
 
@@ -205,7 +205,7 @@ deliberately pinned `setuptools<81` (fix versions ≥83), which would break
 exception: it is already a green per-PR gate in `ci.yaml`, so it stays
 blocking, unchanged.
 
-**Failure routing (verified 2026-11-27):** no workflow in this repository or
+**Failure routing:** no workflow in this repository or
 the two sibling repositories (`ReportCollector`, `excel_loader`) has a
 notification step, a `workflow_run` completion handler, a repository webhook
 or an Actions alert rule. `infra/alertmanager/` renders SMTP recipients only
@@ -253,7 +253,7 @@ nightly status — do not claim e-mail delivery.
 
 ### Deprecation policy
 
-No timed compatibility window is declared — breaking removals are loud (e.g. `MASK_LABELS` fails startup, `docs/adr/0001`). The legacy JSON answer of `GET /metrics` was removed the same way: no "one release with a notice" shim, because a timed window would contradict this policy (`TODO.md` §"Legacy JSON `/metrics` sunset (P1-6)"; the `/metrics` scrape path stays for Prometheus). When a deprecated helper must stay as a test/benchmark reference, mark it with `warnings.warn(..., DeprecationWarning, stacklevel=2)` and add a static guard that fails CI if production code uses it. `RuleBasedMasker.mask()` is the current case: deprecated renderer kept for reference, guarded by `src/scripts/check_legacy_mask_path.py`; `mask_text` remains the production path.
+No timed compatibility window is declared — breaking removals are loud (e.g. `MASK_LABELS` fails startup, `docs/adr/0001`). The legacy JSON answer of `GET /metrics` was removed the same way: no "one release with a notice" shim, because a timed window would contradict this policy (current contract: `docs/API.md` §`GET /metrics`; the scrape path stays for Prometheus). When a deprecated helper must stay as a test/benchmark reference, mark it with `warnings.warn(..., DeprecationWarning, stacklevel=2)` and add a static guard that fails CI if production code uses it. `RuleBasedMasker.mask()` is the current case: deprecated renderer kept for reference, guarded by `src/scripts/check_legacy_mask_path.py`; `mask_text` remains the production path.
 
 ## Working principles
 

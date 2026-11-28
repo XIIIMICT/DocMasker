@@ -1,4 +1,4 @@
-# DOCX / OOXML coverage (Phase 5)
+# DOCX / OOXML coverage
 
 DocMasker masks `.docx` at the **OPC package level**. `back/src/masking/ooxml/`
 builds a namespace-aware inventory from `[Content_Types].xml` and relationship
@@ -7,7 +7,7 @@ files (QName/URI, never hardcoded prefixes), parses selected XML parts with
 text-node slices. Only modified ZIP entries are re-serialized; **all other
 entries are copied byte-for-byte**. `python-docx` is no longer used for masking.
 
-## Bounded inventory and single-pass transform (DM-3)
+## Bounded inventory and single-pass transform
 
 `build_inventory()` now returns **metadata only** — part names, content types,
 relationship type/mode, category, disposition and `CoverageReport`. It never
@@ -63,8 +63,8 @@ container is joined for matching before the back-to-front rewrite. At mask
 time the package is rejected with a clear 422 if a source literal equals a
 marker that run allocates (see `docs/MASKING_CONFIGURATION.md`).
 
-Each text-bearing container is passed to the detector with `prefilter=True`
-(Phase 7): detectors whose cheap precondition cannot match are skipped, while
+Each text-bearing container is passed to the detector with `prefilter=True`:
+detectors whose cheap precondition cannot match are skipped, while
 `always_mask` literals still run over the full text. The address precondition
 uses the same validated, anchored lexicon marker matcher as the expensive
 extractor, so short fragments such as `г. Москва, ул. Ленина` are not skipped
@@ -92,7 +92,7 @@ acknowledges the terminal `cancelled` state.
   classified as unprocessed and the package is rejected rather than reported
   complete.
 
-## Rejection (strict blocking, §6.4/§6.5)
+## Rejection (strict blocking)
 
 A package is rejected with a clear non-PII error (HTTP 422) when it contains
 **embedded binary/OLE objects** (`*.bin`, `word/embeddings/*`) that cannot be
@@ -104,8 +104,7 @@ copied verbatim; parts with `unprocessed` text-bearing content (charts and
 similar) cause the same 422 rejection, so `complete: false` never reaches a
 delivered archive.
 
-There is **no** `X-Docx-Unsupported-Parts` plumbing and no frontend warning —
-that mechanism was removed in Phase 5.
+There is **no** `X-Docx-Unsupported-Parts` plumbing and no frontend warning.
 
 A source literal equal to a marker allocated by the same run also fails closed:
 sync routes return `422` with stable code `marker_collision` and a fixed Russian
@@ -116,7 +115,7 @@ cache entry. `back/tests/test_transform_cleanup.py` pins the cleanup contract
 of a pre-existing artifact) for path and in-memory flows;
 `back/tests/test_jobs_worker.py` covers the same outcomes against PostgreSQL.
 
-## Result manifest (§7)
+## Result manifest
 
 Both sync and job file operations return the same flat ZIP and the same
 versioned `manifest.json`:
@@ -151,11 +150,10 @@ known optional fields are checked when present and unknown extra fields are
 tolerated. Generated OpenAPI DTOs are compile-time only and do not cover this
 ZIP-internal file, so the guard is not a cast. Rejection is a stable
 `ManifestValidationError` (`docs/API.md` §`manifest.json`) with a fixed Russian
-detail and no PII. This closes the Phase 3.4 finding in
-`docs/FRONTEND-AUDIT-BASELINE.md` §5; the stricter completeness rule is the
-follow-up A2 recorded in `TODO.md`.
+detail and no PII. The stricter completeness rule is part of this contract;
+its change history is in git.
 
-## Demasking input placeholder count (Phase 3.3)
+## Demasking input placeholder count
 
 The demasking input pane shows `N фрагментов` **before** the operation runs.
 Two different numbers are displayed and must not be conflated: the headline is
@@ -285,7 +283,7 @@ own `<mark class="docx-marker">`, and every pass first removes previous marks,
 so re-application after a keys edit never nests or duplicates a mark. These
 cases are pinned by `front/src/shared/ui/__tests__/docx-viewer.test.ts`.
 
-## Result-archive unpacking (Phase 3.2)
+## Result-archive unpacking
 
 Both sync file responses and `/api/jobs/{id}/result` are **one flat ZIP**
 (`docs/API.md` §`POST /api/mask-file`, §`GET /api/jobs/{id}/result`). The
@@ -317,7 +315,7 @@ unmount (`use-job-lifecycle.ts:184–194`) without issuing a `DELETE` — only a
 confirmed server cancellation may claim the job was cancelled. Object URLs
 are already revoked on both success and failure; no change was needed.
 
-### Measurements — SYNTHETIC / MEASURED (local, 2026-11-27)
+### Measurements — SYNTHETIC / MEASURED (local)
 
 No large committed browser fixture exists, so two deterministic archives were
 generated locally with JSZip 3.10.2 (seed 20261127), never committed:
@@ -386,7 +384,7 @@ properties, alt-text attributes, external relationship targets, shared parts,
 malformed XML, embedded objects, and mask → keys → unmask round-trips with
 byte-for-byte preservation of an unrelated PNG entry. Sync/job manifest parity
 is asserted with the same source and config. `back/tests/test_ooxml_bounded.py`
-adds DM-3 regressions: metadata-only inventory, a refcount-tracked bytes probe
+adds bounded-inventory regressions: metadata-only inventory, a refcount-tracked bytes probe
 proving only one decompressed part is resident, high-occurrence stats parity
 without an occurrence list, file/memory equivalence, cancellation at part and
 window boundaries, one unmask scan per container and worker-manifest parity.
