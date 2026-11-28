@@ -218,6 +218,12 @@ history.
   worker cannot publish a result; expired leases are reclaimed with a new token
   and incremented attempt until `JOBS_MAX_ATTEMPTS`
   (`back/src/jobs/AGENTS.md`, `back/src/jobs/worker.py`).
+- **Worker module map:** `back/src/jobs/worker.py` owns the error types,
+  `classify`, the `Worker` execution loop and the `main()` entrypoint;
+  `back/src/jobs/heartbeat.py` owns `Heartbeat` lease renewal;
+  `back/src/jobs/maintenance.py` owns the sweep/GC/claim passes and the
+  result-temp helpers. `worker.py` re-exports `Heartbeat` and the error types,
+  so existing imports and `python -m src.jobs.worker` are unchanged.
 - **TTL/GC:** active jobs are never swept. The TTL clock starts on a terminal
   transition (`JOBS_TTL_SECONDS`, default 3600); `expired_jobs` selects only
   terminal rows, deletes artifacts first and then removes rows. Queued jobs
