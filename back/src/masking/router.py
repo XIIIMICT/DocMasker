@@ -1,17 +1,13 @@
 """Masking and unmasking API router."""
 
-import base64
-import json
-import re
 from typing import TYPE_CHECKING, Annotated, Any
-from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from src.config import get_settings
 from src.errors import error_responses
-from src.jobs.cache import build_cache_key, canonical_json, fingerprint_for
+from src.jobs.cache import build_cache_key, fingerprint_for
 from src.jobs.dependencies import result_cache
 from src.jobs.repository import JobQueueFullError
 from src.jobs.routing import count_docx_paragraphs, count_docx_paragraphs_path, enqueue, enqueue_from_path, needs_job
@@ -24,6 +20,14 @@ from .archives import mark_cache_hit, mask_archive, restore_archive, safe_stem
 from .docx_service import CoverageReport, OoxmlPackageError, mask_docx_in_memory, unmask_docx_in_memory
 from .docx_validation import DocxValidationError, upload_limits, validate_docx_package, validate_docx_package_path
 from .executor import ExecutorBusyError, run_blocking, run_cpu
+from .file_result_cache import (
+    _ZIP_CONTENT_TYPE,
+    _ascii_attachment_name,  # noqa: F401 - re-exported for existing callers
+    _content_disposition,  # noqa: F401 - re-exported for existing callers
+    _download_headers,
+    _pack_file_result,
+    _unpack_file_result,
+)
 from .mapping import KeysValidationError, MaskKeys, placeholders_from_document, validate_keys_yaml
 from .ooxml.manifest import build_mask_manifest, build_unmask_manifest
 from .rule_based import get_masker
@@ -139,27 +143,6 @@ async def labels_endpoint() -> LabelsResponse:
 
 
 _DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-_ZIP_CONTENT_TYPE = "application/zip"
-
-
-def _ascii_attachment_name(name: str) -> str:
-    """Fallback filename for `filename=` (must be ASCII/latin-1 safe)."""
-    ascii_name = re.sub(r"[^A-Za-z0-9_.()-]", "_", name)
-    return ascii_name or "masked.docx"
-
-
-def _content_disposition(download_name: str) -> str:
-    """RFC 5987 attachment header (ASCII fallback + UTF-8 name for Cyrillic)."""
-    return f"attachment; filename=\"{_ascii_attachment_name(download_name)}\"; filename*=UTF-8''{quote(download_name)}"
-
-
-def _download_headers(download_name: str) -> dict[str, str]:
-    """Transport-only headers: semantic metadata lives in `manifest.json` (§7.3)."""
-    return {
-        "Content-Disposition": _content_disposition(download_name),
-        "Content-Type": _ZIP_CONTENT_TYPE,
-        "Cache-Control": "no-store",
-    }
 
 
 def _manifest_ctx() -> tuple[int, str, int]:
@@ -243,24 +226,6 @@ async def _job_overflow_async(
     except JobQueueFullError as error:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(error)) from error
     return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=accepted.model_dump())
-
-
-def _pack_file_result(archive: bytes, headers: dict[str, str]) -> bytes:
-    """Cache the ZIP plus its non-semantic response headers as one artifact."""
-    return canonical_json(
-        {
-            "archive_b64": base64.b64encode(archive).decode("ascii"),
-            "headers": headers,
-        }
-    ).encode("utf-8")
-
-
-def _unpack_file_result(cached: bytes) -> tuple[bytes, dict[str, str]] | None:
-    try:
-        payload = json.loads(cached)
-        return base64.b64decode(payload["archive_b64"]), dict(payload["headers"])
-    except Exception:
-        return None
 
 
 def _build_mask_archive(

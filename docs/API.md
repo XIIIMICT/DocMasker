@@ -6,7 +6,10 @@ mask/unmask), `back/src/jobs/api.py` (`/api/jobs/*`), `back/src/masking/schemas.
 and `back/src/jobs/schemas.py` (Pydantic models), `back/src/errors.py` (sanitized
 error envelope), `back/src/openapi_export.py` (deterministic schema export).
 All `/api/*` routes are mounted under one `APIRouter(prefix="/api")`
-(`back/src/api.py`).
+(`back/src/api.py`). Sync file-result ZIP/header serialization (the
+`Content-Disposition`/`Content-Type` headers and the packed cache value) lives
+in `back/src/masking/file_result_cache.py` and is re-exported by `router.py`;
+the HTTP routes and cache access stay in `router.py`.
 
 The **browser never calls the backend directly**: `front/src/app/api/*/route.ts`
 proxies each path server-side to `BACKEND_INTERNAL_URL`. CORS is enabled on the
