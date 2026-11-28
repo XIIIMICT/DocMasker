@@ -57,6 +57,20 @@ function text(
     return JSON.stringify(manifest);
 }
 
+const OPERATIONS: ManifestOperation[] = ["mask_file", "unmask_file"];
+
+function expectInvalid(payload: string, operation: ManifestOperation): string {
+    try {
+        parseResultManifest(payload, operation);
+        throw new Error("expected rejection");
+    } catch (error) {
+        expect(error).toBeInstanceOf(ManifestValidationError);
+        expect((error as ManifestValidationError).code).toBe("manifest_invalid");
+        expect((error as Error).message).toBe("Некорректный отчёт о результате.");
+        return (error as Error).message;
+    }
+}
+
 describe("parseResultManifest — valid contracts", () => {
     it("accepts and normalises a current mask_file manifest", () => {
         const manifest = parseResultManifest(text("mask_file"), "mask_file");
@@ -89,6 +103,110 @@ describe("parseResultManifest — valid contracts", () => {
         expect(manifest.statistics.total_occurrences).toBe(2);
         // A known field is still type-checked even when it is not operation-required.
         expect(manifest.statistics.unused_keys).toEqual(["extra-but-typed"]);
+    });
+});
+
+describe("parseResultManifest — complete and coverage consistency", () => {
+    it("accepts empty exception arrays with complete true for both operations", () => {
+        for (const operation of OPERATIONS) {
+            const manifest = parseResultManifest(text(operation), operation);
+            expect(manifest.complete).toBe(true);
+            expect(manifest.coverage.unprocessed_text_parts).toEqual([]);
+            expect(manifest.coverage.rejected_parts).toEqual([]);
+        }
+    });
+
+    it("tolerates unknown extras for both operations when the known contract is valid", () => {
+        for (const operation of OPERATIONS) {
+            const manifest = parseResultManifest(
+                text(operation, (raw) => {
+                    raw.future_field = 1;
+                    obj(raw.coverage).future_coverage = "ignored";
+                }),
+                operation,
+            );
+            expect(manifest.complete).toBe(true);
+            expect(manifest.coverage.unprocessed_text_parts).toEqual([]);
+        }
+    });
+
+    it("rejects complete false regardless of the coverage arrays", () => {
+        const changes: Array<(raw: Record<string, unknown>) => void> = [
+            (raw) => {
+                raw.complete = false;
+            },
+            (raw) => {
+                raw.complete = false;
+                obj(raw.coverage).unprocessed_text_parts = ["word/charts/chart1.xml"];
+            },
+            (raw) => {
+                raw.complete = false;
+                obj(raw.coverage).rejected_parts = ["word/embeddings/oleObject1.bin"];
+            },
+            (raw) => {
+                raw.complete = false;
+                obj(raw.coverage).unprocessed_text_parts = ["word/charts/chart1.xml"];
+                obj(raw.coverage).rejected_parts = ["word/embeddings/oleObject1.bin"];
+            },
+        ];
+        for (const operation of OPERATIONS) {
+            for (const change of changes) {
+                expectInvalid(text(operation, change), operation);
+            }
+        }
+    });
+
+    it("rejects missing, null and non-boolean complete", () => {
+        const values: unknown[] = [undefined, null, "true", "", 0, 1, [], {}];
+        for (const operation of OPERATIONS) {
+            for (const value of values) {
+                expectInvalid(
+                    text(operation, (raw) => {
+                        if (value === undefined) delete raw.complete;
+                        else raw.complete = value;
+                    }),
+                    operation,
+                );
+            }
+        }
+    });
+
+    it("rejects non-empty unprocessed_text_parts with complete true", () => {
+        for (const operation of OPERATIONS) {
+            expectInvalid(
+                text(operation, (raw) => {
+                    obj(raw.coverage).unprocessed_text_parts = ["word/charts/chart1.xml"];
+                }),
+                operation,
+            );
+        }
+    });
+
+    it("rejects non-empty rejected_parts with complete true", () => {
+        for (const operation of OPERATIONS) {
+            expectInvalid(
+                text(operation, (raw) => {
+                    obj(raw.coverage).rejected_parts = ["word/embeddings/oleObject1.bin"];
+                }),
+                operation,
+            );
+        }
+    });
+
+    it("keeps the fixed PII-free detail for completeness contradictions", () => {
+        const sensitive = ["Иван Петров", "sekret.docx", "[PERSON_1]"];
+        for (const operation of OPERATIONS) {
+            const payload = text(operation, (raw) => {
+                obj(raw.output).document_name = "sekret.docx";
+                obj(raw.statistics).unused_keys = ["[PERSON_1] Иван Петров"];
+                obj(raw.coverage).unprocessed_text_parts = ["Иван Петров"];
+                obj(raw.coverage).rejected_parts = ["sekret.docx"];
+            });
+            const message = expectInvalid(payload, operation);
+            for (const secret of sensitive) {
+                expect(message).not.toContain(secret);
+            }
+        }
     });
 });
 

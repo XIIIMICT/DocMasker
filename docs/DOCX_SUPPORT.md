@@ -134,20 +134,26 @@ ruleset/config versions, input hash/size, output names, `statistics`
 every successfully inspected supported part, including parts with zero
 detections; `complete` is true only when the supported scope was fully
 inspected and no text-bearing part was unprocessed or rejected. The frontend
-requires and validates it — a missing/malformed/wrong
-version is a clear result error, never "0 entities". Semantic metadata no
-longer lives in `X-Masked-Count` / `X-Masked-Breakdown`; both were removed.
+requires and validates it: only `complete === true` with empty
+`unprocessed_text_parts` and `rejected_parts` is accepted as a delivered
+result. A false/missing/null/non-boolean flag is rejected regardless of the
+arrays, and a non-empty exception array is rejected even when the flag is
+true. A missing/malformed/wrong version is a clear result error, never "0
+entities". Semantic metadata no longer lives in `X-Masked-Count` /
+`X-Masked-Breakdown`; both were removed.
 
 Runtime validation lives in `front/src/shared/api/manifest-validation.ts` and
-walks the whole producer contract (schema version, operation/status enums, all
-nested objects and arrays, item types and non-negative safe-integer counts).
-`mask_file` must carry the three occurrence aggregates, `unmask_file` must carry
-`unused_keys`; known optional fields are checked when present and unknown extra
-fields are tolerated. Generated OpenAPI DTOs are compile-time only and do not
-cover this ZIP-internal file, so the guard is not a cast. Rejection is a stable
+walks the whole producer contract (schema version, operation/status enums,
+`complete === true` with empty coverage exception arrays, all nested objects
+and arrays, item types and non-negative safe-integer counts). `mask_file` must
+carry the three occurrence aggregates, `unmask_file` must carry `unused_keys`;
+known optional fields are checked when present and unknown extra fields are
+tolerated. Generated OpenAPI DTOs are compile-time only and do not cover this
+ZIP-internal file, so the guard is not a cast. Rejection is a stable
 `ManifestValidationError` (`docs/API.md` §`manifest.json`) with a fixed Russian
 detail and no PII. This closes the Phase 3.4 finding in
-`docs/FRONTEND-AUDIT-BASELINE.md` §5.
+`docs/FRONTEND-AUDIT-BASELINE.md` §5; the stricter completeness rule is the
+follow-up A2 recorded in `TODO.md`.
 
 ## Demasking input placeholder count (Phase 3.3)
 

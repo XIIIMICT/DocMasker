@@ -15,7 +15,7 @@ import pytest
 
 from src.masking.docx_service import mask_docx_in_memory, unmask_docx_in_memory
 from src.masking.mapping import MaskKeys, parse_keys_yaml, placeholders_from_document
-from src.masking.ooxml.manifest import build_mask_manifest, validate_manifest
+from src.masking.ooxml.manifest import build_mask_manifest, build_unmask_manifest, validate_manifest
 from src.masking.ooxml.package import (
     OoxmlPackageError,
     build_inventory,
@@ -379,6 +379,41 @@ def test_manifest_validation_rejects_bad_schema() -> None:
         validate_manifest({**good, "schema_version": 99}, "mask_file")
     with pytest.raises(ValueError, match="Некорректный"):
         validate_manifest(good, "unmask_file")
+
+
+def test_successful_manifests_are_complete_with_empty_coverage_arrays() -> None:
+    """Producer parity with the client's strict result guard (A2)."""
+    clean = {
+        "processed_parts": [],
+        "unprocessed_text_parts": [],
+        "rejected_parts": [],
+        "raster_image_ocr": "not_performed",
+    }
+
+    def build(operation: str, coverage: dict[str, Any]) -> dict[str, Any]:
+        common: dict[str, Any] = {
+            "source_bytes": b"x",
+            "document_name": "doc.docx",
+            "coverage": coverage,
+            "cache_hit": False,
+            "namespace_version": 1,
+            "masking_ruleset_version": 1,
+            "exception_config_digest": "digest",
+        }
+        if operation == "mask_file":
+            return build_mask_manifest(keys_name="doc.yaml", entities=[], **common)
+        return build_unmask_manifest(unused_keys=[], **common)
+
+    for operation in ("mask_file", "unmask_file"):
+        delivered = build(operation, clean)
+        assert delivered["complete"] is True
+        assert delivered["coverage"]["unprocessed_text_parts"] == []
+        assert delivered["coverage"]["rejected_parts"] == []
+        assert validate_manifest(delivered, operation) is delivered
+        # A partial/rejected package can never be labelled as a complete success.
+        for field in ("unprocessed_text_parts", "rejected_parts"):
+            partial = {**clean, field: ["word/charts/chart1.xml"]}
+            assert build(operation, partial)["complete"] is False
 
 
 def test_sync_and_job_manifest_parity() -> None:

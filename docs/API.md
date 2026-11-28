@@ -326,9 +326,14 @@ thresholds → `202 + JobAccepted`.
 detections; `complete` is true only when the supported scope was fully
 inspected and no text-bearing part was unprocessed/rejected — such documents
 are rejected with 422 rather than delivered as a misleading success. The
-frontend rejects a missing/malformed/wrong-version manifest with a clear
-error. `cache.hit` describes **the request currently served**: a cache hit
-returns a freshly built ZIP whose manifest says `true`, while the immutable
+client accepts only `complete === true` with both
+`coverage.unprocessed_text_parts` and `coverage.rejected_parts` empty: a
+`complete` of `false`, missing, `null` or any non-boolean is rejected
+regardless of the arrays, and a non-empty exception array is rejected even
+when the flag is true. The frontend rejects a missing/malformed/wrong-version
+manifest with a clear error. `cache.hit` describes **the request currently
+served**: a cache hit returns a freshly built ZIP whose manifest says `true`,
+while the immutable
 content-addressed cached artifact keeps its original `false` and is never
 mutated in place. This is identical on sync file routes and job results.
 See `docs/DOCX_SUPPORT.md`.
@@ -339,10 +344,11 @@ compile-time type assertion never validates bytes from a file/network. The
 frontend therefore parses it as `unknown` and fully validates every field against
 the exact producer contract in `front/src/shared/api/manifest-validation.ts`:
 `schema_version === 1`, `operation` equal to the expected one, `status ===
-"succeeded"`, both nested objects (`input`, `output`, `cache`) and the `statistics`
-/ `coverage` objects, every array and its item types, every enum value, and
-non-negative safe-integer counts (negative, fractional, `NaN`/`Infinity` and
-huge numbers are rejected). `mask_file` requires `total_occurrences`,
+"succeeded"`, `complete === true` with empty `unprocessed_text_parts` and
+`rejected_parts`, both nested objects (`input`, `output`, `cache`) and the
+`statistics` / `coverage` objects, every array and its item types, every enum
+value, and non-negative safe-integer counts (negative, fractional,
+`NaN`/`Infinity` and huge numbers are rejected). `mask_file` requires `total_occurrences`,
 `occurrences_by_label` and `unique_by_label`; `unmask_file` requires
 `unused_keys`. Known optional fields (`output.keys_name`,
 `coverage.processed`, and the opposite operation's statistics fields) are
