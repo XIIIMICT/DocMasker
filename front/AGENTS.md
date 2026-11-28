@@ -27,13 +27,17 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 `bun run format` can rewrite line breaks in untouched files — check `git status`
 and `git diff` afterwards. The current unit inventory and the Playwright `smoke`
 discovery guard live in `docs/TESTING.md` §1. The `smoke`
-project currently lists 55 tests in four spec files
-(`health`, `smoke`, `rerender-smoke`, `hover-smoke`) and needs a prepared
-stack; probe files are excluded. CI pipes `playwright test --project=smoke --list` into
-`bun e2e/check-smoke-discovery.mjs`, which requires the exact four basenames,
-≥20 tests in the main spec and ≥34 overall — `smoke.spec.ts` can no longer be
-satisfied by the two other `*smoke.spec.ts` names. The listing needs no running
-stack:
+project currently lists 55 tests in seven spec files: `health`, `smoke` (16 —
+page/mode/layout and text mask+unmask), `smoke-file` (4 — DOCX masking,
+placeholders, unused keys, stats parity), `smoke-job` (3 — job submission,
+cancel, result manifest), `smoke-a11y` (20 — support motion/focus, axe scans,
+keyboard), `rerender-smoke` and `hover-smoke`; it needs a prepared stack and
+probe files are excluded. CI pipes `playwright test --project=smoke --list`
+into `bun e2e/check-smoke-discovery.mjs`, which requires all seven exact
+basenames, ≥16 in the main spec, ≥4 in the file spec, ≥3 in the job spec,
+≥20 in the a11y spec and ≥55 overall — the per-spec floors keep the split's
+coverage individually guarded. `playwright.config.ts` `testMatch` covers every
+`smoke-*` name. The listing needs no running stack:
 
 ```sh
 bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
@@ -42,9 +46,11 @@ bun e2e/check-smoke-discovery.mjs smoke-tests.txt
 
 `local.playwright.config.ts` is the local-only Chrome-on-PATH helper; it
 derives discovery from the committed config and overrides only the launcher
-and reporter. Shared E2E helpers: `e2e/helpers/selectors.ts` (hidden file input),
-`e2e/helpers/timing.ts` (two-frame gesture grace, close-grace helper) and
-`e2e/helpers/a11y.ts` (explicit WCAG 2/2.1 A/AA axe scan + settled-UI wait).
+and reporter. Shared E2E helpers: `e2e/_helpers.ts` (data/keys textarea names,
+both DOCX fixtures, `switchMode()`), `e2e/helpers/selectors.ts` (hidden file
+input), `e2e/helpers/timing.ts` (two-frame gesture grace, close-grace helper)
+and `e2e/helpers/a11y.ts` (explicit WCAG 2/2.1 A/AA axe scan + settled-UI
+wait); `focusByKeyboard` is local to `smoke-a11y.spec.ts`.
 Unit timing tests use `jest.useFakeTimers()` from `bun:test` with `useRealTimers()`
 in `finally`/`afterEach`.
 
@@ -189,7 +195,7 @@ TypeScript indexing"). Durable coding rules:
    contracts" and `docs/ARCHITECTURE.md`.
 10. Accessibility scans use `@axe-core/playwright` **dev-only** with the explicit
     tags `wcag2a`/`wcag2aa`/`wcag21a`/`wcag21aa` (no rule disabling), run from
-    the `smoke` spec via `e2e/helpers/a11y.ts` after animations settle. React
+    `smoke-a11y.spec.ts` via `e2e/helpers/a11y.ts` after animations settle. React
     Aria tabs always render a real `Tabs.Panel` with a **static** id — the
     collection caches the panel id at first render, so a dynamic key keeps its
     old id and leaves `aria-controls` dangling. The theme switcher's panel is
