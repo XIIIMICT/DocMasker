@@ -59,9 +59,25 @@ drift-check:
 seed:
     uv run --directory back -m src.scripts.seed_database
 
-# Применить миграции Alembic (явный шаг деплоя/CI, не гонка при старте).
+# Legacy host-side migration for developers (uv installs backend deps on the
+# host; the working tree may differ from the deployed image). For deployments
+# use `migrate-docker` below so schema and app come from the SAME pinned image.
 migrate:
     uv run --directory back alembic upgrade head
+
+# One-off migration from the exact deployed prod image (DM_BACK_IMAGE, never
+# latest). Preflight prints host/port/schema and refuses an ambiguous local
+# target unless ALLOW_LOCAL_DB=1; no password is printed. `-e DATABASE_URL`
+# forwards an explicit URL only when set in the environment. `--no-deps`
+# keeps worker/front out of the one-off container. See docs/OPERATIONS.md §2.
+migrate-docker:
+    uv run --no-sync --directory back python -m src.scripts.check_migration_target
+    docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod run --rm --no-deps -T -e DATABASE_URL back alembic upgrade head
+
+# Read-only counterpart of `migrate-docker`: current revision before/after.
+migrate-docker-current:
+    uv run --no-sync --directory back python -m src.scripts.check_migration_target
+    docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod run --rm --no-deps -T -e DATABASE_URL back alembic current
 
 # Новая ревизия Alembic: just revision "описание"
 revision message:

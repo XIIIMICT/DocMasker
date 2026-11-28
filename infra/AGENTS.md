@@ -16,9 +16,11 @@ is the entry point; durable detail lives in `docs/ARCHITECTURE.md`,
   compose service names on the private networks; seed/migrate from the host
   reach PostgreSQL via loopback `${POSTGRES_PORT:-15433}`.
 - `just dev` / `just prod` therefore require a running stand:
-  `just db-stand` then `just seed` (applies Alembic `0001_jobs` and verifies
-  the `jobs` table) before starting the app. `just migrate` applies migrations
-  without seeding; `just revision "msg"` creates an Alembic revision.
+  `just db-stand` then `just seed` (applies Alembic to head, currently
+  `0002_staging_recovery`, and verifies the `jobs` table) before starting the
+  app. `just migrate` applies migrations without seeding (legacy host path);
+  `just revision "msg"` creates an Alembic revision. Deployment migrations use
+  `just migrate-docker` from the pinned image — see `docs/OPERATIONS.md` §2.2.
 - `infra/compose.monitoring.yaml` is included with **no profiles**: alloy is
   always started (`just monitoring`, external Loki), the rest is selected by
   `just monitoring-stand`. Every published monitoring/admin port is bound to

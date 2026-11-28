@@ -46,22 +46,88 @@ runs. `POSTGRES_PASSWORD` is read from the same components in both places.
 
 ## 2. Migrations and schema
 
-- `just migrate` — `uv run --directory back alembic upgrade head`; applies
-  migrations without seeding.
+### 2.1 Revision chain and host path (legacy)
+
+- `just migrate` — `uv run --directory back alembic upgrade head`. This is the
+  **legacy developer path**: it installs backend dependencies on the host and
+  can apply a working-tree revision that differs from the deployed image.
+  Deployments use §2.2 instead.
 - `just revision "msg"` — `uv run --directory back alembic revision --autogenerate -m "msg"`.
-- Migration chain: `back/migrations/versions/0001_jobs.py` creates the `jobs`
-  table (statuses, lease/fencing columns, TTL deadlines, opaque artifact ids,
-  safe `error_code`); the shared metadata in `back/src/jobs/schema.py` backs
-  both the model and the migration. No `create_all()`, no SQLite fallback
-  (ADR-0003, `back/src/jobs/AGENTS.md`).
-- Migrations are an explicit deployment/CI step: CI migrates an empty database
-  (`uv run --no-sync alembic upgrade head` in `.github/workflows/ci.yaml`) and
-  the isolated prod-image stack (`docker compose -f infra/compose.ci.yaml exec
-  -T back alembic upgrade head`, then `restart worker`).
+- Chain: `0001_jobs` creates the `jobs` table (statuses, lease/fencing columns,
+  TTL deadlines, opaque artifact ids, safe `error_code`);
+  `0002_staging_recovery` adds `jobs.staging_until` and
+  `ix_jobs_staging_until`. Head is `0002_staging_recovery`; run to `head` only
+  (0001 → 0002) — there is no 0041-style exception. Shared metadata in
+  `back/src/jobs/schema.py` backs both model and migration; no `create_all()`,
+  no SQLite fallback (ADR-0003, `back/src/jobs/AGENTS.md`).
+- **0001/0002 gate (honest status):** `just seed` only asserts that the `jobs`
+  table exists, so a database left at `0001` can pass seeding while job
+  operations that read/write `staging_until` fail. Conversely, if
+  `alembic_version` says `0002` but the column is missing, `upgrade head` is a
+  no-op. After any migration assert `alembic current` equals head **and** the
+  column exists. The maintainer owns production data, including any 0001→0002
+  data decision: **no automatic row deletion or destructive cleanup** is part
+  of this procedure.
 - Empty-DB migration is verified in CI. Migrating retained live data is **not**
   exercised: the recorded baseline had zero rows in the old SQLite `jobs` table
   (`docs/IMPLEMENTATION_BASELINE.md`), so the approved path was a documented
   quiesce/reset, not a data migration (ADR-0003 §Migration notes).
+
+### 2.2 One-off Docker migration (deployment path)
+
+The prod backend image already contains Alembic, `migrations/` and
+`alembic.ini`; no Dockerfile change and no second migrate image. The image
+**must be the exact pinned image deployed as `back`/`worker`**, never `latest`
+(the cached `docmasker-back:latest` on a host can be stale and lack Alembic).
+`infra/compose.migrate.yaml` requires `DM_BACK_IMAGE` and the preflight rejects
+untagged/`:latest` pins. Set `DM_BACK_IMAGE=ghcr.io/<owner>/dm-back:<release-tag-or-sha>`
+in the root `.env` or the operator shell; it is not a secret — DB credentials
+stay in the root `.env` (no new secret store, no GitHub Secrets for prod DB).
+
+The preflight (`back/src/scripts/check_migration_target.py`) prints target
+host, port, database, schema and image — **never a password** — and refuses an
+ambiguous local target unless `ALLOW_LOCAL_DB=1` confirms the disposable/local
+stand. It honours the existing compose contract: an explicit `DATABASE_URL`
+wins; otherwise the container URL is built by `x-db-env` from `POSTGRES_*` with
+`POSTGRES_HOST_DOCKER` and fixed container port **5432**. For an external DB on
+another port or requiring TLS, export `DATABASE_URL` (with
+`?sslmode=require` when needed) rather than rewriting `.env`; verify
+reachability from *inside* the one-off container.
+
+Maintenance sequence (announce the window; stop writers before DDL):
+
+```sh
+# from the repository root, with DM_BACK_IMAGE pinned to the deployed image
+just migrate-docker-current          # read-only: revision before
+docker compose --profile prod stop worker back   # skip if the stack is not up yet
+just migrate-docker                  # one-off `alembic upgrade head`
+just migrate-docker-current          # expect 0002_staging_recovery (head)
+docker compose --profile prod up -d --no-build back worker front
+```
+
+The recipes run exactly:
+
+```sh
+uv run --no-sync --directory back python -m src.scripts.check_migration_target
+docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod \
+  run --rm --no-deps -T -e DATABASE_URL back alembic upgrade head
+```
+
+`--no-deps` keeps `worker`/`front` out of the one-off container; `-e DATABASE_URL`
+forwards an explicit URL only when it is set (otherwise compose's own value is
+kept). `migrate-docker-current` is the same with `alembic current`. Run exactly
+one migration container: `env.py` has no advisory lock, `NullPool` holds one
+short DDL transaction, and live DML can block on `ACCESS EXCLUSIVE` locks.
+
+**Scope and rollback.** Migrations change PostgreSQL only: `dm-jobs-data`
+(staged inputs, keys, results) is **NOT covered** and must never be mounted into
+the migration container. A consistent recovery point still needs the quiesce +
+DB dump + artifact copy procedure in §3 and `docs/RUNBOOKS.md`. There is no
+blind `alembic downgrade -1` (0001 drops `jobs`): roll back by redeploying the
+**previous image tag** and restoring the pre-window backup into a new database
+plus its matching artifact copy; never delete volumes blindly. Nightly CI
+exercises this only on a throwaway schema in a disposable Postgres service
+(`.github/workflows/nightly.yaml`), never on a shared or production database.
 
 ## 3. Volumes, backup and restore
 

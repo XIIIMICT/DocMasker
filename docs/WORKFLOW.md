@@ -10,9 +10,13 @@ this file in the same change (see "Documentation discipline").
 2. Dependencies: `just deps` (`uv sync --directory back` + `bun install --cwd front`).
 3. Start the data stand once, in the ReportCollector pattern:
    `just db-stand` (PostgreSQL + Valkey from `infra/compose.db.yaml`), then
-   `just seed` (Alembic `0001_jobs` + verify the `jobs` table; idempotent).
-   `just migrate` applies migrations without seeding. Required before any
-   app stack or integration tests — the app does **not** start its own DB.
+   `just seed` (applies Alembic to head — currently `0002_staging_recovery` —
+   and checks the `jobs` table; idempotent). `just migrate` applies migrations
+   without seeding and is the **legacy host path** for developers. Required
+   before any app stack or integration tests — the app does **not** start its
+   own DB. Deployments migrate from the pinned prod image instead:
+   `just migrate-docker` / `just migrate-docker-current` (exact commands,
+   preflight, image pin and rollback: `docs/OPERATIONS.md` §2.2).
    The optional backup sidecar is started separately with `just backup-stand`
    (daily verified dump + weekly restore drill); one-shot `just backup-now` /
    `just backup-drill` are the operator tools. Contract, RPO assumption,
@@ -37,9 +41,12 @@ CI prerequisites (once, in GitHub repo settings): push the repo, create the `mai
 | e2e | — | — | — | `bun run --cwd front test:e2e` (Playwright, chromium, workers=1) |
 
 Aggregators: `just lint`, `just typecheck`, `just test`, `just e2e`.
-Database recipes: `just db-stand`, `just seed`, `just migrate`,
-`just revision "msg"`. Integration tests need the stand (`just db-stand` +
-`just seed`) and `TEST_DATABASE_URL` / `TEST_VALKEY_URL`.
+Database recipes: `just db-stand`, `just seed`, `just migrate` (legacy host),
+`just migrate-docker`, `just migrate-docker-current`, `just revision "msg"`.
+Integration tests need the stand (`just db-stand` + `just seed`) and
+`TEST_DATABASE_URL` / `TEST_VALKEY_URL`. The Docker migration recipes require
+`DM_BACK_IMAGE` pinned to the deployed tag/digest and a preflight-confirmed
+target (`ALLOW_LOCAL_DB=1` for local/disposable stands).
 
 ### Back
 
@@ -181,6 +188,7 @@ expensive run already in progress.
 | `Nightly dependency security and freshness (report-only)` | `pip-audit` on the exported **locked runtime** set (`uv export --no-dev` + `--no-deps`), `bun audit`, `uv tree --outdated`, `bun outdated` | `nightly-dependency-reports` (JSON/text + exit codes) |
 | `Nightly gitleaks (existing green gate)` | full-history gitleaks, reused verbatim from `ci.yaml` | — (summary only) |
 | `Nightly production image smoke` | builds the exact prod images with separate `*-nightly` GHA cache scopes, boots `back`+`worker`+`front` through `infra/compose.ci.yaml`, migrates, asserts smoke discovery, runs Playwright `smoke` against the tested image on loopback 15001; `if: always()` log collection and `down --volumes --remove-orphans` | `nightly-browser-and-container-reports` (Playwright report, test results, container logs) |
+| `Nightly one-off Docker migration smoke` | builds the prod backend image, runs the preflight + one-off `alembic upgrade head` through `infra/compose.migrate.yaml` against a throwaway schema in a fresh CI Postgres service (`alembic current` before/after, `DROP SCHEMA ... CASCADE` in `finally`); never touches `dm_ci`/`dm_test` or a production DB | — |
 
 Only synthetic CI fixtures are hardcoded: loopback `127.0.0.1` service URLs,
 `ci_password`, `ci_cache_password` and `ci-only-cache-secret-…`. They are

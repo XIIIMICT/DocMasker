@@ -142,6 +142,41 @@ restore-based verification and weekly drill, and network reachability from the
 backup container. No external server was contacted by this change: only the
 disposable local rehearsal below was executed.
 
+## Maintenance window: one-off Docker migration
+
+Schema changes use the one-off `just migrate-docker` recipe from the **exact
+deployed image** (`DM_BACK_IMAGE` tag/digest, never `latest`); exact commands,
+preflight and the `0001/0002` gate are in `docs/OPERATIONS.md` §2.2. The
+preflight echoes target host/port/database/schema, never a password, and
+refuses an ambiguous local target without `ALLOW_LOCAL_DB=1`. Plan the window
+as for a restore:
+
+1. Announce the window, stop writers (`docker compose --profile prod stop
+   worker back`) and record `just migrate-docker-current`.
+2. Take the pre-window **logical dump** (`just backup-now`, or the scheduled
+   dump verified by `just backup-drill`) **and** a copy of `dm-jobs-data` in the
+   same quiesced window. Migrations change PostgreSQL only; `dm-jobs-data`
+   (staged inputs, keys, results) is **not** covered by Alembic and is not
+   mounted into the one-off container. Without both, there is no recovery
+   point (`docs/OPERATIONS.md` §3, "Artifact consistency" above).
+3. Run exactly one migration container to `head` (currently
+   `0002_staging_recovery`), verify `alembic current` equals head and that
+   `jobs.staging_until` exists, then restart `back`/`worker`/`front` with
+   `--no-build`. Do not delete rows or run destructive cleanup: the maintainer
+   owns production data, including any 0001→0002 decision.
+4. **Rollback:** do not blindly `alembic downgrade -1` (0001 drops `jobs`).
+   Restore the pre-window dump into a new database (steps 3–6 of "Restore
+   procedure" above), restore the matching artifact copy, redeploy the
+   **previous image tag** as `DM_BACK_IMAGE`, then verify
+   `just migrate-docker-current` and a round-trip job. Keep the original
+   database and dump until verification passes.
+
+For an external DB, set `POSTGRES_HOST_DOCKER` to a container-reachable host or
+export an explicit `DATABASE_URL` (the same escape hatch as the sidecar
+above); no new credentials are introduced. CI exercises this only against a
+throwaway schema in a disposable Postgres service — no shared or production
+database is contacted.
+
 ## Drill cadence and trigger
 
 - Automatic: weekly as in the table above.

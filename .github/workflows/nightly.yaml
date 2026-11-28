@@ -37,6 +37,9 @@ jobs:
           cp .env.example .env
           docker compose --profile prod --profile dev config --quiet
           docker compose -f infra/compose.ci.yaml config --quiet
+          # The one-off migration override needs a pinned image (never latest).
+          DM_BACK_IMAGE=ghcr.io/example/dm-back:v0.0.0 \
+            docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod config --quiet
       - name: Validate internal port bindings
         run: python3 infra/check-monitoring-binds.py
 
@@ -319,3 +322,72 @@ jobs:
       - name: Stop isolated stack
         if: always()
         run: docker compose -f infra/compose.ci.yaml down --volumes --remove-orphans
+
+  migration_smoke:
+    name: Nightly one-off Docker migration smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Synthetic CI fixtures only. Fresh Postgres service per run, dedicated
+      # database and throwaway schema: dm_ci / dm_test are never touched.
+      POSTGRES_USER: dm
+      POSTGRES_PASSWORD: ci_password
+      POSTGRES_DB: dm_migration_smoke
+      POSTGRES_HOST_DOCKER: postgres
+      # Locally built from this checkout, tagged explicitly (never `latest`).
+      DM_BACK_IMAGE: dm-back:migration-smoke
+      ALLOW_LOCAL_DB: "1"
+      # The service is published on the runner loopback; host.docker.internal
+      # is mapped into the one-off container by infra/compose.migrate.yaml.
+      DATABASE_URL: 'postgresql+psycopg://dm:ci_password@host.docker.internal:15434/dm_migration_smoke?options=-csearch_path%3Ddm_migration_smoke'
+      CACHE_KEY_SECRET: ci-only-cache-secret-32-chars-long
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: dm
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: dm_migration_smoke
+        ports: ["127.0.0.1:15434:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dm -d dm_migration_smoke"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare root .env for Compose (synthetic values only)
+        run: cp .env.example .env
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the prod backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./back
+          target: prod
+          load: true
+          tags: dm-back:migration-smoke
+          cache-from: type=gha,scope=back-nightly
+      - name: Create throwaway schema
+        shell: bash
+        run: |
+          docker run --rm --network host postgres:18-alpine sh -c \
+            'PGPASSWORD=ci_password psql -h 127.0.0.1 -p 15434 -U dm -d dm_migration_smoke -v ON_ERROR_STOP=1 -c "CREATE SCHEMA dm_migration_smoke"'
+      - name: Preflight and current revision before migration
+        shell: bash
+        run: |
+          python3 back/src/scripts/check_migration_target.py
+          docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod \
+            run --rm --no-deps -T -e DATABASE_URL back alembic current
+      - name: One-off migrate to head and verify
+        shell: bash
+        run: |
+          docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod \
+            run --rm --no-deps -T -e DATABASE_URL back alembic upgrade head
+          current=$(docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod \
+            run --rm --no-deps -T -e DATABASE_URL back alembic current)
+          echo "$current"
+          echo "$current" | grep -q '0002_staging_recovery'
+      - name: Drop throwaway schema
+        if: always()
+        shell: bash
+        run: |
+          docker run --rm --network host postgres:18-alpine sh -c \
+            'PGPASSWORD=ci_password psql -h 127.0.0.1 -p 15434 -U dm -d dm_migration_smoke -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS dm_migration_smoke CASCADE"'
