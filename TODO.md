@@ -418,8 +418,43 @@ which would break monitoring).
   `local.playwright.config.ts`; discovery guard 41 tests in 4 specs. No push,
   no merge.
 
+## Bounded DOCX placeholder scan (A1, 2026-11-28) — CLOSED
+
+- The pre-operation demask tooltip scan no longer materialises an XML entry
+  before checking its size. `bounded-zip-scan.ts` walks the ZIP central
+  directory with a narrow read-only parser and inflates with the browser's
+  `DecompressionStream("deflate-raw")`; JSZip 3.10.2 stays only for result
+  archives. Guarantees, non-guarantees and the exact limits are in
+  `docs/DOCX_SUPPORT.md` §"Demasking input placeholder count".
+- Proven bound: with understated ZIP metadata a 61 MB synthetic XML part was
+  stopped after 991,506 decoded bytes under a 1 MiB ceiling; the old code
+  materialised all 61,260,000 units. Deterministic tests pin exact chunk
+  accounting, UTF-8 and marker-boundary semantics, metadata preflight,
+  compressed-size rejection before `arrayBuffer()`, malformed/hostile archives
+  and single-flight. No runtime dependency was added — reader comparison and
+  before/after numbers: `docs/PERFORMANCE.md` §"Frontend bounded placeholder
+  scan".
+- **Verified:** front `format:check`, `lint:check`, `typecheck`, `test`, coverage
+  gate (65%), `build`, `gen:openapi --check`, `prek run --all-files`, Playwright
+  discovery guard and smoke on `http://127.0.0.1:5001` — 304 unit tests / 0 fail,
+  90.01% line coverage, 99 formatted files, 90 typechecked files, 41 smoke tests
+  in 4 specs. Two timing-sensitive animation tests flaked on separate full
+  smoke runs and passed on rerun and in isolation; no assertion was weakened.
+  No push or merge.
+
 ## Deferred by maintainer decision
 
+- **A3 — runtime validation of job data at untrusted boundaries — DEFERRED by
+  maintainer decision (2026-11-28).** Do not implement here: this task is scoped
+  to A1 only and the maintainer explicitly deferred network/sessionStorage
+  validation (`JobAccepted`, `JobStatus`, the `{mode, accepted}` envelope, the
+  resumed text-job payload and status/result URL allowlisting). Reason: it is an
+  independent boundary-hardening change with its own protocol/UX decisions and
+  must not be smuggled into a resource-bound fix. Revisit **after A1, A2
+  (manifest `complete`/coverage) and C1 (accessibility scans) are landed and
+  green**, as its own task branch with tests for malformed fields, tampered
+  `sessionStorage`, invalid URLs and no unexpected fetch. No A3 guard or URL
+  allowlist was added on `fix/bounded-placeholder-scan`.
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:
   `X-Request-ID`, minimal `/ready` + `/metrics`, liveness/readiness split.
   Remaining from Brief §11/§14: structured JSON logs with `request_id` / job ID
