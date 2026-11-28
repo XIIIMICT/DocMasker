@@ -5,9 +5,30 @@ contracts live in `docs/` — link, do not duplicate:
 `docs/adr/0003-postgres-job-foundation.md`, `docs/ARCHITECTURE.md`, `docs/API.md`,
 `docs/OPERATIONS.md`. Shared backend commands and safety rules are in `back/AGENTS.md`.
 
+## Repository module map
+
+`repository/` is a package. `__init__.py` is the stable facade: it re-exports
+`JobRepository`, `JobQueueFullError`, `JobNotFoundError`,
+`IllegalTransitionError`, `OWNERSHIP_LOST` (plus `ADMISSION_LOCK_KEY`) and
+composes `JobRepository(RepositoryCore, StagingMixin, ClaimsMixin, LifecycleMixin)`.
+Callers keep importing from `src.jobs.repository` / `.repository`; they must not
+import submodules directly.
+
+| Module | Owns |
+| --- | --- |
+| `_base.py` | error types, `ADMISSION_LOCK_KEY`, `_now`, `_affected`, `_row_to_job`, the typing-only `RepositoryBase` cross-mixin contract, and `RepositoryCore` (`__init__`, `_session`, `count_active`, `_db_now`, `_transition`, `dispose`, `ping`, `get`) |
+| `staging.py` | `create_staging`, `publish_staging`, `abort_staging`, `touch_staging`, `recover_abandoned_staging`, `recover_expired_cancelling`, `reconcile_staging`, `create` |
+| `claims.py` | `claim`, `claim_with_owner`, `renew_lease`, `report_progress`, `cancellation_requested`, `request_cancel`, `acknowledge_cancel` |
+| `lifecycle.py` | `succeed`, `fail`, `cancel`, `expire_queued`, `expired_jobs`, `mark_terminal_retention`, `remove_expired` |
+
+SQL, transaction boundaries and fencing predicates stay in the owning module;
+cross-mixin calls resolve through `self` and the facade MRO. `RepositoryBase`
+carries typing-only declarations so each mixin can be checked in isolation —
+no runtime behaviour lives there.
+
 ## Substrate & schema
 
-- PostgreSQL only (ADR-0003 supersedes ADR-0002's SQLite decision): `repository.py` uses SQLAlchemy 2 sync + psycopg 3 and Alembic `0001_jobs`. **No SQLite fallback**, no `create_all()`. Integration tests need a real `TEST_DATABASE_URL`; without it the job tests skip.
+- PostgreSQL only (ADR-0003 supersedes ADR-0002's SQLite decision): `repository/` uses SQLAlchemy 2 sync + psycopg 3 and Alembic `0001_jobs`. **No SQLite fallback**, no `create_all()`. Integration tests need a real `TEST_DATABASE_URL`; without it the job tests skip.
 - One shared `MetaData` (`schema.py`) backs the migration and the repository, so they cannot drift. The `jobs` table stores only opaque artifact ids and a safe `error_code` — no PII, keys, entity values, filenames or raw exception text in rows, logs or metrics.
 - State machine: `staging → queued → running → succeeded | failed | cancelled | expired`, plus `cancelling` for in-flight cancellation. `ALLOWED_TRANSITIONS` is enforced centrally in the repository; the DB CHECK only guards the status vocabulary. Terminal states may only go to `expired` (GC); nothing leaves `expired`.
 
