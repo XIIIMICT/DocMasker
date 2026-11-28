@@ -195,9 +195,12 @@ TypeScript indexing"). Durable coding rules:
     hidden and empty; icon-only `Tooltip.Trigger`s inside a tab must be
     `role="presentation"` with `tabIndex={-1}` rather than a second focusable
     button. Keep the explicit `:focus-visible` outline for controls whose
-    HeroUI/Tailwind ring variables resolve to no visible ring. Strategy,
-    findings and the BLOCKED screen-reader gate have one canonical home in
-    `docs/ACCESSIBILITY.md`; a green axe scan is not an accessibility claim.
+    HeroUI/Tailwind ring variables resolve to no visible ring. Strategy and
+    findings have one canonical home in `docs/ACCESSIBILITY.md`; a green axe
+    scan is not an accessibility claim. Screen-reader verification is OUT OF
+    SCOPE by maintainer decision (2026-11-28); automated axe scans and manual
+    keyboard/focus review are the agreed coverage. Do not claim a screen-reader
+    audit.
 
 ## Layout (detail — docs/ARCHITECTURE.md)
 
