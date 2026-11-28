@@ -12,7 +12,8 @@ Six verified defects were fixed (manifest cast, two highlight defects, two stric
 semantic gaps, contradictory theme transition, layout-animating support link), plus
 bounded placeholder counting and abort-aware archive unpacking. No runtime dependency
 was added and no speculative framework was introduced. All checks and 40/40 E2E smoke
-tests pass on the dev stand.
+tests passed on the dev stand at audit time (2026-11-27); the current inventory is
+re-measured in §10.
 
 ## 2. Baseline and after measurements
 
@@ -30,6 +31,9 @@ Baseline evidence: `docs/FRONTEND-AUDIT-BASELINE.md` (`9515f4b`), produced with
 | Build | 4,979 ms, 9 routes | 574–964 ms, 9 routes |
 | E2E smoke | 35 tests / 4 specs | **40 tests / 4 specs, 40/40 passed** |
 | TS diagnostics with new options | — | 21 → **0** |
+
+All figures in this table are audit-time (2026-11-27) measurements, not the
+current inventory; see §10 for the re-measured smoke count.
 
 No bundle improvement is claimed: the verified defects were correctness, retention and
 animation behavior, and the fixes were deliberately bundle-neutral.
@@ -88,6 +92,8 @@ Dev-only tooling: `swagger-typescript-api@13.15.0` (already adopted earlier for
 compile-time HTTP DTOs, `--no-client`, TS 7 compatible, CI freshness) is unchanged.
 
 ## 6. Validation (exact commands and outcomes)
+
+All commands and outcomes in this section are from the 2026-11-27 audit run.
 
 - `bun run --cwd front format:check` — all 98 files formatted, exit 0.
 - `bun run --cwd front lint:check` — no findings, exit 0.
@@ -177,3 +183,32 @@ response; both apps keep intentionally different DOM/workflow architectures.
   on the dev stand: targeted support-link/reduced-motion/keyboard/Tooltip **4/4**,
   full `smoke` **41/41** (47.8 s), discovery guard 41 tests in 4 specs. No push,
   no merge.
+
+## 10. Smoke discovery reconciliation (current state, 2026-11-28)
+
+Re-measured on `docs/smoke-count-reconciliation` at `d7d2b6a` with Bun 1.4.4 /
+Node 26.13.1. From `front/`, with the listing written to a temp path outside
+the repository:
+
+```sh
+bunx --no-install playwright test --project=smoke --list > <temp>/smoke-tests.txt
+bun e2e/check-smoke-discovery.mjs <temp>/smoke-tests.txt
+```
+
+- Discovery: exit 0, `Total: 41 tests in 4 files` — `smoke.spec.ts` 29,
+  `hover-smoke.spec.ts` 10, `rerender-smoke.spec.ts` 1, `health.spec.ts` 1.
+- Guard positive: exit 0, `Smoke discovery guard: 41 tests across 4 specs;
+  required specs present.` This agrees with `testMatch`
+  `/(?:health|smoke|mask)\.spec\.ts/`, the four required basenames and the
+  floors `MIN_MAIN_SPEC_TESTS = 20` / `MIN_TOTAL_TESTS = 34`; no threshold was
+  changed.
+- Guard negative (on a **copy** of the listing; no committed spec touched):
+  renaming the `smoke.spec.ts` entries gave exit 1 with `missing smoke spec:
+  smoke.spec.ts` and `smoke.spec.ts lists 0 tests, expected at least 20`;
+  removing those lines instead added `smoke project lists 12 tests, expected at
+  least 34`. The copies were deleted; the original listing stayed at 41.
+- The earlier 23/35/40 counts in §1–§9 are dated historical audit evidence.
+  Rely on `--list` for the current inventory, as recorded in `docs/TESTING.md` §1.
+- Re-checked after the doc/comment edits: `prek run --all-files` exit 0, front
+  `format:check` (99 files) / `lint:check` / `typecheck` (90 files) / `test`
+  (313 pass / 0 fail) green, discovery positive exit 0 and negative exit 1.

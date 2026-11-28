@@ -68,7 +68,7 @@ or axe dependency). See `front/AGENTS.md` for stack/command details.
 
 ### Browser smoke (Playwright, project `smoke`, needs a running stack)
 
-Four spec files, 41 tests at the last `--list` run (29 in `smoke.spec.ts`
+Four spec files, 41 tests at the 2026-11-28 `--list` run (29 in `smoke.spec.ts`
 after adding the restored-timing case alongside the theme/support-link/
 reduced-motion and disabled-action cases, 10 hover, 1 rerender, 1 health):
 `front/e2e/health.spec.ts`, `front/e2e/smoke.spec.ts`,
@@ -91,9 +91,12 @@ bunx --no-install playwright test --project=smoke --list > smoke-tests.txt
 bun e2e/check-smoke-discovery.mjs smoke-tests.txt
 ```
 
-A negative proof temporarily renamed `smoke.spec.ts`: the guard exited 1 with
-`missing smoke spec: smoke.spec.ts` / `smoke project lists 12 tests, expected
-at least 34`, and the file was restored. `front/local.playwright.config.ts` is
+A negative proof (2026-11-28) renamed the `smoke.spec.ts` entries in a **copy**
+of the listing (no committed spec was touched): the guard exited 1 with
+`missing smoke spec: smoke.spec.ts` / `smoke.spec.ts lists 0 tests, expected at
+least 20`. Removing those lines instead also produced `smoke project lists 12
+tests, expected at least 34`. The copies were deleted; the original listing is
+unchanged. `front/local.playwright.config.ts` is
 the local-only Chrome-on-PATH helper; it now derives `testDir`, `testIgnore`,
 project names and `testMatch` from the committed config and overrides only the
 launcher/reporter, so local and CI discovery cannot drift.

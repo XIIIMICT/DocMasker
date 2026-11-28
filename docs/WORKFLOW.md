@@ -61,7 +61,7 @@ Database recipes: `just db-stand`, `just seed`, `just migrate`,
 
 ### e2e (Playwright)
 
-The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (**23 scenarios in 3 files**, including the `rerender-smoke.spec.ts` regression and the job Cancel control — the `smoke` project's `testMatch` regex is unanchored, and CI asserts all three spec files are discovered): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
+The `smoke` project needs a running stack (no auto-start): start it with `just prod` (or the CI compose stack) and point `E2E_BASE_URL` at the front origin (default `http://127.0.0.1:5001`). Covered (**41 tests in 4 files**, measured 2026-11-28, including the `rerender-smoke.spec.ts` regression and the job Cancel control — the `smoke` project's `testMatch` regex is unanchored, and CI asserts all four spec files are discovered): `/api/health`, page rendering, tabs/mode switching, text mask and unmask round-trips, invalid-keys UX, DOCX preview highlight counts, unused-keys reporting. Probe files (`*-probe*`, `probe/`) are excluded from discovery and Git. Never run it against an unprepared stack.
 
 ### Live UI checks (browser)
 
@@ -146,7 +146,7 @@ feature/*   ← from dev: granular conventional commits (Why/What/Verified)
 
 Notes:
 - The backend job enforces **80% branch coverage** (`--cov-fail-under=80`); the frontend enforces **65% line coverage** via `front/scripts/check-coverage.mjs` reading bun's lcov (measured baseline 71%, threshold chosen with headroom).
-- `production` builds the **backend image once** and starts it through compose together with the worker (the private `jobs-data` volume is shared); `/health` answers immediately, so the stack `--wait-timeout` is 180s. The smoke `--list` step asserts `health.spec.ts`, `smoke.spec.ts` and `rerender-smoke.spec.ts` are actually discovered — a renamed file must not silently drop out of CI.
+- `production` builds the **backend image once** and starts it through compose together with the worker (the private `jobs-data` volume is shared); `/health` answers immediately, so the stack `--wait-timeout` is 180s. The smoke `--list` step asserts `health.spec.ts`, `smoke.spec.ts`, `rerender-smoke.spec.ts` and `hover-smoke.spec.ts` are actually discovered — a renamed file must not silently drop out of CI.
 - CI ports are isolated: front **15001**, back **18001** (`infra/compose.ci.yaml` never loads the developer's `.env` or volumes).
 - `.github/workflows/codeql.yaml` runs CodeQL for `javascript-typescript`, `python` and `actions` (build-mode `none`). A `visibility` job queries the GitHub API and runs the analysis **only for public repositories** — free CodeQL cannot upload from a private one. Enable code scanning in repo settings; use advanced setup, not default setup. CodeQL ≠ `CI required`.
 - `.github/workflows/dependency-review.yaml` (PR dependency review) and `.github/workflows/docker-release.yaml` (publish the exact CI-tested images on `v*` tags) mirror the other two repositories. The backend CI job sets `DATABASE_URL` as well as `TEST_DATABASE_URL`: Alembic reads the former, pytest the latter.
