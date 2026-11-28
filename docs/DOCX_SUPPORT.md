@@ -277,7 +277,12 @@ dependency or CSS is needed. Regression coverage:
 unmount, current vs stale failures, highlight-timer cancellation, detached
 host identity and committed-node preservation).
 
-The preview highlight pass (`highlightTexts`) applies literal needles to the
+The preview highlight pass (`highlightTexts`) and its debounce scheduling live
+in the React-free `front/src/shared/ui/docx-highlight.ts`; `docx-viewer.tsx`
+imports them, keeps the render lifecycle/generation guards and re-exports every
+moved name so existing callers and tests keep importing from
+`@/shared/ui/docx-viewer`. The highlight module never imports the viewer, so the
+import graph stays acyclic. The pass applies literal needles to the
 rendered DOM with a **durable overlap rule**: scanning starts at the earliest
 position and, at that position, the **longest** matching needle wins — never
 the one listed first in the keys. This mirrors the backend's longest-first
@@ -311,7 +316,7 @@ statistics/coverage, the entry names are the download filenames, and the
 | JSZip instance + compressed subarray views | every extracted entry Blob | when the local `zip` leaves scope at return/throw (`jobs.ts:93–107`); clearing `zip.files` early was measured to give no benefit (below) |
 | Extracted entry Blobs (`jobs.ts:95–107`) | `JobResult.entries` → `MaskedBundle`/`RestoredBundle` | after `jobBundle`/`jobToMaskResponse` (`mask-helpers.ts:22–56`) commits state (`use-masker-workflow.ts:239–250`, `290–294`) or the error branch clears it (`:251–257`, `:303–309`); on abort/failure `entries.clear()` runs first (`jobs.ts:101–105`) |
 | `manifest.json` text → validated `ResultManifest` | the bundle | text released after `parseResultManifest`; object lives with the bundle (`mask-archive.ts:41–43`, `mask-helpers.ts:39–55`) |
-| Preview DOM (detached staging → surface) | committed nodes + highlight timers | cleared on switch/unmount/success/failure (`docx-viewer.tsx:125–141`, `157–220`); rendered nodes do not retain the source Blob |
+| Preview DOM (detached staging → surface) | committed nodes + highlight timers | cleared on switch/unmount/success/failure (`docx-viewer.tsx:112–133`, `149–224`; debounce in `docx-highlight.ts`); rendered nodes do not retain the source Blob |
 | Download object URL (`result-download.ts:4–24`) | the anchor until `click()` hands off | anchor removed immediately, URL revoked on the next macrotask in `finally`; the browser reads the same Blob, so no copy is made |
 | Demask input scan (`placeholder-count.ts` + `bounded-zip-scan.ts`) | selected `File`, one compressed view + one decompressed chunk at a time | promise cached per Blob in a `WeakMap`; released when the Blob is collected (separate pre-operation path, not a result archive; native streaming inflate, no JSZip on this path) |
 
