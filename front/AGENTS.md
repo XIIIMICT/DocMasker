@@ -216,7 +216,13 @@ handlers live in `features/masking/use-masker-workflow.ts`, presentation in
 `shared/ui/input-panes.tsx`, `result-panes.tsx`, `doc-preview-shell.tsx` and
 `pane-types.ts`; `shared/api/*` holds adapters and proxies; `app/api/*` are
 server-side proxies (browser only calls its own origin);
-`src/instrumentation.ts` sets bounded undici timeouts.
+`src/instrumentation.ts` sets bounded undici timeouts. The `shared/api` test/adapter
+map splits by contract: `shared/api/__tests__/mask.test.ts` pins the proxy
+fetch/timeout/header contract (`proxyMaskRequest`, `proxyUnmaskRequest`, proxy
+timeouts), `shared/api/__tests__/keys-parse.test.ts` pins the pure YAML/keys
+contract (`validateKeysYaml`, `parseSimpleYaml`, shared parse result,
+`placeholdersFromKeys`/`valuesFromKeys`), and only genuinely duplicated setup lives
+in `shared/api/__tests__/_fixtures.ts` (the backend stand URL).
 
 ## Working rules
 
