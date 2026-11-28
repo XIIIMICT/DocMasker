@@ -27,9 +27,9 @@ for `bun check`, Node 26 in the production container. **Exact versions are in
 `bun run format` can rewrite line breaks in untouched files — check `git status`
 and `git diff` afterwards. The current unit inventory and the Playwright `smoke`
 discovery guard live in `docs/TESTING.md` §1. The `smoke`
-project currently lists 41 tests (measured 2026-11-28) in four spec files
-(`health`, `smoke`, `rerender-smoke`, `hover-smoke`) and needs a prepared stack;
-probe files are excluded. CI pipes `playwright test --project=smoke --list` into
+project currently lists 55 tests (measured 2026-11-28 after C1/C2) in four spec
+files (`health`, `smoke`, `rerender-smoke`, `hover-smoke`) and needs a prepared
+stack; probe files are excluded. CI pipes `playwright test --project=smoke --list` into
 `bun e2e/check-smoke-discovery.mjs`, which requires the exact four basenames,
 ≥20 tests in the main spec and ≥34 overall — `smoke.spec.ts` can no longer be
 satisfied by the two other `*smoke.spec.ts` names. The listing needs no running
@@ -42,8 +42,9 @@ bun e2e/check-smoke-discovery.mjs smoke-tests.txt
 
 `local.playwright.config.ts` is the local-only Chrome-on-PATH helper; it
 derives discovery from the committed config and overrides only the launcher
-and reporter. Shared E2E helpers: `e2e/helpers/selectors.ts` (hidden file input)
-and `e2e/helpers/timing.ts` (two-frame gesture grace, close-grace helper).
+and reporter. Shared E2E helpers: `e2e/helpers/selectors.ts` (hidden file input),
+`e2e/helpers/timing.ts` (two-frame gesture grace, close-grace helper) and
+`e2e/helpers/a11y.ts` (explicit WCAG 2/2.1 A/AA axe scan + settled-UI wait).
 Unit timing tests use `jest.useFakeTimers()` from `bun:test` with `useRealTimers()`
 in `finally`/`afterEach`.
 
@@ -62,8 +63,10 @@ repo. Verified gotchas:
   `minRows`.
 - `Tabs` needs `Tabs.ListContainer` (pill) **and** `<Tabs.Indicator />` in every
   `Tabs.Tab` (moving highlight); a `Tabs.Tab` is a `<button>` — never nest a
-  button, wrap icons in `Tooltip.Trigger`. Theme switcher: icon-only `Tabs`,
-  **no `Tabs.Panel`**, `next-themes` persists to `localStorage`.
+  button, wrap icons in `Tooltip.Trigger` (invariant 10 makes that wrapper
+  presentational). Theme switcher: icon-only `Tabs` with hidden, static-id
+  `Tabs.Panel`s so `aria-controls` resolves; `next-themes` persists to
+  `localStorage`.
 
 ## Strict TypeScript options
 
@@ -183,6 +186,18 @@ TypeScript indexing"). Durable coding rules:
    explicitly accepted. Reduced motion still zeroes all three tokens to `0ms`;
    the compact Tooltip and hover/focus/keyboard end states stay intact. Evidence
    and computed Chromium values: `docs/FRONTEND-AUDIT.md` §9.
+10. Accessibility scans use `@axe-core/playwright` **dev-only** with the explicit
+    tags `wcag2a`/`wcag2aa`/`wcag21a`/`wcag21aa` (no rule disabling), run from
+    the `smoke` spec via `e2e/helpers/a11y.ts` after animations settle. React
+    Aria tabs always render a real `Tabs.Panel` with a **static** id — the
+    collection caches the panel id at first render, so a dynamic key keeps its
+    old id and leaves `aria-controls` dangling. The theme switcher's panel is
+    hidden and empty; icon-only `Tooltip.Trigger`s inside a tab must be
+    `role="presentation"` with `tabIndex={-1}` rather than a second focusable
+    button. Keep the explicit `:focus-visible` outline for controls whose
+    HeroUI/Tailwind ring variables resolve to no visible ring. Strategy,
+    findings and the BLOCKED screen-reader gate have one canonical home in
+    `docs/ACCESSIBILITY.md`; a green axe scan is not an accessibility claim.
 
 ## Layout (detail — docs/ARCHITECTURE.md)
 

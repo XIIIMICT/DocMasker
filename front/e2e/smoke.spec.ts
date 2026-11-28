@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { expectNoWcagViolations, waitForSettledUi } from "./helpers/a11y";
 import { DATA_FILE_INPUT } from "./helpers/selectors";
 import { waitForGraceFrames } from "./helpers/timing";
 
@@ -834,4 +835,285 @@ test("результат маскировки файла требует manifest
     await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
     await page.getByRole("button", { name: "Замаскировать" }).click();
     await expect(page.getByText(/отчёт о результате/i)).toBeVisible({ timeout: 15000 });
+});
+
+// ---------------------------------------------------------------------------
+// C1: axe scans of real states. Every state is reached with deterministic
+// fixtures/routes and web-first assertions; `expectNoWcagViolations` drains
+// overlay transitions before scanning. These scans are a regression net for
+// WCAG 2/2.1 A/AA rules only — they are not an accessibility audit (C2 doc).
+// ---------------------------------------------------------------------------
+
+test.describe("axe WCAG 2/2.1 A/AA scans", () => {
+    test("axe: пустая маскировка", async ({ page }) => {
+        await page.goto("/");
+        await expect(page.getByRole("textbox", { name: MASK_DATA })).toBeVisible();
+        await expectNoWcagViolations(page, "mask / empty");
+    });
+
+    test("axe: заполненная маскировка и открытый Tooltip статистики", async ({ page }) => {
+        await page.goto("/");
+        await page
+            .getByRole("textbox", { name: MASK_DATA })
+            .fill("Иван Петров, тел +7 900 123-45-67");
+        await page.getByRole("button", { name: "Замаскировать" }).click();
+        await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue(/\[PERSON_1\]/, {
+            timeout: 30000,
+        });
+        await expectNoWcagViolations(page, "mask / populated");
+        await page.locator(".editor-pane__stats").focus();
+        await expect(page.getByRole("tooltip")).toBeVisible();
+        await expectNoWcagViolations(page, "mask / stats tooltip");
+    });
+
+    test("axe: ошибка результата маскировки", async ({ page }) => {
+        await page.route("**/api/mask", async (route) => {
+            await route.fulfill({
+                status: 422,
+                contentType: "application/json",
+                body: JSON.stringify({
+                    code: "validation_error",
+                    detail: "Проверьте исходные данные.",
+                    request_id: "synthetic-request",
+                }),
+            });
+        });
+        await page.goto("/");
+        await page.getByRole("textbox", { name: MASK_DATA }).fill("Иван Петров");
+        await page.getByRole("button", { name: "Замаскировать" }).click();
+        const error = page.getByRole("textbox", { name: "Ошибка" });
+        await expect(error).toHaveValue(/Ошибка:/);
+        await expect(error).toHaveAttribute("aria-invalid", "true");
+        await expectNoWcagViolations(page, "mask / result error");
+    });
+
+    test("axe: пустая демаскировка", async ({ page }) => {
+        await page.goto("/");
+        await switchMode(page, "Демаскировка");
+        await expect(page.getByRole("textbox", { name: DEMASK_DATA })).toBeVisible();
+        await expectNoWcagViolations(page, "demask / empty");
+    });
+
+    test("axe: некорректные ключи демаскировки", async ({ page }) => {
+        await page.goto("/");
+        await switchMode(page, "Демаскировка");
+        await page.getByRole("textbox", { name: DEMASK_DATA }).fill("[PERSON_1]");
+        await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+        await page
+            .getByRole("textbox", { name: "Ключи демаскировки" })
+            .fill("Неизвестный раздел:\n  - x");
+        await expect(page.getByText("Некорректный формат.")).toBeVisible();
+        await expectNoWcagViolations(page, "demask / validation error");
+    });
+
+    test("axe: ошибка результата демаскировки", async ({ page }) => {
+        await page.route("**/api/unmask", async (route) => {
+            await route.fulfill({
+                status: 422,
+                contentType: "application/json",
+                body: JSON.stringify({
+                    code: "validation_error",
+                    detail: "Ключи не соответствуют исходному файлу.",
+                    request_id: "synthetic-request",
+                }),
+            });
+        });
+        await page.goto("/");
+        await switchMode(page, "Демаскировка");
+        await page.getByRole("textbox", { name: DEMASK_DATA }).fill("[PERSON_1]");
+        await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+        await page
+            .getByRole("textbox", { name: "Ключи демаскировки" })
+            .fill("Физлица:\n  - Иван Петров");
+        await page.getByRole("button", { name: "Демаскировать" }).click();
+        await expect(page.getByRole("textbox", { name: "Ошибка" })).toHaveValue(/Ошибка:/);
+        await expectNoWcagViolations(page, "demask / result error");
+    });
+
+    test("axe: открытый выпадающий список режимов", async ({ page }) => {
+        await page.goto("/");
+        await page.getByRole("button", { name: /Режим:/ }).hover();
+        await expect(page.getByRole("menuitemradio", { name: "Демаскировка" })).toBeVisible();
+        await expectNoWcagViolations(page, "brand dropdown / open");
+    });
+
+    test("axe: предпросмотр DOCX и сообщение о ожидании", async ({ page }) => {
+        await page.goto("/");
+        await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
+        await expect(
+            page.getByText("Файл замаскируется после нажатия «Замаскировать»"),
+        ).toBeVisible();
+        await page.waitForFunction(
+            () => document.querySelectorAll(".docx-viewer__surface p").length > 0,
+        );
+        await expectNoWcagViolations(page, "DOCX / preview + status");
+    });
+
+    test("axe: ошибка обработки DOCX", async ({ page }) => {
+        await page.route("**/api/mask-file", async (route) => {
+            await route.fulfill({
+                status: 422,
+                contentType: "application/json",
+                body: JSON.stringify({
+                    code: "invalid_package",
+                    detail: "Файл не прошёл проверку.",
+                    request_id: "synthetic-request",
+                }),
+            });
+        });
+        await page.goto("/");
+        await page.setInputFiles(DATA_FILE_INPUT, SAMPLE_DOCX);
+        await page.getByRole("button", { name: "Замаскировать" }).click();
+        await expect(page.getByRole("textbox", { name: "Ошибка" })).toHaveValue(/Ошибка:/);
+        await expectNoWcagViolations(page, "DOCX / error");
+    });
+
+    test("axe: узкая ширина и мобильная раскладка", async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.goto("/");
+        await expect(page.getByRole("textbox", { name: MASK_DATA })).toBeVisible();
+        await expectNoWcagViolations(page, "narrow / mask");
+        await switchMode(page, "Демаскировка");
+        await page.getByRole("tab", { name: "Ключи демаскировки" }).click();
+        await page
+            .getByRole("textbox", { name: "Ключи демаскировки" })
+            .fill("Неизвестный раздел:\n  - x");
+        await expect(page.getByText("Некорректный формат.")).toBeVisible();
+        await expectNoWcagViolations(page, "narrow / demask validation");
+    });
+
+    test("axe: тёмная тема с активной кнопкой", async ({ page }) => {
+        await page.goto("/");
+        await page.evaluate(() => localStorage.setItem("theme", "dark"));
+        await page.reload();
+        await expect(page.locator("html")).toHaveClass(/dark/);
+        await page
+            .getByRole("textbox", { name: MASK_DATA })
+            .fill("Иван Петров, тел +7 900 123-45-67");
+        await page.getByRole("button", { name: "Замаскировать" }).click();
+        await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue(/\[PERSON_1\]/, {
+            timeout: 30000,
+        });
+        await expectNoWcagViolations(page, "dark / populated");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// C2: Playwright keyboard/focus walkthroughs. Outcomes and the explicit
+// screen-reader BLOCKED note are recorded in `docs/ACCESSIBILITY.md`.
+// ---------------------------------------------------------------------------
+
+test("клавиатура: логичный порядок фокуса, видимый индикатор и выход из страницы", async ({
+    page,
+}) => {
+    await page.goto("/");
+    await waitForSettledUi(page);
+    const focusables = page.locator(
+        '.app-shell button:visible:not([tabindex="-1"]), .app-shell a[href]:visible:not([tabindex="-1"]), .app-shell textarea:visible:not([disabled]), .app-shell [role="tab"]:visible:not([tabindex="-1"])',
+    );
+    const expected = await focusables.evaluateAll((elements) =>
+        elements
+            .filter(
+                (element) =>
+                    element.tabIndex >= 0 &&
+                    !element.hasAttribute("disabled") &&
+                    element.getAttribute("aria-disabled") !== "true",
+            )
+            .map(
+                (element) =>
+                    element.getAttribute("aria-label") ??
+                    element.textContent?.trim() ??
+                    element.tagName,
+            ),
+    );
+    const total = expected.length;
+    expect(total).toBeGreaterThan(5);
+    const visited: string[] = [];
+    // Next.js devtools injects a focusable portal; skip anything outside the app.
+    for (let press = 0; press < total + 6; press += 1) {
+        await page.keyboard.press("Tab");
+        const state = await page.evaluate(() => {
+            const active = document.activeElement;
+            if (!(active instanceof HTMLElement)) return null;
+            if (!active.closest(".app-shell")) return { key: "", outside: true };
+            const style = getComputedStyle(active);
+            return {
+                key:
+                    active.getAttribute("aria-label") ??
+                    active.textContent?.trim() ??
+                    active.tagName,
+                outside: false,
+                outline: style.outlineStyle,
+                shadow: style.boxShadow,
+            };
+        });
+        if (state === null) break;
+        if (state.outside) continue;
+        visited.push(state.key);
+        expect(state.outline === "solid" || state.shadow !== "none").toBe(true);
+        if (visited.filter((key) => expected.includes(key)).length === total) break;
+    }
+    // The app's controls appear in DOM order, even if a hidden panel or the
+    // devtools portal adds another stop between them.
+    expect(visited.filter((key) => expected.includes(key))).toEqual(expected);
+    expect(visited[0]).toMatch(/Режим:/);
+    // Tab after the last control moves focus away (browser chrome/devtools or
+    // wrap-around): the last control does not trap focus.
+    await page.keyboard.press("Tab");
+    const afterLast = await page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        return active?.getAttribute("aria-label") ?? active?.textContent?.trim() ?? active?.tagName;
+    });
+    expect(afterLast).not.toBe(expected.at(-1));
+});
+
+test("клавиатура: Enter открывает список режимов, Escape закрывает и возвращает фокус", async ({
+    page,
+}) => {
+    await page.goto("/");
+    const trigger = page.getByRole("button", { name: /Режим:/ });
+    await focusByKeyboard(page, trigger);
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(
+        page.getByRole("menuitemradio", { name: "Маскировка", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    const item = page.getByRole("menuitemradio", { name: "Демаскировка", exact: true });
+    await expect(item).toBeVisible();
+    await expect(item).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+});
+
+test("состояния загрузки, успеха и ошибки различимы не только цветом", async ({ page }) => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    await page.route("**/api/mask", async (route) => {
+        await gate;
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+                text: "[PERSON_1]",
+                keys: "Физлица:\n  - Иван Петров",
+                stats: {
+                    total: 1,
+                    occurrences_by_label: { person: 1 },
+                    unique_by_label: { person: 1 },
+                },
+            }),
+        });
+    });
+    await page.goto("/");
+    await page.getByRole("textbox", { name: MASK_DATA }).fill("Иван Петров");
+    await page.getByRole("button", { name: "Замаскировать" }).click();
+    // Loading is named in text, not only signalled by a colour change.
+    await expect(page.getByRole("button", { name: "Маскируем…" })).toBeVisible();
+    release?.();
+    await expect(page.getByRole("textbox", { name: "Результат" })).toHaveValue("[PERSON_1]");
+    await expect(page.locator(".editor-pane__stats")).toHaveText("1 фрагмент");
 });

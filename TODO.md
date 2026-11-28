@@ -506,6 +506,30 @@ which would break monitoring).
   HeroUI `act(...)` warnings only); discovery positive exit 0 and negative exit
   1 re-run against the final tree. No push, no merge.
 
+## Accessibility C1/C2 (2026-11-28) — CLOSED (screen reader BLOCKED)
+
+- Dev-only `@axe-core/playwright@4.14.1` added with `bun add --dev` (Bun updated
+  `bun.lock`); no runtime dep. Explicit axe tags `wcag2a`, `wcag2aa`, `wcag21a`,
+  `wcag21aa`, no disabled rules and no blanket exceptions. Eleven scans of real
+  states (both modes, empty/populated/error panes, dropdown + stats Tooltip,
+  DOCX preview/status/error, narrow viewport, dark theme) live in the existing
+  `smoke` spec with a shared `e2e/helpers/a11y.ts` settled-UI helper.
+- Genuine source fixes: theme Tooltip trigger no longer nests a focusable
+  `role=button` inside a tab; all tablists now render real `Tabs.Panel` targets
+  with **static** ids (React Aria caches the panel id on first render, so a
+  dynamic id stayed stale and kept the critical `aria-valid-attr-value` finding);
+  accessible contrast tokens for light and dark and full-opacity muted text on
+  unselected tabs; explicit `:focus-visible` outline where the installed
+  HeroUI/Tailwind ring variables produced no visible ring in Chromium.
+- Manual keyboard/focus walkthroughs are recorded in the single canonical home
+  `docs/ACCESSIBILITY.md`, including **screen-reader verification = BLOCKED** —
+  no screen reader exists in this environment and none was claimed. Automated
+  scans are not an accessibility audit.
+- **Verified:** front format/lint/typecheck/unit/coverage/build,
+  `gen:openapi --check`, discovery + guard (55 tests / 4 specs), targeted axe +
+  keyboard **14/14**, full smoke **55/55** on `http://127.0.0.1:5001` via
+  `local.playwright.config.ts`, `prek run --all-files`. No push, no merge.
+
 ## Deferred by maintainer decision
 
 - **A3 — runtime validation of job data at untrusted boundaries — DEFERRED by
@@ -514,9 +538,9 @@ which would break monitoring).
   validation (`JobAccepted`, `JobStatus`, the `{mode, accepted}` envelope, the
   resumed text-job payload and status/result URL allowlisting). Reason: it is an
   independent boundary-hardening change with its own protocol/UX decisions and
-  must not be smuggled into a resource-bound fix. Revisit **after A1, A2
-  (manifest `complete`/coverage) and C1 (accessibility scans) are landed and
-  green**, as its own task branch with tests for malformed fields, tampered
+  must not be smuggled into a resource-bound fix. A1, A2 and C1 are now landed
+  and green; A3 still stays **DEFERRED** by maintainer decision and would need
+  its own task branch with tests for malformed fields, tampered
   `sessionStorage`, invalid URLs and no unexpected fetch. No A3 guard or URL
   allowlist was added on `fix/bounded-placeholder-scan`.
 - **Old stage 6 — observability/deployment hardening.** Already done earlier:

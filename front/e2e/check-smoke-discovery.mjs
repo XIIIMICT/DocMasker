@@ -16,8 +16,9 @@ const REQUIRED_SPECS = [
     "rerender-smoke.spec.ts",
     "hover-smoke.spec.ts",
 ];
-// 41 tests are listed on this branch (measured 2026-11-28): 29 main smoke,
-// 10 hover, 1 rerender, 1 health. The 34-total floor stops a whole smoke or
+// 55 tests are listed on this branch (measured 2026-11-28 after C1/C2): 43
+// main smoke (including 11 axe scans and 3 keyboard walkthroughs), 10 hover,
+// 1 rerender, 1 health. The 34-total floor stops a whole smoke or
 // hover spec from dropping out; the 20-main floor stops smoke.spec.ts from
 // shrinking; the exact basenames above catch a rename of a smaller spec.
 const MIN_TOTAL_TESTS = 34;

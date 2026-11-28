@@ -141,12 +141,12 @@ export function DemaskInputPane({
     const { dragging, ...dragHandlers } = drag;
     return (
         <div className={`editor-pane${dragging ? " editor-pane--dragging" : ""}`} {...dragHandlers}>
-            <div className="editor-pane__label">
-                <Tabs
-                    className="result-tabs"
-                    selectedKey={inputTab}
-                    onSelectionChange={(key) => onInputTabChange(String(key))}
-                >
+            <Tabs
+                className="pane-tabs result-tabs"
+                selectedKey={inputTab}
+                onSelectionChange={(key) => onInputTabChange(String(key))}
+            >
+                <div className="editor-pane__label">
                     <Tabs.ListContainer>
                         <Tabs.List aria-label="Данные для демаскировки">
                             <Tabs.Tab id="data">
@@ -159,54 +159,59 @@ export function DemaskInputPane({
                             </Tabs.Tab>
                         </Tabs.List>
                     </Tabs.ListContainer>
-                </Tabs>
-                {demaskStats !== null && demaskStats.total > 0 ? (
-                    <Tooltip delay={150}>
-                        <Tooltip.Trigger className="editor-pane__stats">
-                            {totalText(demaskStats)}
-                        </Tooltip.Trigger>
-                        <Tooltip.Content showArrow placement="bottom">
-                            <Tooltip.Arrow />
-                            <span className="stats-breakdown">{statsBreakdown(demaskStats)}</span>
-                        </Tooltip.Content>
-                    </Tooltip>
-                ) : null}
-                {keysInvalid ? (
-                    <div className="editor-pane__keys-error" id="demask-keys-error">
-                        Некорректный формат.
-                    </div>
-                ) : null}
-            </div>
-            {inputTab === "keys" ? (
-                <div
-                    className="keys-editor"
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={onKeysDrop}
-                >
-                    <TextArea
-                        aria-label="Ключи демаскировки"
-                        aria-invalid={keysInvalid}
-                        aria-describedby={keysInvalid ? "demask-keys-error" : undefined}
-                        className="result-area--keys"
-                        placeholder="Вставьте ключи демаскировки или перетащите файл .yaml"
-                        value={demaskKeys}
-                        onChange={(event) => onDemaskKeysChange(event.target.value)}
-                        rows={12}
-                    />
+                    {demaskStats !== null && demaskStats.total > 0 ? (
+                        <Tooltip delay={150}>
+                            <Tooltip.Trigger className="editor-pane__stats">
+                                {totalText(demaskStats)}
+                            </Tooltip.Trigger>
+                            <Tooltip.Content showArrow placement="bottom">
+                                <Tooltip.Arrow />
+                                <span className="stats-breakdown">
+                                    {statsBreakdown(demaskStats)}
+                                </span>
+                            </Tooltip.Content>
+                        </Tooltip>
+                    ) : null}
+                    {keysInvalid ? (
+                        <div className="editor-pane__keys-error" id="demask-keys-error">
+                            Некорректный формат.
+                        </div>
+                    ) : null}
                 </div>
-            ) : inFileMode && selectedFile ? (
-                <DocxViewer blob={selectedFile} surfaceRef={sourceDocRef} />
-            ) : (
-                <TextArea
-                    ref={inputTextRef}
-                    aria-label="Данные для демаскировки"
-                    placeholder="Введите или вставьте замаскированный текст..."
-                    value={input}
-                    onChange={(event) => onTextChange(event.target.value)}
-                    rows={12}
-                    disabled={busy || inFileMode}
-                />
-            )}
+                <Tabs.Panel id="data" className="pane-tabs__panel">
+                    {inFileMode && selectedFile ? (
+                        <DocxViewer blob={selectedFile} surfaceRef={sourceDocRef} />
+                    ) : (
+                        <TextArea
+                            ref={inputTextRef}
+                            aria-label="Данные для демаскировки"
+                            placeholder="Введите или вставьте замаскированный текст..."
+                            value={input}
+                            onChange={(event) => onTextChange(event.target.value)}
+                            rows={12}
+                            disabled={busy || inFileMode}
+                        />
+                    )}
+                </Tabs.Panel>
+                <Tabs.Panel id="keys" className="pane-tabs__panel">
+                    <div
+                        className="keys-editor"
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={onKeysDrop}
+                    >
+                        <TextArea
+                            aria-label="Ключи демаскировки"
+                            aria-invalid={keysInvalid}
+                            aria-describedby={keysInvalid ? "demask-keys-error" : undefined}
+                            className="result-area--keys"
+                            placeholder="Вставьте ключи демаскировки или перетащите файл .yaml"
+                            value={demaskKeys}
+                            onChange={(event) => onDemaskKeysChange(event.target.value)}
+                            rows={12}
+                        />
+                    </div>
+                </Tabs.Panel>
+            </Tabs>
             {dragging ? (
                 <div className="editor-pane__dropzone" aria-hidden="true">
                     Отпустите файл .docx или .txt, чтобы загрузить его
