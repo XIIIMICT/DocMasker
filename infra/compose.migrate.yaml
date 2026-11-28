@@ -1,0 +1,16 @@
+# One-off Alembic migration override. It deliberately pins the SAME image as
+# the deployed app: `docmasker-back:latest` on a host can be a stale build that
+# does not contain alembic/migrations. Never set DM_BACK_IMAGE to `latest`.
+#
+# Usage (see docs/OPERATIONS.md §2):
+#   DM_BACK_IMAGE=ghcr.io/<owner>/dm-back:<release-tag-or-sha> \
+#     docker compose -f compose.yaml -f infra/compose.migrate.yaml --profile prod \
+#     run --rm --no-deps -T -e DATABASE_URL back alembic upgrade head
+services:
+  back:
+    image: ${DM_BACK_IMAGE:?set DM_BACK_IMAGE to the exact deployed dm-back release tag or digest; never latest}
+    # Escape hatch for an external DB published on the Docker host (including
+    # the disposable CI Postgres service). Harmless when the target is the
+    # compose `postgres` service or a production network address.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

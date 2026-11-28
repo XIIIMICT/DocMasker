@@ -61,6 +61,31 @@ manual keyboard/focus review are the agreed coverage. Do not claim a
 screen-reader audit. Explicitly deferred: A3 (maintainer deferral), RC's 175
 react-perf debt, target-host drills, off-host backup copies, live migrations.
 
+## One-off Docker migrations (2026-11-28) — ADDED, target-host gate OPEN
+
+- Deployment path now runs `just migrate-docker` /
+  `just migrate-docker-current` from the **same pinned prod image** as the app
+  (`DM_BACK_IMAGE` tag/digest, never `latest`) via `infra/compose.migrate.yaml`
+  with `--no-deps`. No Dockerfile change, no second migrate image, no new
+  secret store; root `.env` remains the only credential source.
+- `back/src/scripts/check_migration_target.py` is the loud, stdlib-only
+  preflight: prints target host/port/database/schema/image (never a password),
+  honours `DATABASE_URL` over `POSTGRES_HOST_DOCKER`, and refuses an ambiguous
+  local target without `ALLOW_LOCAL_DB=1`. Run to `head` (0001 → 0002) only;
+  no 0041-style exception, no automatic row deletion or destructive cleanup —
+  the maintainer owns prod data and the `staging_until` / 0001-0002 gate.
+- `docs/OPERATIONS.md` §2.2 is the canonical procedure; `docs/RUNBOOKS.md`
+  covers the maintenance window and rollback via previous image + backup;
+  `docs/WORKFLOW.md` lists the recipes. `dm-jobs-data` is **not** covered by
+  migrations.
+- Nightly `migration_smoke` builds the prod backend image and runs the one-off
+  against a throwaway schema on a fresh CI Postgres service (`alembic current`
+  before/after, `DROP SCHEMA ... CASCADE` in `finally`). It is not part of
+  `CI required`; a real scheduled run cannot be observed before merge.
+- **OPEN:** rehearsal on the authorized target host with the real deployed
+  image pin and backup/artifact copy. No production migration was run, no real
+  production DB was contacted, no rows were deleted, no push/merge performed.
+
 ## Completed (index only)
 
 Phases 0–8 of the Implementation Brief are merged into `dev` (one task branch

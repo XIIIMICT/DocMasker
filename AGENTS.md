@@ -33,7 +33,7 @@ The browser only calls its own origin; Next proxies `/api/*` server-side.
 | What | Command |
 |---|---|
 | Data stand, once | `just db-stand` (PostgreSQL + Valkey from `infra/compose.db.yaml`) |
-| Schema / migration | `just seed` · `just migrate` · `just revision "msg"` |
+| Schema / migration | `just seed` · `just migrate` (legacy host) · `just migrate-docker` / `just migrate-docker-current` (deployments) · `just revision "msg"` — procedure in `docs/OPERATIONS.md` §2.2 |
 | Dev / prod app stack | `just dev` / `just prod` (after the stand is seeded) |
 | Quality | `just lint` · `just typecheck` · `just test` · `just e2e` |
 | Monitoring | `just monitoring` (Alloy only, external Loki) · `just monitoring-stand` (full stack) — see `infra/AGENTS.md`, `docs/OPERATIONS.md` §8 |
